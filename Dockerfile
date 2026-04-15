@@ -4,9 +4,13 @@ FROM ubuntu:24.04 AS build
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     build-essential cmake git ca-certificates \
+    gcc-14 g++-14 \
     python3 python3-pip python3-venv pkg-config \
     libboost-all-dev libzmq3-dev libsecp256k1-dev \
     curl && \
+    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100 \
+      --slave /usr/bin/g++ g++ /usr/bin/g++-14 \
+      --slave /usr/bin/gcov gcov /usr/bin/gcov-14 && \
     rm -rf /var/lib/apt/lists/*
 
 RUN pip3 install --no-cache-dir --break-system-packages "conan>=2,<3" "kthbuild>=4,<5"
