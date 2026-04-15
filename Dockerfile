@@ -1,15 +1,15 @@
 # ── Build Knuth from source ──────────────────────────────────────────
-FROM ubuntu:22.04 AS build
+FROM ubuntu:24.04 AS build
 
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     build-essential cmake git ca-certificates \
-    python3 python3-pip pkg-config \
+    python3 python3-pip python3-venv pkg-config \
     libboost-all-dev libzmq3-dev libsecp256k1-dev \
     curl && \
     rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir "conan>=2,<3" "kthbuild>=4,<5"
+RUN pip3 install --no-cache-dir --break-system-packages "conan>=2,<3" "kthbuild>=4,<5"
 
 # Clone Knuth
 ARG KNUTH_VERSION=v0.79.0
