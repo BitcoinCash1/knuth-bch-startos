@@ -9,7 +9,7 @@ RUN apt-get update && \
     curl && \
     rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir conan==1.64.1
+RUN pip3 install --no-cache-dir "conan>=2,<3"
 
 # Clone Knuth
 ARG KNUTH_VERSION=v0.79.0
@@ -18,8 +18,8 @@ RUN git clone --depth 1 --branch ${KNUTH_VERSION} --recurse-submodules \
     https://github.com/k-nuth/kth.git
 
 WORKDIR /build/kth
-RUN conan profile new default --detect --force && \
-    conan install . --build=missing -if=build \
+RUN conan profile detect --force && \
+    conan install . --build=missing -of=build \
       -o currency=BCH \
       -o db=full \
       -o rpc=True \
