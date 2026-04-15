@@ -9,7 +9,7 @@ RUN apt-get update && \
     curl && \
     rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir "conan>=2,<3"
+RUN pip3 install --no-cache-dir "conan>=2,<3" "kthbuild>=4,<5"
 
 # Clone Knuth
 ARG KNUTH_VERSION=v0.79.0
