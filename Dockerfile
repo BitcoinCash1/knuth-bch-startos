@@ -18,8 +18,8 @@ RUN git clone --depth 1 --branch ${KNUTH_VERSION} --recurse-submodules \
     https://github.com/k-nuth/kth.git
 
 WORKDIR /build/kth
-RUN conan profile detect --force && \
-    conan install . --build=missing -of=build \
+RUN conan profile new default --detect --force && \
+    conan install . --build=missing -if=build \
       -o currency=BCH \
       -o db=full \
       -o rpc=True \
