@@ -33,7 +33,7 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    ca-certificates libzmq5 libsecp256k1-2 libboost-all-dev && \
+    ca-certificates libzmq5 libsecp256k1-1 libboost-all-dev && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /usr/local/bin/kth-node /usr/local/bin/
