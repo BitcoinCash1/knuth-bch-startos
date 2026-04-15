@@ -21,7 +21,7 @@ WORKDIR /build/kth
 RUN conan profile detect --force && \
     conan install . --build=missing -of=build \
       -o currency=BCH \
-      -o db=full \
+      -o db=dynamic \
       -o rpc=True \
       -o zmq=True && \
     cmake --preset conan-release && \
