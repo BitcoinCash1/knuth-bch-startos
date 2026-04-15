@@ -30,7 +30,7 @@ RUN conan profile detect --force && \
       -o db=dynamic && \
     cmake --preset conan-release && \
     cmake --build --preset conan-release --parallel "$(nproc)" && \
-    cmake --install build/Release --prefix=/usr/local
+    cmake --install build/build/Release --prefix=/usr/local
 
 # ── Runtime ─────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
