@@ -20,34 +20,18 @@ export const configure = sdk.Action.withInput(
     const conf = await knuthConf.read().once()
     const store = await storeJson.read().once()
     return {
-      zmqEnabled: !!(conf?.zmqpubhashblock),
-      txindex: true,
-      prune: null,
-      dbcache: conf?.dbcache ?? 512,
-      maxconnections: conf?.maxconnections ?? 125,
+      verboseLogging: conf?.['log.verbose'] ?? false,
+      outboundConnections: conf?.['network.outbound_connections'] ?? 8,
+      inboundConnections: conf?.['network.inbound_connections'] ?? 32,
       torEnabled: store?.torEnabled ?? false,
     }
   },
 
   async ({ effects, input }) => {
-    const zmqFields = input.zmqEnabled
-      ? {
-          zmqpubhashblock: 'tcp://0.0.0.0:28332',
-          zmqpubrawtx: 'tcp://0.0.0.0:28333',
-          zmqpubhashtx: 'tcp://0.0.0.0:28334',
-          zmqpubrawblock: 'tcp://0.0.0.0:28335',
-        }
-      : {
-          zmqpubhashblock: '',
-          zmqpubrawtx: '',
-          zmqpubhashtx: '',
-          zmqpubrawblock: '',
-        }
-
     await knuthConf.merge(effects, {
-      ...zmqFields,
-      dbcache: input.dbcache,
-      maxconnections: input.maxconnections,
+      'log.verbose': input.verboseLogging,
+      'network.outbound_connections': input.outboundConnections,
+      'network.inbound_connections': input.inboundConnections,
     })
 
     await storeJson.merge(effects, {

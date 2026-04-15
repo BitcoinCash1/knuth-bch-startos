@@ -33,6 +33,9 @@ RUN conan profile detect --force && \
     cmake --build --preset conan-release --parallel "$(nproc)" && \
     cmake --install build/build/Release --prefix=/usr/local
 
+# Verify the binary exists (OUTPUT_NAME is "kth" in node-exe/CMakeLists.txt)
+RUN ls -la /usr/local/bin/kth && /usr/local/bin/kth --version
+
 # ── Runtime ─────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
 
@@ -41,10 +44,10 @@ RUN apt-get update && \
     ca-certificates libzmq5 libsecp256k1-1 libboost-all-dev && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=build /usr/local/bin/kth-node /usr/local/bin/
+COPY --from=build /usr/local/bin/kth /usr/local/bin/
 
 RUN mkdir -p /data
 VOLUME /data
-EXPOSE 8332 8333 18332
+EXPOSE 8333
 
-ENTRYPOINT ["kth-node"]
+ENTRYPOINT ["kth"]

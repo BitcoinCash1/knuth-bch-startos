@@ -26,11 +26,24 @@ export const autoconfig = sdk.Action.withInput(
       )
   },
 
-  async ({ effects }) => knuthConf.read().once(),
+  async ({ effects }) => {
+    const conf = await knuthConf.read().once()
+    const store = await storeJson.read().once()
+    return {
+      verboseLogging: conf?.['log.verbose'] ?? false,
+      outboundConnections: conf?.['network.outbound_connections'] ?? 8,
+      inboundConnections: conf?.['network.inbound_connections'] ?? 32,
+      torEnabled: store?.torEnabled ?? false,
+    }
+  },
 
   async ({ effects, input }) => {
-    const { torEnabled, zmqEnabled, txindex, prune, ...iniFields } = input as any
-    await knuthConf.merge(effects, iniFields)
+    const { torEnabled, ...rest } = input as any
+    await knuthConf.merge(effects, {
+      'log.verbose': rest.verboseLogging,
+      'network.outbound_connections': rest.outboundConnections,
+      'network.inbound_connections': rest.inboundConnections,
+    })
     await storeJson.merge(effects, {
       torEnabled: torEnabled ?? false,
     })

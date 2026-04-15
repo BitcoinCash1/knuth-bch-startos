@@ -1,27 +1,8 @@
 import { sdk } from './sdk'
-import { rpcPort, peerPort, rpcInterfaceId, peerInterfaceId } from './utils'
+import { peerPort, peerInterfaceId } from './utils'
 
 export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
   const receipts = []
-
-  // ── RPC ──────────────────────────────────────────────────────────────
-  const rpcMulti = sdk.MultiHost.of(effects, 'rpc')
-  const rpcOrigin = await rpcMulti.bindPort(rpcPort, {
-    protocol: 'http',
-    preferredExternalPort: rpcPort,
-  })
-  const rpc = sdk.createInterface(effects, {
-    name: 'RPC Interface',
-    id: rpcInterfaceId,
-    description: 'Bitcoin Core-compatible JSON-RPC interface',
-    type: 'api',
-    masked: false,
-    schemeOverride: null,
-    username: null,
-    path: '',
-    query: {},
-  })
-  receipts.push(await rpcOrigin.export([rpc]))
 
   // ── P2P ──────────────────────────────────────────────────────────────
   const peerMulti = sdk.MultiHost.of(effects, 'peer')

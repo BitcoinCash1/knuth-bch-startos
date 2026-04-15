@@ -14,7 +14,7 @@ export const manifest = setupManifest({
   ],
   description: {
     short: 'Knuth — High-performance C++ BCH full node',
-    long: 'Knuth is a high-performance Bitcoin Cash full node written in C++. It provides Bitcoin Core-compatible JSON-RPC, ZMQ notifications, IPC via C-API, and UTXO queries. Designed for maximum performance — ideal for miners and services that need fast block validation and low-latency RPC.',
+    long: 'Knuth is a high-performance Bitcoin Cash full node written in C++. It validates blocks, relays transactions, and syncs the BCH blockchain. Built as a library with a C-API for programmatic access. RPC support is planned for a future release.',
   },
   volumes: ['main'],
   images: {
@@ -26,7 +26,7 @@ export const manifest = setupManifest({
   },
   alerts: {
     install:
-      'Knuth is a high-performance BCH full node. Initial Block Download may take several hours. Knuth uses Bitcoin Core-compatible RPC — dependent packages (Fulcrum, Explorer, mining pools) work with it just like BCHN.',
+      'Knuth is a high-performance BCH full node. Initial Block Download may take several hours. Note: this version does not include RPC — it syncs and validates the blockchain only. RPC will be added in a future update.',
     update: null,
     uninstall:
       'Uninstalling will delete all blockchain data and configuration. A fresh sync will be required if you reinstall.',
