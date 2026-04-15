@@ -12,7 +12,7 @@ RUN apt-get update && \
 RUN pip3 install --no-cache-dir conan==1.64.1
 
 # Clone Knuth
-ARG KNUTH_VERSION=v0.42.0
+ARG KNUTH_VERSION=v0.79.0
 WORKDIR /build
 RUN git clone --depth 1 --branch ${KNUTH_VERSION} --recurse-submodules \
     https://github.com/k-nuth/kth.git
