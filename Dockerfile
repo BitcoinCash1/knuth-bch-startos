@@ -21,9 +21,7 @@ WORKDIR /build/kth
 RUN conan profile detect --force && \
     conan install . --build=missing -of=build \
       -o currency=BCH \
-      -o db=dynamic \
-      -o rpc=True \
-      -o zmq=True && \
+      -o db=dynamic && \
     cmake --preset conan-release && \
     cmake --build --preset conan-release --parallel "$(nproc)" && \
     cmake --install build/Release --prefix=/usr/local
