@@ -20,8 +20,8 @@ RUN git clone --depth 1 --branch ${KNUTH_VERSION} --recurse-submodules \
 WORKDIR /build/kth
 RUN conan profile detect --force && \
     conan remote add kth https://packages.kth.cash/api/ && \
-    conan profile update settings.compiler.cppstd=23 default && \
     conan install . --build=missing -of=build \
+      -s compiler.cppstd=23 \
       -o currency=BCH \
       -o db=dynamic && \
     cmake --preset conan-release && \
