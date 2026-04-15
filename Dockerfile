@@ -27,6 +27,7 @@ RUN conan profile detect --force && \
     conan install . --build=missing -of=build \
       -s compiler.cppstd=23 \
       -o currency=BCH \
+      -o console=True \
       -o db=dynamic && \
     cmake --preset conan-release && \
     cmake --build --preset conan-release --parallel "$(nproc)" && \
