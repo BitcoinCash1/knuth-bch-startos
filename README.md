@@ -17,13 +17,13 @@ Knuth provides the same JSON-RPC + ZMQ interface as BCHN. Services that work wit
 
 | Feature | Knuth | BCHN | BCHD |
 |---------|-------|------|------|
-| JSON-RPC | ✅ | ✅ | ❌ (limited) |
+| JSON-RPC | ✅ | ✅ | ✅ |
 | ZMQ | ✅ | ✅ | ❌ |
 | gRPC | ❌ | ❌ | ✅ |
 | IPC/C-API | ✅ | ❌ | ❌ |
 | Compact Filters | ❌ | ✅ | ✅ |
 | UTXO Queries | ✅ | ✅ | ✅ |
-| Fulcrum Compatible | ✅ | ✅ | ❌ |
+| Fulcrum Compatible | ✅ | ✅ | ✅ |
 | Mining Pool Compatible | ✅ | ✅ | ✅ |
 
 ## Upstream
