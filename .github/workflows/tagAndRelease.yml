@@ -1,19 +1,117 @@
-name: Release
+name: Tag and Release
 
 on:
   push:
-    tags:
-      - 'v*.*'
+    branches: ['master']
+    paths-ignore: ['*.md']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64, riscv64]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Enable QEMU for cross-arch builds
+        uses: docker/setup-qemu-action@v3
+
+      - name: Setup build environment
+        uses: start9labs/shared-workflows/.github/actions/setup-build-env@master
+
+      - name: Find or create developer signing key
+        run: |
+          if [ -n "${{ secrets.DEV_KEY }}" ]; then
+            mkdir -p ~/.startos
+            printf '%s' "${{ secrets.DEV_KEY }}" > ~/.startos/developer.key.pem
+          else
+            start-cli init-key
+          fi
+        shell: bash
+
+      - name: Build architecture package
+        run: |
+          npm ci
+          npm run check
+          npm run build
+          RUST_LOG=debug RUST_BACKTRACE=1 make ${{ matrix.arch }}
+          echo ""
+          echo "SHA256SUM:"
+          sha256sum knuth-bch_${{ matrix.arch }}.s9pk
+        shell: bash
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: knuth-bch-${{ matrix.arch }}
+          path: knuth-bch_${{ matrix.arch }}.s9pk
+          if-no-files-found: error
+
   release:
-    uses: start9labs/shared-workflows/.github/workflows/release.yml@master
-    with:
-      RELEASE_REGISTRY: ${{ vars.RELEASE_REGISTRY }}
-      S3_S9PKS_BASE_URL: ${{ vars.S3_S9PKS_BASE_URL }}
-    secrets:
-      DEV_KEY: ${{ secrets.DEV_KEY }}
-      S3_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY }}
-      S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
-    permissions:
-      contents: write
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup build environment
+        uses: start9labs/shared-workflows/.github/actions/setup-build-env@master
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: knuth-bch-*
+          merge-multiple: true
+
+      - name: Generate changelog
+        id: meta
+        run: |
+          FIRST_S9PK=$(ls *.s9pk | head -1)
+          TITLE=$(start-cli s9pk inspect "$FIRST_S9PK" manifest | jq -r '.title')
+          VERSION=$(start-cli s9pk inspect "$FIRST_S9PK" manifest | jq -r '.version')
+          VERSION_TAG="v${VERSION/:/.}"
+          RELEASE_NOTES=$(start-cli s9pk inspect "$FIRST_S9PK" manifest | jq -r '.releaseNotes // "No release notes provided."')
+          {
+            echo "## What's Changed"
+            echo ""
+            echo "Version: ${VERSION} (${VERSION_TAG})"
+            echo ""
+            echo "${RELEASE_NOTES}"
+            echo ""
+            echo "## SHA256 Hashes"
+            echo '```'
+            sha256sum *.s9pk
+            echo '```'
+          } > change-log.txt
+          echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "vtag=${VERSION_TAG}" >> "$GITHUB_OUTPUT"
+        shell: bash
+
+      - name: Move release tags to current commit
+        run: |
+          git config user.email "action@github.com"
+          git config user.name "GitHub Action"
+          git tag -f "${{ steps.meta.outputs.vtag }}"
+          git push origin -f "${{ steps.meta.outputs.vtag }}"
+
+      - name: Publish versioned release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.vtag }}
+          name: ${{ steps.meta.outputs.title }} ${{ steps.meta.outputs.version }}
+          prerelease: false
+          body_path: change-log.txt
+          files: ./*.s9pk

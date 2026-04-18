@@ -7,6 +7,8 @@ export const seedFiles = sdk.setupOnInit(async (effects) => {
   const existing = await storeJson.read().once()
   if (!existing) {
     await storeJson.merge(effects, {
+      ipcEnabled: true,
+      utxozEnabled: true,
       torEnabled: false,
     })
   }

@@ -4,27 +4,27 @@ High-performance C++ Bitcoin Cash full node for StartOS.
 
 ## Features
 
-- **Bitcoin Core-compatible JSON-RPC** — works with all services that support BCHN
-- **ZMQ notifications** — `zmqpubhashblock`, `zmqpubrawtx`, `zmqpubhashtx`, `zmqpubrawblock`
-- **IPC via C-API** — low-latency inter-process communication
-- **UTXO queries** — built-in UTXO set queries
+- **P2P full node** — validates and syncs the Bitcoin Cash blockchain
+- **Node Settings action** — manage supported runtime settings from StartOS UI
+- **IPC via C-API capability** — enabled by default in Node Settings
+- **UTXOZ capability** — enabled by default in Node Settings
 - **Tor support** — optional routing through Tor network
-- **Full transaction index** — always enabled
+- **No JSON-RPC/gRPC in this package version** — upcoming in future upstream releases
 
 ## Compatibility
 
-Knuth provides the same JSON-RPC + ZMQ interface as BCHN. Services that work with BCHN (Fulcrum, Explorer, mining pools) also work with Knuth.
+This package intentionally exposes only currently-supported Knuth features.
 
 | Feature | Knuth | BCHN | BCHD |
 |---------|-------|------|------|
-| JSON-RPC | ❌(Coming Soon) | ✅ | ✅ |
-| ZMQ | ✅ | ✅ | ❌ |
+| JSON-RPC | ❌ (coming soon) | ✅ | ✅ |
+| ZMQ | ❌ (not exposed in package yet) | ✅ | ❌ |
 | gRPC | ❌ | ❌ | ✅ |
 | IPC/C-API | ✅ | ❌ | ❌ |
 | Compact Filters | ❌ | ✅ | ✅ |
 | UTXO Queries | ✅ | ✅ | ✅ |
-| Fulcrum Compatible | ✅ | ✅ | ✅ |
-| Mining Pool Compatible | ✅ | ✅ | ✅ |
+| Fulcrum Compatible | ❌ (until JSON-RPC exists) | ✅ | ✅ |
+| Mining Pool Compatible | ❌ (until JSON-RPC exists) | ✅ | ✅ |
 
 ## Upstream
 

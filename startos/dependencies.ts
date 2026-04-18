@@ -2,7 +2,7 @@ import { sdk } from './sdk'
 import { storeJson } from './file-models/store.json'
 
 export const setDependencies = sdk.setupDependencies(async ({ effects }) => {
-  const store = await storeJson.read().once()
+  const store = await storeJson.read().const(effects)
   const torEnabled = store?.torEnabled ?? false
 
   if (torEnabled) {
