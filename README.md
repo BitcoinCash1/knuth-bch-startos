@@ -17,7 +17,7 @@ Knuth provides the same JSON-RPC + ZMQ interface as BCHN. Services that work wit
 
 | Feature | Knuth | BCHN | BCHD |
 |---------|-------|------|------|
-| JSON-RPC | ✅ | ✅ | ✅ |
+| JSON-RPC | ❌(Coming Soon) | ✅ | ✅ |
 | ZMQ | ✅ | ✅ | ❌ |
 | gRPC | ❌ | ❌ | ✅ |
 | IPC/C-API | ✅ | ❌ | ❌ |
