@@ -4,6 +4,7 @@ on:
   push:
     branches: ['master']
     paths-ignore: ['*.md']
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -16,6 +17,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -44,14 +46,23 @@ jobs:
 
       - name: Build architecture package
         run: |
-          npm ci
-          npm run check
-          npm run build
-          RUST_LOG=debug RUST_BACKTRACE=1 make ${{ matrix.arch }}
+          set -euo pipefail
+          npm ci 2>&1 | tee build-npm-ci.log
+          npm run check 2>&1 | tee build-npm-check.log
+          npm run build 2>&1 | tee build-npm-build.log
+          RUST_LOG=debug RUST_BACKTRACE=1 make ${{ matrix.arch }} 2>&1 | tee build-make-${{ matrix.arch }}.log
           echo ""
           echo "SHA256SUM:"
           sha256sum knuth-bch_${{ matrix.arch }}.s9pk
         shell: bash
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: knuth-build-logs-${{ matrix.arch }}
+          path: build-*.log
+          if-no-files-found: warn
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
@@ -62,6 +73,7 @@ jobs:
 
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: build
     steps:
       - name: Checkout repository
