@@ -3,36 +3,41 @@ name: Tag and Release
 on:
   push:
     branches: ['master']
-    paths-ignore: ['*.md']
+    paths-ignore: ['*.md', 'Dockerfile.binary']
+  workflow_run:
+    workflows: ['Build Binary Image']
+    types: [completed]
+    branches: [master]
   workflow_dispatch:
 
 permissions:
   contents: write
-# Keep push-triggered CI deterministic for package builds.
+  packages: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build:
+  release:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [x86_64]
+    timeout-minutes: 30
     steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup build environment
+        uses: start9labs/shared-workflows/.github/actions/setup-build-env@master
+
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
           submodules: recursive
-
-      - name: Enable QEMU for cross-arch builds
-        uses: docker/setup-qemu-action@v3
-
-      - name: Setup build environment
-        uses: start9labs/shared-workflows/.github/actions/setup-build-env@master
 
       - name: Find or create developer signing key
         run: |
@@ -44,49 +49,13 @@ jobs:
           fi
         shell: bash
 
-      - name: Build architecture package
+      - name: Build service package
         run: |
-          set -euo pipefail
-          npm ci 2>&1 | tee build-npm-ci.log
-          npm run check 2>&1 | tee build-npm-check.log
-          npm run build 2>&1 | tee build-npm-build.log
-          RUST_LOG=debug RUST_BACKTRACE=1 make ${{ matrix.arch }} 2>&1 | tee build-make-${{ matrix.arch }}.log
+          RUST_LOG=debug RUST_BACKTRACE=1 make
           echo ""
-          echo "SHA256SUM:"
-          sha256sum knuth-bch_${{ matrix.arch }}.s9pk
+          echo "SHA256SUMs:"
+          sha256sum *.s9pk
         shell: bash
-
-      - name: Upload build logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: knuth-build-logs-${{ matrix.arch }}
-          path: build-*.log
-          if-no-files-found: warn
-
-      - name: Upload package artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: knuth-bch-${{ matrix.arch }}
-          path: knuth-bch_${{ matrix.arch }}.s9pk
-          if-no-files-found: error
-
-  release:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    needs: build
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-
-      - name: Setup build environment
-        uses: start9labs/shared-workflows/.github/actions/setup-build-env@master
-
-      - name: Download all build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: knuth-bch-*
-          merge-multiple: true
 
       - name: Generate changelog
         id: meta
