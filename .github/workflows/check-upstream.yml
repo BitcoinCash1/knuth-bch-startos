@@ -29,7 +29,5 @@ jobs:
           if [ "$LATEST" = "$CURRENT" ]; then echo "Already at $LATEST — no update"; exit 0; fi
 
           echo "Updating $CURRENT -> $LATEST"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
           bash scripts/auto-bump.sh "$LATEST"
         shell: bash
