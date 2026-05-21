@@ -41,7 +41,7 @@ export const ${TAG_VAR} = VersionInfo.of({
 EOF
 
 sed -i "s|^ARG KNUTH_VERSION=.*|ARG KNUTH_VERSION=${DISPATCHED_TAG}|" Dockerfile.binary
-sed -i "1a import { ${TAG_VAR} } from './${CLEAN_TAG}.0'" startos/versions/index.ts
+sed -i "1a import { ${TAG_VAR} } from './v${CLEAN_TAG}.0'" startos/versions/index.ts
 sed -i "s/current: ${CURRENT_VAR}/current: ${TAG_VAR}/" startos/versions/index.ts
 sed -i "s/other: \[/other: [${CURRENT_VAR}, /" startos/versions/index.ts
 
