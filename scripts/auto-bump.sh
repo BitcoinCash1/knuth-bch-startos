@@ -45,8 +45,8 @@ sed -i "1a import { ${TAG_VAR} } from './${CLEAN_TAG}.0'" startos/versions/index
 sed -i "s/current: ${CURRENT_VAR}/current: ${TAG_VAR}/" startos/versions/index.ts
 sed -i "s/other: \[/other: [${CURRENT_VAR}, /" startos/versions/index.ts
 
-git config user.name "$GITHUB_ACTOR"
-git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
+git config user.name "github-actions[bot]"
+git config user.email "github-actions[bot]@users.noreply.github.com"
 git add startos/versions/index.ts "$NEW_FILE" Dockerfile.binary
 git commit -m "feat: auto-bump to upstream ${DISPATCHED_TAG} (v${NEW_VERSION})"
 git push origin master
