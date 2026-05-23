@@ -1,7 +1,12 @@
 import { sdk } from './sdk'
-import { peerPort, peerInterfaceId } from './utils'
+import { peerInterfaceId, networkPorts, Network } from './utils'
+import { storeJson } from './file-models/store.json'
 
 export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
+  const store = await storeJson.read().once()
+  const network: Network = store?.network ?? 'mainnet'
+  const { peer: peerPort } = networkPorts[network]
+
   const receipts = []
 
   // ── P2P ──────────────────────────────────────────────────────────────

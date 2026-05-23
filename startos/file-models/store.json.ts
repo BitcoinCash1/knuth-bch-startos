@@ -2,7 +2,9 @@ import { FileHelper, z } from '@start9labs/start-sdk'
 import { sdk } from '../sdk'
 
 export const shape = z.object({
-  network: z.enum(['mainnet']).catch('mainnet'),
+  network: z
+    .enum(['mainnet', 'testnet3', 'testnet4', 'scalenet', 'chipnet', 'regtest'])
+    .catch('mainnet'),
   ipcEnabled: z.boolean().catch(true),
   utxozEnabled: z.boolean().catch(true),
   torEnabled: z.boolean().catch(false),

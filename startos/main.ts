@@ -1,5 +1,5 @@
 import { sdk } from './sdk'
-import { rootDir, peerPort } from './utils'
+import { rootDir, networkPorts, networkFlag, Network } from './utils'
 import { knuthConf } from './file-models/knuth.conf'
 import { storeJson } from './file-models/store.json'
 
@@ -7,6 +7,9 @@ export const main = sdk.setupMain(async ({ effects }) => {
   console.log('Starting Knuth!')
 
   const store = await storeJson.read().once()
+  const network: Network = store?.network ?? 'mainnet'
+  const { peer: peerPort } = networkPorts[network]
+  const netFlag = networkFlag[network]
   const torEnabled = store?.torEnabled ?? false
 
   // Tor — get container IP
@@ -26,6 +29,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
   const knuthArgs: string[] = [
     '-c', `${rootDir}/kth.cfg`,
     '--init_run',
+    ...(netFlag ? [netFlag] : []),
   ]
 
   const mounts = sdk.Mounts.of().mountVolume({

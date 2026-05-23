@@ -32,6 +32,9 @@ export const shape = z.object({
   'node.ds_proofs_enabled': z.boolean().catch(true),
   'node.ds_proofs': z.boolean().catch(true),
   'node.block_latency_seconds': iniNumber.catch(60),
+
+  // [database] — mode selection
+  'database.db_mode': z.enum(['full_indexed', 'normal', 'pruned']).catch('full_indexed'),
 })
 
 export const knuthConf = FileHelper.ini(
@@ -69,21 +72,6 @@ export const fullConfigSpec = sdk.InputSpec.of({
     integer: true,
     units: null,
   }),
-  compactBlocksHighBandwidth: sdk.Value.toggle({
-    name: 'Compact Blocks High Bandwidth',
-    description: 'Keep high-bandwidth compact block relay enabled.',
-    default: true,
-  }),
-  dsProofsEnabled: sdk.Value.toggle({
-    name: 'Double-Spend Proofs',
-    description: 'Enable double-spend proof processing in the node core.',
-    default: true,
-  }),
-  relayTransactions: sdk.Value.toggle({
-    name: 'Relay Transactions',
-    description: 'Relay unconfirmed transactions to peers.',
-    default: true,
-  }),
   blockLatencySeconds: sdk.Value.number({
     name: 'Block Latency Seconds',
     description: 'Block processing latency threshold used by the node.',
@@ -93,6 +81,33 @@ export const fullConfigSpec = sdk.InputSpec.of({
     max: 600,
     integer: true,
     units: 'seconds',
+  }),
+  databaseMode: sdk.Value.select({
+    name: 'Database Mode',
+    description:
+      'Controls the indexing level of the Knuth blockchain database. ' +
+      'Full Indexed is required for Fulcrum and BCH Explorer to work.',
+    warning:
+      'Switching from Full Indexed to Pruned will prevent Fulcrum and BCH Explorer from connecting.',
+    default: 'full_indexed',
+    values: {
+      full_indexed: { name: 'Full Indexed', description: 'Full transaction index — required for Fulcrum and BCH Explorer.' },
+      normal:       { name: 'Normal',       description: 'Standard node without full transaction index.' },
+      pruned:       { name: 'Pruned',       description: 'Prune old block data to save disk space. Incompatible with Fulcrum and BCH Explorer.' },
+    },
+  }),
+  dbMaxSize: sdk.Value.number({
+    name: 'Max Database Size',
+    description:
+      'Maximum blockchain database size in GB. Only applies when Database Mode is set to Pruned.',
+    warning: null,
+    required: false,
+    default: null,
+    min: 100,
+    max: null,
+    integer: true,
+    units: 'GB',
+    placeholder: '600',
   }),
   ipcEnabled: sdk.Value.toggle({
     name: 'IPC (C-API) Capability',

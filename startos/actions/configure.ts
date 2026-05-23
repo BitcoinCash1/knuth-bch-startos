@@ -7,7 +7,7 @@ export const configure = sdk.Action.withInput(
 
   async ({ effects }) => ({
     name: 'Node Settings',
-    description: 'Core node behavior, IPC capabilities, and UTXOZ support.',
+    description: 'Core node behavior, database mode, IPC capabilities, and UTXOZ support.',
     warning: null,
     allowedStatuses: 'any',
     group: 'Configuration',
@@ -19,16 +19,16 @@ export const configure = sdk.Action.withInput(
   async ({ effects }) => {
     const conf = await knuthConf.read().once()
     const store = await storeJson.read().once()
+    const dbMode = conf?.['database.db_mode'] ?? 'full_indexed'
+    const rawMaxSize = conf?.['database.db_max_size'] ?? 600000000000
     return {
       verboseLogging: conf?.['log.verbose'] ?? false,
       outboundConnections: conf?.['network.outbound_connections'] ?? 8,
       inboundConnections: conf?.['network.inbound_connections'] ?? 32,
-      compactBlocksHighBandwidth:
-        conf?.['node.compact_blocks_high_bandwidth'] ?? true,
-      dsProofsEnabled:
-        conf?.['node.ds_proofs_enabled'] ?? conf?.['node.ds_proofs'] ?? true,
-      relayTransactions: conf?.['network.relay_transactions'] ?? true,
       blockLatencySeconds: conf?.['node.block_latency_seconds'] ?? 60,
+      databaseMode: dbMode,
+      // dbMaxSize stored as bytes in kth.cfg; show as GB in UI only when pruned
+      dbMaxSize: dbMode === 'pruned' ? Math.round((rawMaxSize as number) / 1e9) : null,
       ipcEnabled: store?.ipcEnabled ?? true,
       utxozEnabled: store?.utxozEnabled ?? true,
       torEnabled: store?.torEnabled ?? false,
@@ -36,15 +36,25 @@ export const configure = sdk.Action.withInput(
   },
 
   async ({ effects, input }) => {
+    const dbMode = input.databaseMode ?? 'full_indexed'
+    const dbMaxSizeGb = input.dbMaxSize
+    const dbMaxSizeBytes =
+      dbMode === 'pruned' && dbMaxSizeGb
+        ? (dbMaxSizeGb as number) * 1e9
+        : 600000000000
+
     await knuthConf.merge(effects, {
       'log.verbose': input.verboseLogging,
       'network.outbound_connections': input.outboundConnections,
       'network.inbound_connections': input.inboundConnections,
-      'node.compact_blocks_high_bandwidth': input.compactBlocksHighBandwidth,
-      'node.ds_proofs_enabled': input.dsProofsEnabled,
-      'node.ds_proofs': input.dsProofsEnabled,
-      'network.relay_transactions': input.relayTransactions,
+      // Always-on settings — not exposed in UI
+      'node.compact_blocks_high_bandwidth': true,
+      'node.ds_proofs_enabled': true,
+      'node.ds_proofs': true,
+      'network.relay_transactions': true,
       'node.block_latency_seconds': input.blockLatencySeconds,
+      'database.db_mode': dbMode,
+      'database.db_max_size': dbMaxSizeBytes,
     })
 
     await storeJson.merge(effects, {
