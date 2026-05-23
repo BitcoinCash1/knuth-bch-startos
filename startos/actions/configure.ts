@@ -36,7 +36,7 @@ export const configure = sdk.Action.withInput(
   },
 
   async ({ effects, input }) => {
-    const dbMode = input.databaseMode ?? 'full_indexed'
+    const dbMode = (input.databaseMode ?? 'full_indexed') as 'full_indexed' | 'normal' | 'pruned'
     const dbMaxSizeGb = input.dbMaxSize
     const dbMaxSizeBytes =
       dbMode === 'pruned' && dbMaxSizeGb

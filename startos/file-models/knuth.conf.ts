@@ -91,9 +91,9 @@ export const fullConfigSpec = sdk.InputSpec.of({
       'Switching from Full Indexed to Pruned will prevent Fulcrum and BCH Explorer from connecting.',
     default: 'full_indexed',
     values: {
-      full_indexed: { name: 'Full Indexed', description: 'Full transaction index — required for Fulcrum and BCH Explorer.' },
-      normal:       { name: 'Normal',       description: 'Standard node without full transaction index.' },
-      pruned:       { name: 'Pruned',       description: 'Prune old block data to save disk space. Incompatible with Fulcrum and BCH Explorer.' },
+      full_indexed: 'Full Indexed (required for Fulcrum and BCH Explorer)',
+      normal:       'Normal (standard node, no full tx index)',
+      pruned:       'Pruned (saves disk space, incompatible with Fulcrum and BCH Explorer)',
     },
   }),
   dbMaxSize: sdk.Value.number({
