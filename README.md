@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="icon.png" alt="Knuth logo" width="21%" />
+  <img src="icon.svg" alt="Knuth logo" width="21%" />
   <h1>Knuth</h1>
 </div>
 
