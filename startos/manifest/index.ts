@@ -9,7 +9,7 @@ export const manifest = setupManifest({
   marketingUrl: 'https://kth.cash',
   donationUrl: null,
   docsUrls: [
-    'https://github.com/BitcoinCash1/knuth-bch-startos/blob/master/README.md',
+    'https://github.com/BitcoinCash1/knuth-bch-startos/blob/master/instructions.md',
     'https://github.com/k-nuth/kth',
   ],
   description: {

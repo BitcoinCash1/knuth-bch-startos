@@ -41,6 +41,24 @@ export const networkConfig = sdk.Action.withInput(
     return { network: (store?.network ?? 'mainnet') as Network }
   },
   async ({ effects, input }) => {
-    await storeJson.merge(effects, { network: input.network as Network })
+    const store = await storeJson.read().once()
+    const current = store?.network ?? 'mainnet'
+    const next = input.network as Network
+    if (current === next) {
+      return {
+        version: '1' as const,
+        title: 'Network Unchanged',
+        message: `Knuth is already configured for ${next}.`,
+        result: null,
+      }
+    }
+    await storeJson.merge(effects, { network: next })
+    await effects.restart()
+    return {
+      version: '1' as const,
+      title: 'Network Updated',
+      message: `Switched Knuth from ${current} to ${next}. Restarting automatically.`,
+      result: null,
+    }
   },
 )
