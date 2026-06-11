@@ -10,6 +10,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
   const network: Network = store?.network ?? 'mainnet'
   const { peer: peerPort } = networkPorts[network]
   const netFlag = networkFlag[network]
+  const netLabel = network.charAt(0).toUpperCase() + network.slice(1)
   const torEnabled = store?.torEnabled ?? false
 
   // Tor — get container IP
@@ -60,7 +61,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
           try {
             const result = await knuthSub.exec(['test', '-d', `${rootDir}/blockchain`])
             if (result.exitCode === 0) {
-              return { message: 'Knuth node is running', result: 'success' }
+              return { message: `Knuth node is running (${netLabel})`, result: 'success' }
             }
             return { message: 'Knuth is initializing...', result: 'starting' }
           } catch {
