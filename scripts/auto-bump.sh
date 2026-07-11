@@ -40,14 +40,14 @@ export const ${TAG_VAR} = VersionInfo.of({
 })
 EOF
 
-sed -i "s|^ARG KNUTH_VERSION=.*|ARG KNUTH_VERSION=${DISPATCHED_TAG}|" Dockerfile.binary
+sed -i "s|^ARG KNUTH_VERSION=.*|ARG KNUTH_VERSION=${DISPATCHED_TAG}|" Dockerfile
 sed -i "1a import { ${TAG_VAR} } from './v${CLEAN_TAG}.0'" startos/versions/index.ts
 sed -i "s/current: ${CURRENT_VAR}/current: ${TAG_VAR}/" startos/versions/index.ts
 sed -i "s/other: \[/other: [${CURRENT_VAR}, /" startos/versions/index.ts
 
 git config user.name "github-actions[bot]"
 git config user.email "github-actions[bot]@users.noreply.github.com"
-git add startos/versions/index.ts "$NEW_FILE" Dockerfile.binary
+git add startos/versions/index.ts "$NEW_FILE" Dockerfile
 git commit -m "feat: auto-bump to upstream ${DISPATCHED_TAG} (v${NEW_VERSION})"
 git push origin master
 echo "Version bump committed"

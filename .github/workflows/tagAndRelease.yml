@@ -3,11 +3,7 @@ name: Tag and Release
 on:
   push:
     branches: ['master']
-    paths-ignore: ['*.md', 'Dockerfile.binary']
-  workflow_run:
-    workflows: ['Build Binary Image']
-    types: [completed]
-    branches: [master]
+    paths-ignore: ['*.md']
   workflow_dispatch:
 
 permissions:
@@ -20,7 +16,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
