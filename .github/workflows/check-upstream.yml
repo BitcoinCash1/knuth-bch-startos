@@ -25,7 +25,7 @@ jobs:
           LATEST=$(gh release view --repo k-nuth/kth --json tagName -q '.tagName' 2>/dev/null || echo "")
           if [ -z "$LATEST" ]; then echo "Could not fetch upstream version"; exit 0; fi
 
-          CURRENT=$(grep -E '^ARG KNUTH_VERSION=' Dockerfile.binary | cut -d= -f2)
+          CURRENT=$(grep -E '^ARG KNUTH_VERSION=' Dockerfile | cut -d= -f2)
           if [ "$LATEST" = "$CURRENT" ]; then echo "Already at $LATEST — no update"; exit 0; fi
 
           echo "Updating $CURRENT -> $LATEST"
