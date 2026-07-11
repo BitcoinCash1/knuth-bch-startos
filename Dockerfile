@@ -1,6 +1,6 @@
 ARG KNUTH_VERSION=v1.1.0
 
-FROM ghcr.io/k-nuth/kth:${KNUTH_VERSION} AS upstream
+FROM --platform=linux/amd64 ghcr.io/k-nuth/kth:${KNUTH_VERSION} AS upstream
 
 FROM ubuntu:24.04
 
