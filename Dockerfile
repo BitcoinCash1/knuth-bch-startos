@@ -1,4 +1,4 @@
-ARG KNUTH_VERSION=v1.1.0
+ARG KNUTH_VERSION=v1.2.0
 
 FROM --platform=linux/amd64 ghcr.io/k-nuth/kth:${KNUTH_VERSION} AS upstream
 
