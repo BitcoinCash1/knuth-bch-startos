@@ -54,6 +54,11 @@ export const shape = z.object({
   'net.channel_germination_seconds': iniNumber.catch(30),
   'net.manual_attempt_limit': iniNumber.catch(0),
   'net.validate_checksum': z.boolean().catch(false),
+  // Protocol-level service bits and network magic. kth sets correct values per
+  // network; declared so a hand-edited kth.cfg round-trips, not exposed in the UI.
+  'net.services': iniNumber.optional(),
+  'net.invalid_services': iniNumber.optional(),
+  'net.identifier': iniNumber.optional(),
   'net.use_ipv6': z.boolean().catch(false),
   // Advertised public address; empty means "let kth decide".
   'net.self': z.string().catch(''),
@@ -96,6 +101,20 @@ export const shape = z.object({
   'node.byte_fee_satoshis': z.union([z.string().transform(Number), z.number()]).catch(1),
   'node.sigop_fee_satoshis': z.union([z.string().transform(Number), z.number()]).catch(100),
   'node.minimum_output_satoshis': iniNumber.catch(546),
+  // Display mode: tui | log | daemon. Must stay "log" under StartOS — the TUI
+  // expects a terminal and would break log capture.
+  'node.display': z.enum(['tui', 'log', 'daemon']).catch('log'),
+
+  // [fork] BIP activation toggles — consensus, never exposed (see note below).
+  'fork.bip16': z.boolean().optional(),
+  'fork.bip30': z.boolean().optional(),
+  'fork.bip34': z.boolean().optional(),
+  'fork.bip66': z.boolean().optional(),
+  'fork.bip65': z.boolean().optional(),
+  'fork.bip90': z.boolean().optional(),
+  'fork.bip68': z.boolean().optional(),
+  'fork.bip112': z.boolean().optional(),
+  'fork.bip113': z.boolean().optional(),
 
   // [rpc] — added in kth v1.3.0. The server is also gated at compile time behind
   // the `rpc` conan option; rpc.enabled only works on a binary built with it.
