@@ -5,8 +5,7 @@ export const v_1_3_0_3 = VersionInfo.of({
   releaseNotes:
     'Autoconfig now applies databaseMode and rpcEnabled (so Fulcrum/Explorer can ' +
     'turn RPC on and require full DB mode). Network action wording matches BCHN ' +
-    '(RPC + P2P ports). Tor remains optional; enabling it requires the Tor package. ' +
-    'Upstream RPC method gaps for Fulcrum/pools: k-nuth/kth#616.',
+    '(RPC + P2P ports). Tor remains optional; enabling it requires the Tor package.',
   migrations: {
     up: async () => {},
     down: async () => {},
