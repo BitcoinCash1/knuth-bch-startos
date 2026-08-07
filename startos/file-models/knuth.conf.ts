@@ -23,7 +23,9 @@ export const shape = z.object({
   'db.db_max_size': iniNumber.catch(600000000000),
   'db.safe_mode': z.boolean().catch(true),
   'db.cache_capacity': iniNumber.catch(10000),
-  'db.db_mode': z.enum(['full_indexed', 'normal', 'pruned']).catch('full_indexed'),
+  // v1.3.0 accepts pruned|blocks|full (verified against the binary; the old
+  // full_indexed/normal spellings are rejected with "illegal value").
+  'db.db_mode': z.enum(['full', 'blocks', 'pruned']).catch('full'),
 
   // [chain]
   'chain.cores': iniNumber.catch(0),
@@ -98,10 +100,10 @@ export const fullConfigSpec = sdk.InputSpec.of({
       'Full Indexed is required for Fulcrum and BCH Explorer to work.',
     warning:
       'Switching from Full Indexed to Pruned will prevent Fulcrum and BCH Explorer from connecting.',
-    default: 'full_indexed',
+    default: 'full',
     values: {
-      full_indexed: 'Full Indexed (required for Fulcrum and BCH Explorer)',
-      normal:       'Normal (standard node, no full tx index)',
+      full: 'Full Indexed (required for Fulcrum and BCH Explorer)',
+      blocks:       'Blocks (standard node, no full tx index)',
       pruned:       'Pruned (saves disk space, incompatible with Fulcrum and BCH Explorer)',
     },
   }),

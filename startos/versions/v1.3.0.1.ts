@@ -53,8 +53,18 @@ export const v_1_3_0_1 = VersionInfo.of({
       carry('database.db_max_size', 'db.db_max_size')
       carry('database.safe_mode', 'db.safe_mode')
       carry('database.cache_capacity', 'db.cache_capacity')
-      carry('database.db_mode', 'db.db_mode')
       carry('blockchain.cores', 'chain.cores')
+
+      // db_mode's accepted *values* changed too, not just the key: v1.3.0 takes
+      // pruned|blocks|full and rejects the old spellings outright with
+      // "--db.db_mode: illegal value", which crash-loops the node on startup.
+      const dbModeMap = {
+        full_indexed: 'full',
+        normal: 'blocks',
+        pruned: 'pruned',
+      } as const
+      const oldMode = old['database.db_mode']
+      if (oldMode !== undefined) carried['db.db_mode'] = dbModeMap[oldMode]
 
       if (Object.keys(carried).length > 0) {
         await knuthConf.merge(effects, carried as never)

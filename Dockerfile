@@ -7,7 +7,7 @@ ARG KNUTH_VERSION=v1.3.0
 #   docker build -f kth/Dockerfile --build-arg KNUTH_VERSION=1.3.0 \
 #     -t local/kth:v1.3.0-rpc .   # in a clone of k-nuth/docker-images
 # Revert this to ghcr.io/k-nuth/kth:${KNUTH_VERSION} once that PR is released.
-FROM --platform=linux/amd64 local/kth:v1.3.0-rpc AS upstream
+FROM --platform=linux/amd64 localhost:5000/kth:v1.3.0-rpc AS upstream
 
 FROM ubuntu:24.04
 

@@ -19,7 +19,7 @@ export const configure = sdk.Action.withInput(
   async ({ effects }) => {
     const conf = await knuthConf.read().once()
     const store = await storeJson.read().once()
-    const dbMode = conf?.['db.db_mode'] ?? 'full_indexed'
+    const dbMode = conf?.['db.db_mode'] ?? 'full'
     const rawMaxSize = conf?.['db.db_max_size'] ?? 600000000000
     return {
       verboseLogging: conf?.['log.verbose'] ?? false,
@@ -37,7 +37,7 @@ export const configure = sdk.Action.withInput(
   },
 
   async ({ effects, input }) => {
-    const dbMode = (input.databaseMode ?? 'full_indexed') as 'full_indexed' | 'normal' | 'pruned'
+    const dbMode = (input.databaseMode ?? 'full') as 'full' | 'blocks' | 'pruned'
     const dbMaxSizeGb = input.dbMaxSize
     const dbMaxSizeBytes =
       dbMode === 'pruned' && dbMaxSizeGb
