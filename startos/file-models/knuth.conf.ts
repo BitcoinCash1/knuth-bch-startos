@@ -12,6 +12,12 @@ export const shape = z.object({
   'log.debug_file': z.string().catch('/data/debug.log'),
   'log.error_file': z.string().catch('/data/error.log'),
   'log.verbose': z.boolean().catch(false),
+  'log.archive_directory': z.string().catch('/data/log-archive'),
+  'log.rotation_size': iniNumber.catch(0),
+  'log.minimum_free_space': iniNumber.catch(0),
+  'log.maximum_archive_size': iniNumber.catch(0),
+  'log.maximum_archive_files': iniNumber.catch(0),
+  'log.statistics_server': z.string().catch(''),
 
   // [net]
   'net.inbound_port': iniNumber.catch(8333),
@@ -44,13 +50,37 @@ export const shape = z.object({
   'net.channel_handshake_seconds': iniNumber.catch(30),
   'net.channel_heartbeat_minutes': iniNumber.catch(5),
   'net.channel_inactivity_minutes': iniNumber.catch(10),
+  'net.channel_expiration_minutes': iniNumber.catch(60),
+  'net.channel_germination_seconds': iniNumber.catch(30),
+  'net.manual_attempt_limit': iniNumber.catch(0),
+  'net.validate_checksum': z.boolean().catch(false),
   'net.use_ipv6': z.boolean().catch(false),
+  // Advertised public address; empty means "let kth decide".
+  'net.self': z.string().catch(''),
+  // List-valued options. kth accepts these repeated; FileHelper.ini round-trips
+  // arrays, and an empty array simply writes no entry.
+  'net.peer': z.array(z.string()).catch([]),
+  'net.seed': z.array(z.string()).catch([]),
+  'net.blacklist': z.array(z.string()).catch([]),
+  'net.user_agent_blacklist': z.array(z.string()).catch([]),
 
   // [chain]
   'chain.cores': iniNumber.catch(0),
   'chain.priority': z.boolean().catch(true),
   'chain.reorganization_limit': iniNumber.catch(256),
   'chain.gbt_template_refresh_seconds': iniNumber.catch(5),
+  'chain.fix_checkpoints': z.boolean().catch(true),
+  'chain.checkpoint': z.array(z.string()).catch([]),
+
+  // [fork] — consensus activation parameters. Deliberately NOT exposed in any
+  // action: kth derives correct values per network, and overriding them would
+  // fork this node off the real chain. Declared only so a user-supplied kth.cfg
+  // round-trips instead of being silently dropped on the next merge.
+  'fork.easy_blocks': z.boolean().optional(),
+  'fork.retarget': z.boolean().optional(),
+  'fork.asert_half_life': iniNumber.optional(),
+  'fork.leibniz_activation_time': iniNumber.optional(),
+  'fork.cantor_activation_time': iniNumber.optional(),
 
   // [db] mempool/reorg pool — "Mempool & Block Policy"
   'db.reorg_pool_limit': iniNumber.catch(100),
