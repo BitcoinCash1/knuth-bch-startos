@@ -34,8 +34,26 @@ export const shape = z.object({
   // full_indexed/normal spellings are rejected with "illegal value").
   'db.db_mode': z.enum(['full', 'blocks', 'pruned']).catch('full'),
 
+  // [net] peers/tuning — exposed via "RPC & Peers Settings" (BCHN parity).
+  'net.threads': iniNumber.catch(0),
+  'net.protocol_maximum': iniNumber.catch(70016),
+  'net.protocol_minimum': iniNumber.catch(70012),
+  'net.host_pool_capacity': iniNumber.catch(10000),
+  'net.connect_batch_size': iniNumber.catch(5),
+  'net.connect_timeout_seconds': iniNumber.catch(5),
+  'net.channel_handshake_seconds': iniNumber.catch(30),
+  'net.channel_heartbeat_minutes': iniNumber.catch(5),
+  'net.channel_inactivity_minutes': iniNumber.catch(10),
+  'net.use_ipv6': z.boolean().catch(false),
+
   // [chain]
   'chain.cores': iniNumber.catch(0),
+  'chain.priority': z.boolean().catch(true),
+  'chain.reorganization_limit': iniNumber.catch(256),
+  'chain.gbt_template_refresh_seconds': iniNumber.catch(5),
+
+  // [db] mempool/reorg pool — "Mempool & Block Policy"
+  'db.reorg_pool_limit': iniNumber.catch(100),
 
   // [node]
   'node.compact_blocks_high_bandwidth': z.boolean().catch(true),
@@ -43,6 +61,11 @@ export const shape = z.object({
   'node.ds_proofs': z.boolean().catch(true),
   'node.relay_transactions': z.boolean().catch(true),
   'node.block_latency_seconds': iniNumber.catch(60),
+  'node.notify_limit_hours': iniNumber.catch(24),
+  // kth takes these as FLOAT (satoshis per byte / per sigop).
+  'node.byte_fee_satoshis': z.union([z.string().transform(Number), z.number()]).catch(1),
+  'node.sigop_fee_satoshis': z.union([z.string().transform(Number), z.number()]).catch(100),
+  'node.minimum_output_satoshis': iniNumber.catch(546),
 
   // [rpc] — added in kth v1.3.0. The server is also gated at compile time behind
   // the `rpc` conan option; rpc.enabled only works on a binary built with it.

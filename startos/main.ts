@@ -24,6 +24,8 @@ export const main = sdk.setupMain(async ({ effects }) => {
   const rpcEnabled = store?.rpcEnabled ?? false
   const rpcUser = store?.rpcUser ?? ''
   const rpcPassword = store?.rpcPassword ?? ''
+  const utxozEnabled = store?.utxozEnabled ?? true
+  const ipcEnabled = store?.ipcEnabled ?? true
 
   // Tor — get container IP (same pattern as BCHN/BCHD/Flowee)
   const torIp = torEnabled
@@ -198,6 +200,82 @@ export const main = sdk.setupMain(async ({ effects }) => {
       },
       requires: ['primary'],
     })
+    // BCHN/BCHD/Flowee all show a Peer Connections check sourced from
+    // getpeerinfo. kth v1.3.0 exposes neither getpeerinfo nor
+    // getconnectioncount (verified by probing the live node), so the row is
+    // shown as disabled rather than faked from log scraping.
+    .addHealthCheck('peer-connections', {
+      ready: {
+        display: 'Peer Connections',
+        fn: () => ({
+          result: 'disabled' as const,
+          message:
+            'Peer counts require getpeerinfo, which Knuth v1.3.0 does not implement yet.',
+        }),
+      },
+      requires: [],
+    })
+    .addHealthCheck('i2p', {
+      ready: {
+        display: 'I2P',
+        fn: () => ({
+          result: 'disabled' as const,
+          message: 'I2P support is not implemented yet.',
+        }),
+      },
+      requires: [],
+    })
+    // Knuth-specific capability rows. Neither is a network service — UTXO-Z is a
+    // storage engine and the C-API is an in-process binding — so they surface
+    // here rather than as interfaces (kth listens on exactly two ports: P2P and
+    // JSON-RPC, verified against the running node).
+    .addHealthCheck('utxoz', {
+      ready: {
+        display: 'UTXO-Z Storage',
+        fn: async () => {
+          if (!utxozEnabled)
+            return {
+              result: 'disabled' as const,
+              message: 'UTXO-Z capability is disabled in Node Settings',
+            }
+          try {
+            const res = await knuthSub.exec(['test', '-d', `${dataDir}/utxoz`])
+            if (res.exitCode === 0)
+              return {
+                result: 'success' as const,
+                message: `UTXO-Z database active at ${dataDir}/utxoz`,
+              }
+            return {
+              result: 'loading' as const,
+              message: 'Waiting for the UTXO-Z database to be created...',
+            }
+          } catch {
+            return {
+              result: 'loading' as const,
+              message: 'Waiting for the UTXO-Z database to be created...',
+            }
+          }
+        },
+      },
+      requires: ['primary'],
+    })
+    .addHealthCheck('ipc-capi', {
+      ready: {
+        display: 'IPC / C-API',
+        fn: () =>
+          ipcEnabled
+            ? {
+                result: 'success' as const,
+                message:
+                  'C-API capability advertised for dependent services (in-process binding, not a network port)',
+              }
+            : {
+                result: 'disabled' as const,
+                message: 'IPC / C-API capability is disabled in Node Settings',
+              },
+      },
+      requires: [],
+    })
     .addHealthCheck('tor', {
       ready: {
         display: 'Tor',
@@ -219,7 +297,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
             }
           return {
             result: 'success' as const,
-            message: 'All connections routed through Tor',
+            message: `Tor proxy active (${torIp}) — outbound only. Add an onion address to enable inbound.`,
           }
         },
       },
