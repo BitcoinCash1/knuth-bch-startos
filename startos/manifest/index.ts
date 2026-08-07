@@ -38,7 +38,7 @@ export const manifest = setupManifest({
   dependencies: {
     tor: {
       description:
-        'Enables Tor onion routing for anonymous peer-to-peer connections.',
+        'Enables Tor onion routing for anonymous peer-to-peer connections. When Tor is installed and Tor Routing is enabled in Node Settings, Knuth can route outbound connections through the Tor network for enhanced privacy.',
       optional: true,
       metadata: {
         title: 'Tor',

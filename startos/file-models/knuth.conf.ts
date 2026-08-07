@@ -150,8 +150,11 @@ export const fullConfigSpec = sdk.InputSpec.of({
   torEnabled: sdk.Value.toggle({
     name: 'Tor Routing',
     description:
-      'Route all outbound connections through the Tor network for enhanced privacy. ' +
-      'Requires the Tor package to be installed and running.',
+      'Prefer Tor for outbound peer connections when the Tor package is installed ' +
+      'and running (same optional dependency pattern as BCHN/BCHD/Flowee). ' +
+      'Knuth does not yet expose SOCKS/onion CLI flags equivalent to BCHN; this ' +
+      'toggle marks the Tor dependency and surfaces Tor health. Inbound .onion ' +
+      'is published via StartOS Interfaces → Peer → Add Onion Service.',
     default: false,
   }),
 })

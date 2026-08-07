@@ -34,9 +34,9 @@ export const networkConfig = sdk.Action.withInput(
   async ({ effects: _effects }) => ({
     name: 'Network',
     description:
-      'Select the Bitcoin Cash network. The P2P port adjusts automatically for the selected network.',
+      'Select the Bitcoin Cash network. RPC and P2P ports adjust automatically for the selected network.',
     warning:
-      'Changing the network requires a node restart. The P2P port will change to match the selected network.',
+      'Changing the network requires a node restart. RPC and P2P ports will change to match the selected network.',
     allowedStatuses: 'any' as const,
     group: 'Configuration',
     visibility: 'enabled' as const,
