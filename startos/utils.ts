@@ -3,16 +3,25 @@ export const rpcInterfaceId = 'rpc'
 export const rootDir = '/data'
 
 // ── Network types ─────────────────────────────────────────────────────────────
-export const NETWORKS = ['mainnet', 'testnet3', 'testnet4', 'scalenet', 'chipnet', 'regtest'] as const
+// Order matches BCHN StartOS: mainnet → testnets → scalenet → chipnet → regtest.
+export const NETWORKS = [
+  'mainnet',
+  'testnet3',
+  'testnet4',
+  'scalenet',
+  'chipnet',
+  'regtest',
+] as const
 export type Network = (typeof NETWORKS)[number]
 
-export const networkPorts: Record<Network, { peer: number; rpc: number }> = {
-  mainnet:  { peer: 8333,  rpc: 8332  },
-  testnet3: { peer: 18333, rpc: 18332 },
-  testnet4: { peer: 28333, rpc: 28332 },
-  scalenet: { peer: 38333, rpc: 38332 },
-  chipnet:  { peer: 48333, rpc: 48332 },
-  regtest:  { peer: 18444, rpc: 18443 },
+// Field order matches BCHN utils (rpc, peer).
+export const networkPorts: Record<Network, { rpc: number; peer: number }> = {
+  mainnet:  { rpc: 8332,  peer: 8333  },
+  testnet3: { rpc: 18332, peer: 18333 },
+  testnet4: { rpc: 28332, peer: 28333 },
+  scalenet: { rpc: 38332, peer: 38333 },
+  chipnet:  { rpc: 48332, peer: 48333 },
+  regtest:  { rpc: 18443, peer: 18444 },
 }
 
 // kth v1.3.0 selects the network with a valued option (`--network <name>` / `-n`),

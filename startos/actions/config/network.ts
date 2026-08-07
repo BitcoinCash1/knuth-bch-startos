@@ -10,6 +10,7 @@ import { knuthConf } from '../../file-models/knuth.conf'
 
 const { InputSpec, Value } = sdk
 
+// Select order must match BCHN exactly (mainnet → … → chipnet → regtest).
 const networkSpec = InputSpec.of({
   network: Value.select({
     name: 'Network',
@@ -18,12 +19,12 @@ const networkSpec = InputSpec.of({
     warning:
       'Switching networks requires a full restart. The node will sync from scratch on the new network. Your mainnet data is preserved separately on disk.',
     values: {
-      mainnet:  'Mainnet',
+      mainnet: 'Mainnet',
       testnet3: 'Testnet3 (legacy test network)',
       testnet4: 'Testnet4 (light-weight test network)',
       scalenet: 'Scalenet (high-throughput test network)',
-      chipnet:  'Chipnet (upgrade / CHIP staging)',
-      regtest:  'Regtest (local testing only)',
+      chipnet: 'Chipnet (upgrade / CHIP staging)',
+      regtest: 'Regtest (local testing only)',
     },
     default: 'mainnet',
   }),
@@ -58,12 +59,12 @@ export const networkConfig = sdk.Action.withInput(
         result: null,
       }
     }
-    await storeJson.merge(effects, { network: next })
+    // BCHN clears fullySynced on network switch; keep the same store key for dependents.
+    await storeJson.merge(effects, { network: next, fullySynced: false })
 
     // kth.cfg pins ports, chain directory and hosts file explicitly — without
     // rewriting them the node would keep the previous network's ports and reuse
-    // its chainstate/peer ban list (which is how chipnet ended up with 0 peers
-    // and 18 mainnet-derived bans).
+    // its chainstate/peer ban list.
     const { peer: nextPeerPort, rpc: nextRpcPort } = networkPorts[next]
     await knuthConf.merge(effects, {
       'net.inbound_port': nextPeerPort,
