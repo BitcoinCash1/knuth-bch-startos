@@ -29,5 +29,18 @@ export const networkName: Record<Network, string> = {
   regtest:  'regtest',
 }
 
+// Same layout as BCHN/BCHD/Flowee on StartOS:
+//   mainnet  → chain under /data/blockchain, peers at /data/peers.dat
+//   testnets → /data/<network>/… (matches deleteTestNetworkData paths)
+// Without this, switching mainnet↔chipnet reuses one chainstate and one hosts
+// pool — peers get banned for the wrong network magic.
+export const networkDbDir = (network: Network): string =>
+  network === 'mainnet' ? `${rootDir}/blockchain` : `${rootDir}/${network}`
+
+export const networkHostsFile = (network: Network): string =>
+  network === 'mainnet'
+    ? `${rootDir}/peers.dat`
+    : `${rootDir}/${network}/peers.dat`
+
 // ── Port (mainnet default, kept for backward compat) ──────────────────────────
 export const peerPort = networkPorts.mainnet.peer

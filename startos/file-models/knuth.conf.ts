@@ -18,7 +18,14 @@ export const shape = z.object({
   'net.inbound_connections': iniNumber.catch(32),
   'net.outbound_connections': iniNumber.catch(8),
 
+  // [net] hosts pool — kth defaults peers.dat to process CWD (/), which is
+  // outside the StartOS volume. Pin it under /data (BCHN-style layout) so
+  // bans/peers survive rebuilds and Delete Peer List works.
+  'net.hosts_file': z.string().catch('/data/peers.dat'),
+
   // [db]
+  // Mainnet: /data/blockchain. Testnets: /data/<network> (same schema as
+  // BCHN/BCHD/Flowee + deleteTestNetworkData).
   'db.directory': z.string().catch('/data/blockchain'),
   'db.db_max_size': iniNumber.catch(600000000000),
   'db.safe_mode': z.boolean().catch(true),

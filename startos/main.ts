@@ -1,22 +1,31 @@
 import { sdk } from './sdk'
-import { rootDir, networkPorts, networkName, Network } from './utils'
-import { knuthConf } from './file-models/knuth.conf'
+import {
+  rootDir,
+  networkPorts,
+  networkName,
+  networkDbDir,
+  Network,
+} from './utils'
 import { storeJson } from './file-models/store.json'
+import { mainMounts } from './mounts'
+
+export { mainMounts }
 
 export const main = sdk.setupMain(async ({ effects }) => {
   console.log('Starting Knuth!')
 
   const store = await storeJson.read().once()
   const network: Network = store?.network ?? 'mainnet'
-  const { peer: peerPort, rpc: rpcPort } = networkPorts[network]
+  const { rpc: rpcPort } = networkPorts[network]
   const netName = networkName[network]
   const netLabel = network.charAt(0).toUpperCase() + network.slice(1)
+  const dataDir = networkDbDir(network)
   const torEnabled = store?.torEnabled ?? false
   const rpcEnabled = store?.rpcEnabled ?? false
   const rpcUser = store?.rpcUser ?? ''
   const rpcPassword = store?.rpcPassword ?? ''
 
-  // Tor — get container IP
+  // Tor — get container IP (same pattern as BCHN/BCHD/Flowee)
   const torIp = torEnabled
     ? await sdk.getContainerIp(effects, { packageId: 'tor' }).const()
     : null
@@ -29,26 +38,49 @@ export const main = sdk.setupMain(async ({ effects }) => {
     })
   }
 
-  // Knuth uses -c <config> and --init_run (init chain if needed, then run)
+  // Knuth: -c config, --init_run, --network <name> (v1.3.0; old --chipnet flags are no-ops)
   const knuthArgs: string[] = [
-    '-c', `${rootDir}/kth.cfg`,
+    '-c',
+    `${rootDir}/kth.cfg`,
     '--init_run',
-    '--network', netName,
+    '--network',
+    netName,
   ]
-
-  const mounts = sdk.Mounts.of().mountVolume({
-    volumeId: 'main',
-    subpath: null,
-    mountpoint: rootDir,
-    readonly: false,
-  })
 
   const knuthSub = await sdk.SubContainer.of(
     effects,
     { imageId: 'knuth' },
-    mounts,
+    mainMounts,
     'knuth-sub',
   )
+
+  // Helper: JSON-RPC via curl (no knuth-cli). Retry transient attach failures
+  // the way BCHN retries bitcoin-cli under mount-namespace pressure.
+  async function rpcCall(method: string) {
+    const args = [
+      'curl',
+      '-s',
+      '--max-time',
+      '10',
+      '--user',
+      `${rpcUser}:${rpcPassword}`,
+      '-H',
+      'content-type: application/json',
+      '-d',
+      JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: [] }),
+      `http://127.0.0.1:${rpcPort}/`,
+    ]
+    let lastErr: unknown
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await knuthSub.exec(args)
+      } catch (err) {
+        lastErr = err
+        await new Promise((r) => setTimeout(r, 500))
+      }
+    }
+    throw lastErr
+  }
 
   return sdk.Daemons.of(effects)
     .addDaemon('primary', {
@@ -58,71 +90,133 @@ export const main = sdk.setupMain(async ({ effects }) => {
         sigtermTimeout: 300_000,
       },
       ready: {
-        display: 'Node',
+        // Mirror BCHN: when RPC is on, "ready" means the RPC interface answers.
+        // When RPC is off, fall back to chaindir liveness.
+        display: rpcEnabled ? 'RPC' : 'Node',
         fn: async () => {
-          // With RPC enabled (kth v1.3.0+) ask the node where it is. Knuth's
-          // getblockchaininfo returns chain/blocks/headers/best_block_hash/
-          // difficulty — there is no initialblockdownload or
-          // verificationprogress field to lean on, so blocks vs headers is the
-          // only sync signal available here.
           if (rpcEnabled) {
             try {
-              const res = await knuthSub.exec([
-                'curl', '-s', '--max-time', '10',
-                '--user', `${rpcUser}:${rpcPassword}`,
-                '-H', 'content-type: application/json',
-                '-d', '{"jsonrpc":"2.0","id":1,"method":"getblockchaininfo","params":[]}',
-                `http://127.0.0.1:${rpcPort}/`,
-              ])
+              const res = await rpcCall('getblockchaininfo')
               if (res.exitCode === 0 && res.stdout) {
                 const body = JSON.parse(String(res.stdout))
-                const info = body?.result
-                if (info) {
-                  const blocks = Number(info.blocks ?? 0)
-                  const headers = Number(info.headers ?? 0)
-                  if (headers > 0 && blocks < headers) {
-                    const pct = ((blocks / headers) * 100).toFixed(2)
-                    return {
-                      message: `Syncing ${netLabel}: ${blocks} / ${headers} (${pct}%)`,
-                      result: 'starting' as const,
-                    }
-                  }
+                if (body?.result) {
                   return {
-                    message: `Knuth is synced at height ${blocks} (${netLabel})`,
+                    message: `Knuth RPC is ready (${netLabel})`,
                     result: 'success' as const,
                   }
                 }
               }
+              return {
+                message: 'The Knuth RPC interface is not ready',
+                result: 'starting' as const,
+              }
             } catch {
-              // fall through to the liveness check below
+              return {
+                message: 'The Knuth RPC interface is not ready',
+                result: 'starting' as const,
+              }
             }
           }
 
-          // No RPC (disabled, or a binary built without the `rpc` conan
-          // option) — fall back to a liveness check.
           try {
-            const result = await knuthSub.exec(['test', '-d', `${rootDir}/blockchain`])
+            const result = await knuthSub.exec(['test', '-d', dataDir])
             if (result.exitCode === 0) {
-              return { message: `Knuth node is running (${netLabel})`, result: 'success' }
+              return {
+                message: `Knuth node is running (${netLabel})`,
+                result: 'success' as const,
+              }
             }
-            return { message: 'Knuth is initializing...', result: 'starting' }
+            return {
+              message: 'Knuth is initializing...',
+              result: 'starting' as const,
+            }
           } catch {
-            return { message: 'Knuth is starting...', result: 'starting' }
+            return {
+              message: 'Knuth is starting...',
+              result: 'starting' as const,
+            }
           }
         },
       },
       requires: [],
+    })
+    .addHealthCheck('sync-progress', {
+      ready: {
+        display: 'Blockchain Sync',
+        fn: async () => {
+          if (!rpcEnabled) {
+            return {
+              result: 'disabled' as const,
+              message:
+                'Enable JSON-RPC in Node Settings to show sync progress',
+            }
+          }
+          try {
+            const res = await rpcCall('getblockchaininfo')
+            if (res.exitCode !== 0 || !res.stdout) {
+              return {
+                message: 'Waiting for sync info',
+                result: 'loading' as const,
+              }
+            }
+            const body = JSON.parse(String(res.stdout))
+            const info = body?.result
+            if (!info) {
+              return {
+                message: 'Waiting for sync info',
+                result: 'loading' as const,
+              }
+            }
+            // Knuth has no initialblockdownload / verificationprogress — use
+            // blocks vs headers (same signal as Fulcrum-style health elsewhere).
+            const blocks = Number(info.blocks ?? 0)
+            const headers = Number(info.headers ?? 0)
+            if (headers === 0) {
+              return {
+                message: `Connecting to ${netLabel} peers and fetching headers...`,
+                result: 'loading' as const,
+              }
+            }
+            if (blocks < headers) {
+              const pct = ((blocks / headers) * 100).toFixed(2)
+              return {
+                message: `Syncing ${netLabel}: ${blocks} / ${headers} (${pct}%)`,
+                result: 'loading' as const,
+              }
+            }
+            return {
+              message: `Synced — block ${blocks} (${netLabel})`,
+              result: 'success' as const,
+            }
+          } catch {
+            return {
+              message: 'Waiting for sync info',
+              result: 'loading' as const,
+            }
+          }
+        },
+      },
+      requires: ['primary'],
     })
     .addHealthCheck('tor', {
       ready: {
         display: 'Tor',
         fn: () => {
           if (!torEnabled)
-            return { result: 'disabled' as const, message: 'Tor routing is disabled in config' }
+            return {
+              result: 'disabled' as const,
+              message: 'Tor routing is disabled in config',
+            }
           if (!torIp)
-            return { result: 'disabled' as const, message: 'Tor is not installed' }
+            return {
+              result: 'disabled' as const,
+              message: 'Tor is not installed',
+            }
           if (!torRunning)
-            return { result: 'disabled' as const, message: 'Tor is not running' }
+            return {
+              result: 'disabled' as const,
+              message: 'Tor is not running',
+            }
           return {
             result: 'success' as const,
             message: 'All connections routed through Tor',
@@ -138,7 +232,8 @@ export const main = sdk.setupMain(async ({ effects }) => {
           if (torEnabled && torIp)
             return {
               result: 'success' as const,
-              message: 'Outbound via Tor proxy — clearnet peers still reachable',
+              message:
+                'Outbound via Tor proxy — clearnet peers still reachable',
             }
           return {
             result: 'success' as const,

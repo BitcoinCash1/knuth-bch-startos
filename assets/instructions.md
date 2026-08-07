@@ -1,96 +1,63 @@
 # Knuth
 
-Knuth is a high-performance Bitcoin Cash full node written in C++ with a modular
-architecture. It is designed for speed and extensibility. This page covers what is
-specific to running it on StartOS.
+Knuth is a high-performance Bitcoin Cash full node written in C++. This page covers
+what is specific to running it on StartOS once it is installed.
+
+## Documentation
+
+- [Knuth upstream](https://github.com/k-nuth/kth) — source, releases, and operator docs
+- [kth.cash](https://kth.cash) — project site
+- [JSON-RPC (v1.3.0+)](https://github.com/k-nuth/kth/blob/master/docs/json-rpc.md) — methods including mining (`getblocktemplatelight` / `submitblocklight`)
 
 ## What you get on StartOS
 
-- A **Bitcoin Cash full node** that validates and relays blocks and transactions.
-- **P2P interface** (port adjusts per network) for peer connections.
-- Modular architecture — enable or disable UTXO-Z (alternative UTXO storage engine),
-  IPC (inter-process communication), and Tor via Config.
-- Multiple networks: **mainnet**, **testnet3**, **testnet4**, **scalenet**, **chipnet**,
-  and **regtest**.
+- A **Bitcoin Cash full node** that validates and relays blocks and transactions
+- **P2P** (port follows the selected network)
+- Optional **JSON-RPC** (Bitcoin-Cash-compatible) for mining pools, Fulcrum, and explorers
+- The same multi-network layout as BCHN / BCHD / Flowee: mainnet under `/data/blockchain`, testnets under `/data/<network>/`
+- Optional **Tor** routing when the Tor package is installed
 
 ## Getting started
 
-Knuth begins its Initial Block Download — fetching and verifying the entire BCH chain —
-the moment it launches; nothing needs configuring first.
+1. Install and start Knuth — Initial Block Download begins immediately on mainnet.
+2. Watch the **Dashboard** health checks. With JSON-RPC enabled, **Blockchain Sync** shows height vs headers.
+3. When you need RPC (pools, Fulcrum, Explorer): **Config → Node Settings → JSON-RPC Server**, then **Actions → RPC Credentials**.
 
-1. Install Knuth.
-2. Open the **Dashboard** to watch sync progress. IBD time depends on your hardware
-   and internet connection.
-3. Once synced, Knuth validates and relays new blocks and transactions.
+## JSON-RPC
 
-## RPC status
+Off by default. Credentials are generated at install and stay stable.
 
-**JSON-RPC and gRPC are not yet available** in the current upstream Knuth release.
-Knuth syncs and validates the blockchain, but services that require RPC access —
-mining pools (ASICSeer, EloPool), Fulcrum BCH, BCH Explorer — cannot connect to
-Knuth as a node backend until upstream ships the RPC module.
+| Network  | P2P   | RPC   |
+|----------|-------|-------|
+| mainnet  | 8333  | 8332  |
+| testnet3 | 18333 | 18332 |
+| testnet4 | 28333 | 28332 |
+| scalenet | 38333 | 38332 |
+| chipnet  | 48333 | 48332 |
+| regtest  | 18444 | 18443 |
 
-When RPC ships upstream, Knuth will be wired into the same dependency graph as BCHN,
-BCHD, and Flowee with no further packaging changes required.
+Use the **Interfaces** tab for the RPC endpoint other services should call. gRPC is not exposed in this package.
 
 ## Configuration
 
-All settings are available under **Config**:
+- **Network** — mainnet (default), testnet3, testnet4, scalenet, chipnet, regtest. Switches data directory, P2P port, and RPC port; node restarts automatically. Mainnet data is kept separately when you leave and return.
+- **Node Settings** — database mode (`full` / `blocks` / `pruned`), connections, logging, JSON-RPC, UTXO-Z, IPC, Tor.
 
-- **Network** — mainnet (default), testnet3, testnet4, scalenet, chipnet, or regtest.
-  Changing network switches the data directory and P2P port. The node restarts
-  automatically.
-- **UTXO-Z** — enable the alternative UTXO storage engine (experimental).
-- **IPC** — enable inter-process communication module.
-- **Tor** — route outbound peer connections through Tor when Tor is installed.
+`full` database mode is required for Fulcrum and BCH Explorer.
 
-## Ports
+## Tor
 
-| Network  | P2P port |
-|----------|----------|
-| mainnet  | 8333     |
-| testnet3 | 18333    |
-| testnet4 | 28333    |
-| scalenet | 38333    |
-| chipnet  | 48333    |
-| regtest  | 18444    |
+Enable **Tor** in Node Settings when the Tor package is installed and running. For inbound onion: **Interfaces → Peer Interface → Add Onion Service**.
 
-Note: Knuth does not yet expose an RPC port. The P2P port is the only active
-inbound interface.
+## Maintenance
 
-## Switching networks
-
-Use **Config → Network** to change the active network. The node restarts
-automatically and starts syncing the new network from scratch. Each network uses
-a separate data directory — switching back to mainnet resumes from where mainnet
-left off.
-
-## Tor networking
-
-When Tor is installed and **Tor** is enabled in Config, Knuth routes outbound peer
-connections through Tor. This hides your IP from peers and from anyone observing
-your network traffic.
-
-For inbound onion connectivity: open **Interfaces → Peer Interface → Add Onion Service**
-in StartOS. This creates a hidden service at a `.onion` address pointing to Knuth's
-P2P port.
-
-## Maintenance actions
-
-- **Delete Peer List** — clear the stored peer list and force re-discovery.
-- **Delete Test Network Data** — remove data for testnet3, testnet4, scalenet,
-  chipnet, or regtest while preserving mainnet data.
-- **Node Info** — display current block height, sync status, and connected peers.
+- **Delete Peer List** — reset peer discovery (service must be stopped)
+- **Delete Test Network Data** — wipe selected test-network chain data without touching mainnet
+- **RPC Credentials** — username, password, port
+- **Node Info** — runtime summary
 
 ## Limitations
 
-- **RPC is not yet implemented upstream.** Dependent services (pools, Fulcrum, BCH
-  Explorer) cannot connect to Knuth until upstream ships the RPC module.
-- IBD must complete before dependent services can start (once RPC is available).
-- Backing up Knuth only saves configuration. Blockchain data is not backed up and
-  must re-sync from scratch after a restore.
-
-## Support
-
-- Package: <https://github.com/BitcoinCash1/knuth-bch-startos>
-- Upstream: <https://github.com/k-nuth/kth>
+- Sync progress in the UI requires JSON-RPC enabled (Knuth has no separate IBD progress field when RPC is off).
+- The official upstream container image must be built with `rpc=True` for the JSON-RPC server to exist at all; this package expects that.
+- Blockchain data is not included in StartOS backups — after restore the node re-syncs.

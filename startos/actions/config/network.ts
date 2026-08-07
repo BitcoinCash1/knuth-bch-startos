@@ -1,6 +1,11 @@
 import { sdk } from '../../sdk'
 import { storeJson } from '../../file-models/store.json'
-import { Network, networkPorts } from '../../utils'
+import {
+  Network,
+  networkPorts,
+  networkDbDir,
+  networkHostsFile,
+} from '../../utils'
 import { knuthConf } from '../../file-models/knuth.conf'
 
 const { InputSpec, Value } = sdk
@@ -55,11 +60,15 @@ export const networkConfig = sdk.Action.withInput(
     }
     await storeJson.merge(effects, { network: next })
 
-    // kth.cfg carries explicit ports, so they must follow the network or the
-    // node would keep listening on the previous network's ports.
+    // kth.cfg pins ports, chain directory and hosts file explicitly — without
+    // rewriting them the node would keep the previous network's ports and reuse
+    // its chainstate/peer ban list (which is how chipnet ended up with 0 peers
+    // and 18 mainnet-derived bans).
     const { peer: nextPeerPort, rpc: nextRpcPort } = networkPorts[next]
     await knuthConf.merge(effects, {
       'net.inbound_port': nextPeerPort,
+      'net.hosts_file': networkHostsFile(next),
+      'db.directory': networkDbDir(next),
       'rpc.port': nextRpcPort,
     })
 

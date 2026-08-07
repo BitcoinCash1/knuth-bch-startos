@@ -1,7 +1,12 @@
 import { sdk } from '../sdk'
 import { knuthConf } from '../file-models/knuth.conf'
 import { storeJson } from '../file-models/store.json'
-import { networkPorts, Network } from '../utils'
+import {
+  networkPorts,
+  networkDbDir,
+  networkHostsFile,
+  Network,
+} from '../utils'
 
 const randomHex = (bytes: number) =>
   Array.from({ length: bytes }, () =>
@@ -10,38 +15,36 @@ const randomHex = (bytes: number) =>
       .padStart(2, '0'),
   ).join('')
 
-export const seedFiles = sdk.setupOnInit(async (effects) => {
-  // Seed default store on first install
-  const existing = await storeJson.read().once()
-  if (!existing) {
-    await storeJson.merge(effects, {
-      ipcEnabled: true,
-      utxozEnabled: true,
-      torEnabled: false,
-      rpcEnabled: false,
-    })
-  }
+// BCHN/Flowee pattern: seed once on install; keep credentials stable forever.
+export const seedFiles = sdk.setupOnInit(async (effects, kind) => {
+  if (kind !== 'install') return
 
-  // Generate RPC credentials once, then keep them stable across restarts.
-  const store = await storeJson.read().once()
-  if (!store?.rpcUser || !store?.rpcPassword) {
-    await storeJson.merge(effects, {
-      rpcUser: 'knuth',
-      rpcPassword: randomHex(16),
-    })
-  }
+  const rpcPassword = randomHex(16)
 
-  // Seed default config: credentials plus the ports for the active network.
-  // rpc.bind must be written explicitly — kth defaults it to 127.0.0.1, which
-  // would make the RPC unreachable from other containers.
-  const seeded = await storeJson.read().once()
-  const network: Network = seeded?.network ?? 'mainnet'
+  await storeJson.merge(effects, {
+    network: 'mainnet',
+    ipcEnabled: true,
+    utxozEnabled: true,
+    torEnabled: false,
+    rpcEnabled: false,
+    rpcUser: 'knuth',
+    rpcPassword,
+  })
+
+  // rpc.bind must be explicit — kth defaults to 127.0.0.1 (unreachable cross-container).
+  // net.hosts_file under /data — kth defaults peers.dat to process CWD (/).
+  // db.directory — BCHN-style: mainnet /data/blockchain, testnets /data/<net>.
+  const network: Network = 'mainnet'
   const { peer: peerPort, rpc: rpcPort } = networkPorts[network]
   await knuthConf.merge(effects, {
     'net.inbound_port': peerPort,
+    'net.hosts_file': networkHostsFile(network),
+    'db.directory': networkDbDir(network),
+    'db.db_mode': 'full',
     'rpc.bind': '0.0.0.0',
     'rpc.port': rpcPort,
-    'rpc.user': seeded?.rpcUser ?? '',
-    'rpc.password': seeded?.rpcPassword ?? '',
+    'rpc.user': 'knuth',
+    'rpc.password': rpcPassword,
+    'rpc.enabled': false,
   })
 })

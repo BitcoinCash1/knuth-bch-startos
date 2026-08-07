@@ -26,7 +26,7 @@ export const manifest = setupManifest({
   },
   alerts: {
     install:
-      'Knuth is a high-performance BCH full node. Initial Block Download may take several hours. Note: this version does not include RPC — it syncs and validates the blockchain only. RPC will be added in a future update.',
+      'Knuth is a high-performance BCH full node. Initial Block Download may take several hours. JSON-RPC is available in Node Settings (off by default) — enable it for mining pools, Fulcrum, and other RPC clients. Credentials are generated automatically (see RPC Credentials action).',
     update: null,
     uninstall:
       'Uninstalling will delete all blockchain data and configuration. A fresh sync will be required if you reinstall.',
