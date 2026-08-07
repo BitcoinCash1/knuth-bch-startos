@@ -17,7 +17,9 @@ export const shape = z.object({
   'log.minimum_free_space': iniNumber.catch(0),
   'log.maximum_archive_size': iniNumber.catch(0),
   'log.maximum_archive_files': iniNumber.catch(0),
-  'log.statistics_server': z.string().catch(''),
+  // Endpoint-valued: kth rejects an empty string ("illegal value"), so this must
+  // be omitted entirely rather than written blank. Same for net.self below.
+  'log.statistics_server': z.string().optional(),
 
   // [net]
   'net.inbound_port': iniNumber.catch(8333),
@@ -60,8 +62,8 @@ export const shape = z.object({
   'net.invalid_services': iniNumber.optional(),
   'net.identifier': iniNumber.optional(),
   'net.use_ipv6': z.boolean().catch(false),
-  // Advertised public address; empty means "let kth decide".
-  'net.self': z.string().catch(''),
+  // Advertised public address. Endpoint-valued — omit rather than write blank.
+  'net.self': z.string().optional(),
   // List-valued options. kth accepts these repeated; FileHelper.ini round-trips
   // arrays, and an empty array simply writes no entry.
   'net.peer': z.array(z.string()).catch([]),
