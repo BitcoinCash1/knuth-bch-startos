@@ -1,6 +1,7 @@
 import { sdk } from '../../sdk'
 import { storeJson } from '../../file-models/store.json'
-import { Network } from '../../utils'
+import { Network, networkPorts } from '../../utils'
+import { knuthConf } from '../../file-models/knuth.conf'
 
 const { InputSpec, Value } = sdk
 
@@ -53,6 +54,15 @@ export const networkConfig = sdk.Action.withInput(
       }
     }
     await storeJson.merge(effects, { network: next })
+
+    // kth.cfg carries explicit ports, so they must follow the network or the
+    // node would keep listening on the previous network's ports.
+    const { peer: nextPeerPort, rpc: nextRpcPort } = networkPorts[next]
+    await knuthConf.merge(effects, {
+      'net.inbound_port': nextPeerPort,
+      'rpc.port': nextRpcPort,
+    })
+
     await effects.restart()
     return {
       version: '1' as const,

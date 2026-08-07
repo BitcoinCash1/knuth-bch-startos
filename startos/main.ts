@@ -8,10 +8,13 @@ export const main = sdk.setupMain(async ({ effects }) => {
 
   const store = await storeJson.read().once()
   const network: Network = store?.network ?? 'mainnet'
-  const { peer: peerPort } = networkPorts[network]
+  const { peer: peerPort, rpc: rpcPort } = networkPorts[network]
   const netFlag = networkFlag[network]
   const netLabel = network.charAt(0).toUpperCase() + network.slice(1)
   const torEnabled = store?.torEnabled ?? false
+  const rpcEnabled = store?.rpcEnabled ?? false
+  const rpcUser = store?.rpcUser ?? ''
+  const rpcPassword = store?.rpcPassword ?? ''
 
   // Tor — get container IP
   const torIp = torEnabled
@@ -57,7 +60,46 @@ export const main = sdk.setupMain(async ({ effects }) => {
       ready: {
         display: 'Node',
         fn: async () => {
-          // Knuth v0.79.0 has no RPC — check process is alive via a simple exec
+          // With RPC enabled (kth v1.3.0+) ask the node where it is. Knuth's
+          // getblockchaininfo returns chain/blocks/headers/best_block_hash/
+          // difficulty — there is no initialblockdownload or
+          // verificationprogress field to lean on, so blocks vs headers is the
+          // only sync signal available here.
+          if (rpcEnabled) {
+            try {
+              const res = await knuthSub.exec([
+                'curl', '-s', '--max-time', '10',
+                '--user', `${rpcUser}:${rpcPassword}`,
+                '-H', 'content-type: application/json',
+                '-d', '{"jsonrpc":"2.0","id":1,"method":"getblockchaininfo","params":[]}',
+                `http://127.0.0.1:${rpcPort}/`,
+              ])
+              if (res.exitCode === 0 && res.stdout) {
+                const body = JSON.parse(String(res.stdout))
+                const info = body?.result
+                if (info) {
+                  const blocks = Number(info.blocks ?? 0)
+                  const headers = Number(info.headers ?? 0)
+                  if (headers > 0 && blocks < headers) {
+                    const pct = ((blocks / headers) * 100).toFixed(2)
+                    return {
+                      message: `Syncing ${netLabel}: ${blocks} / ${headers} (${pct}%)`,
+                      result: 'starting' as const,
+                    }
+                  }
+                  return {
+                    message: `Knuth is synced at height ${blocks} (${netLabel})`,
+                    result: 'success' as const,
+                  }
+                }
+              }
+            } catch {
+              // fall through to the liveness check below
+            }
+          }
+
+          // No RPC (disabled, or a binary built without the `rpc` conan
+          // option) — fall back to a liveness check.
           try {
             const result = await knuthSub.exec(['test', '-d', `${rootDir}/blockchain`])
             if (result.exitCode === 0) {

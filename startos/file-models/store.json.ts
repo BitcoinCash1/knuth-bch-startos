@@ -8,6 +8,9 @@ export const shape = z.object({
   ipcEnabled: z.boolean().catch(true),
   utxozEnabled: z.boolean().catch(true),
   torEnabled: z.boolean().catch(false),
+  rpcEnabled: z.boolean().catch(false),
+  rpcUser: z.string().catch(''),
+  rpcPassword: z.string().catch(''),
 })
 
 export const storeJson = FileHelper.json(

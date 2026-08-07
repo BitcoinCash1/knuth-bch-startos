@@ -14,7 +14,7 @@ export const manifest = setupManifest({
   ],
   description: {
     short: 'Knuth — High-performance C++ BCH full node',
-    long: 'Knuth is a high-performance Bitcoin Cash full node written in C++. It validates blocks, relays transactions, and syncs the BCH blockchain. This package exposes node settings plus IPC/C-API and UTXOZ compatibility capabilities. JSON-RPC and gRPC are not exposed in this package version.',
+    long: 'Knuth is a high-performance Bitcoin Cash full node written in C++. It validates blocks, relays transactions, and syncs the BCH blockchain. This package exposes node settings, an optional Bitcoin-Cash-compatible JSON-RPC interface (Knuth v1.3.0+, including getblocktemplatelight and submitblocklight for mining pools), plus IPC/C-API and UTXOZ compatibility capabilities. gRPC is not exposed in this package version.',
   },
   volumes: ['main'],
   images: {

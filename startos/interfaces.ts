@@ -1,11 +1,12 @@
 import { sdk } from './sdk'
-import { peerInterfaceId, networkPorts, Network } from './utils'
+import { peerInterfaceId, rpcInterfaceId, networkPorts, Network } from './utils'
 import { storeJson } from './file-models/store.json'
 
 export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
   const store = await storeJson.read().once()
   const network: Network = store?.network ?? 'mainnet'
-  const { peer: peerPort } = networkPorts[network]
+  const { peer: peerPort, rpc: rpcPort } = networkPorts[network]
+  const rpcEnabled = store?.rpcEnabled ?? false
 
   const receipts = []
 
@@ -29,6 +30,30 @@ export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
     query: {},
   })
   receipts.push(await peerOrigin.export([peer]))
+
+  // ── JSON-RPC (kth v1.3.0+) ───────────────────────────────────────────────
+  if (rpcEnabled) {
+    const rpcMulti = sdk.MultiHost.of(effects, 'rpc')
+    const rpcOrigin = await rpcMulti.bindPort(rpcPort, {
+      protocol: null,
+      preferredExternalPort: rpcPort,
+      addSsl: null,
+      secure: { ssl: false },
+    })
+    const rpc = sdk.createInterface(effects, {
+      name: 'JSON-RPC Interface',
+      id: rpcInterfaceId,
+      description:
+        'Bitcoin-Cash-compatible JSON-RPC for mining pools and other services',
+      type: 'api',
+      masked: true,
+      schemeOverride: { ssl: null, noSsl: null },
+      username: store?.rpcUser ?? null,
+      path: '',
+      query: {},
+    })
+    receipts.push(await rpcOrigin.export([rpc]))
+  }
 
   return receipts
 })

@@ -3,7 +3,7 @@ import { configure } from './configure'
 import { autoconfig } from './config/autoconfig'
 import { networkConfig } from './config/network'
 import { runtimeInfo } from './runtimeInfo'
-import { rpcCredentialsSoon } from './rpcCredentialsSoon'
+import { viewRpcCredentials } from './viewRpcCredentials'
 import { deletePeerList } from './deletePeerList'
 import { deleteTestNetworkData } from './deleteTestNetworkData'
 
@@ -16,7 +16,7 @@ export const actions = sdk.Actions.of()
   .addAction(networkConfig)
   .addAction(configure)
   // ── Credentials ─────────────────────────────────────────────────────────────
-  .addAction(rpcCredentialsSoon)
+  .addAction(viewRpcCredentials)
   // ── Maintenance ─────────────────────────────────────────────────────────────
   .addAction(deletePeerList)
   .addAction(deleteTestNetworkData)
