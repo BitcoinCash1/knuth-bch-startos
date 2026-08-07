@@ -15,13 +15,18 @@ export const networkPorts: Record<Network, { peer: number; rpc: number }> = {
   regtest:  { peer: 18444, rpc: 18443 },
 }
 
-export const networkFlag: Record<Network, string | null> = {
-  mainnet:  null,
-  testnet3: '--testnet',
-  testnet4: '--testnet4',
-  scalenet: '--scalenet',
-  chipnet:  '--chipnet',
-  regtest:  '--regtest',
+// kth v1.3.0 selects the network with a valued option (`--network <name>` / `-n`),
+// not per-network boolean flags. The old `--chipnet` style flags are accepted and
+// silently ignored, leaving the node on mainnet — verified against the binary:
+// `--network chipnet` logs "Network: Chipnet" and seeds chipnet.imaginary.cash:48333,
+// while `--chipnet` seeds mainnet on :8333.
+export const networkName: Record<Network, string> = {
+  mainnet:  'mainnet',
+  testnet3: 'testnet',
+  testnet4: 'testnet4',
+  scalenet: 'scalenet',
+  chipnet:  'chipnet',
+  regtest:  'regtest',
 }
 
 // ── Port (mainnet default, kept for backward compat) ──────────────────────────

@@ -1,5 +1,5 @@
 import { sdk } from './sdk'
-import { rootDir, networkPorts, networkFlag, Network } from './utils'
+import { rootDir, networkPorts, networkName, Network } from './utils'
 import { knuthConf } from './file-models/knuth.conf'
 import { storeJson } from './file-models/store.json'
 
@@ -9,7 +9,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
   const store = await storeJson.read().once()
   const network: Network = store?.network ?? 'mainnet'
   const { peer: peerPort, rpc: rpcPort } = networkPorts[network]
-  const netFlag = networkFlag[network]
+  const netName = networkName[network]
   const netLabel = network.charAt(0).toUpperCase() + network.slice(1)
   const torEnabled = store?.torEnabled ?? false
   const rpcEnabled = store?.rpcEnabled ?? false
@@ -33,7 +33,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
   const knuthArgs: string[] = [
     '-c', `${rootDir}/kth.cfg`,
     '--init_run',
-    ...(netFlag ? [netFlag] : []),
+    '--network', netName,
   ]
 
   const mounts = sdk.Mounts.of().mountVolume({
