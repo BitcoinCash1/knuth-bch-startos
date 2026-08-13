@@ -58,6 +58,7 @@ Use the **Interfaces** tab for the RPC endpoint other services should call. gRPC
 
 ## Limitations
 
-- Sync progress comes from Knuth's own log (`Fully synced at height`). The JSON-RPC `blocks` field often stays 0 even at the tip.
+- Sync progress prefers the compatibility sidecar's tip. Knuth's own RPC `blocks` can lag `headers` by a few at the tip and used to show **Syncing 100%** forever; that is treated as **Synced**.
 - The official upstream container image must be built with `rpc=True` for the JSON-RPC server to exist at all; this package expects that.
 - Blockchain data is not included in StartOS backups — after restore the node re-syncs.
+- **RPC compatibility sidecar (v1.3.5+):** Knuth v1.3.0's `getblock`/`getrawtransaction` look in a store that was removed when blocks moved to `blk*.dat`. This package sits a small sidecar in front of JSON-RPC that serves those methods from the block files and adds `getnetworkinfo`, classic `getblocktemplate`/`submitblock`, and `validateaddress` so Fulcrum, BCH Explorer, ASICSeer, and EloPool can use Knuth. v1.3.8 ends each RPC body with a newline so EloPool/ckpool can parse GBT.

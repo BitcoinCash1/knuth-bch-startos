@@ -35,14 +35,14 @@ export const seedFiles = sdk.setupOnInit(async (effects, kind) => {
   // net.hosts_file under /data — kth defaults peers.dat to process CWD (/).
   // db.directory — BCHN-style: mainnet /data/blockchain, testnets /data/<net>.
   const network: Network = 'mainnet'
-  const { peer: peerPort, rpc: rpcPort } = networkPorts[network]
+  const { peer: peerPort } = networkPorts[network]
   await knuthConf.merge(effects, {
     'net.inbound_port': peerPort,
     'net.hosts_file': networkHostsFile(network),
     'db.directory': networkDbDir(network),
     'db.db_mode': 'full',
-    'rpc.bind': '0.0.0.0',
-    'rpc.port': rpcPort,
+    'rpc.bind': '127.0.0.1',
+    'rpc.port': 19332,
     'rpc.user': 'knuth',
     'rpc.password': rpcPassword,
     'rpc.enabled': false,

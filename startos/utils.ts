@@ -53,3 +53,7 @@ export const networkHostsFile = (network: Network): string =>
 
 // ── Port (mainnet default, kept for backward compat) ──────────────────────────
 export const peerPort = networkPorts.mainnet.peer
+
+// kth v1.3.0 fetch_block() is a stub (blk*.dat not wired). Dependents talk to
+// the rpc_compat sidecar on the public RPC port; kth itself listens here.
+export const internalRpcPort = 19332

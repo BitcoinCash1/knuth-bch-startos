@@ -4,9 +4,11 @@ import {
   networkPorts,
   networkName,
   networkDbDir,
+  internalRpcPort,
   Network,
 } from './utils'
 import { storeJson } from './file-models/store.json'
+import { knuthConf } from './file-models/knuth.conf'
 import { mainMounts } from './mounts'
 
 export { mainMounts }
@@ -49,6 +51,16 @@ export const main = sdk.setupMain(async ({ effects }) => {
     netName,
   ]
 
+  // Public RPC is the compatibility sidecar. kth itself only binds localhost
+  // so dependents never hit the stub getblock / missing getnetworkinfo.
+  if (rpcEnabled) {
+    await knuthConf.merge(effects, {
+      'rpc.bind': '127.0.0.1',
+      'rpc.port': internalRpcPort,
+      'rpc.enabled': true,
+    })
+  }
+
   const knuthSub = await sdk.SubContainer.of(
     effects,
     { imageId: 'knuth' },
@@ -58,7 +70,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
 
   // Helper: JSON-RPC via curl (no knuth-cli). Retry transient attach failures
   // the way BCHN retries bitcoin-cli under mount-namespace pressure.
-  async function rpcCall(method: string) {
+  async function rpcCall(method: string, port: number = internalRpcPort) {
     const args = [
       'curl',
       '-s',
@@ -70,7 +82,10 @@ export const main = sdk.setupMain(async ({ effects }) => {
       'content-type: application/json',
       '-d',
       JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: [] }),
-      `http://127.0.0.1:${rpcPort}/`,
+      // Primary ready must probe kth on the internal port (sidecar needs
+      // primary up). Sync health prefers the sidecar, which lifts stale
+      // kth `blocks` to the blk*.dat tip.
+      `http://127.0.0.1:${port}/`,
     ]
     let lastErr: unknown
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -199,6 +214,67 @@ export const main = sdk.setupMain(async ({ effects }) => {
         },
         requires: [],
       })
+      .addDaemon('rpc-compat', {
+        subcontainer: knuthSub,
+        exec: {
+          command: rpcEnabled
+            ? [
+                'python3',
+                '/usr/local/bin/rpc_compat.py',
+                '--bind',
+                '0.0.0.0',
+                '--port',
+                String(rpcPort),
+                '--backend',
+                `http://127.0.0.1:${internalRpcPort}/`,
+                '--blocks',
+                `${dataDir}/blocks`,
+                '--config',
+                `${rootDir}/kth.cfg`,
+                '--store',
+                `${rootDir}/store.json`,
+              ]
+            : ['sh', '-c', 'exec tail -f /dev/null'],
+        },
+        ready: {
+          display: 'RPC Compat',
+          fn: async () => {
+            if (!rpcEnabled) {
+              return {
+                message: 'JSON-RPC is off — compatibility sidecar idle',
+                result: 'disabled' as const,
+              }
+            }
+            try {
+              const res = await knuthSub.exec([
+                'curl',
+                '-s',
+                '-o',
+                '/dev/null',
+                '-w',
+                '%{http_code}',
+                '--max-time',
+                '3',
+                `http://127.0.0.1:${rpcPort}/`,
+              ])
+              const code = String(res.stdout ?? '').trim()
+              if (code === '401' || code === '200') {
+                return {
+                  message: 'Bitcoin-RPC compatibility sidecar is serving dependents',
+                  result: 'success' as const,
+                }
+              }
+            } catch {
+              /* fall through */
+            }
+            return {
+              message: 'Bitcoin-RPC compatibility sidecar is starting',
+              result: 'starting' as const,
+            }
+          },
+        },
+        requires: ['primary'],
+      })
       .addHealthCheck('sync-progress', {
         ready: {
           display: 'Blockchain Sync',
@@ -207,7 +283,12 @@ export const main = sdk.setupMain(async ({ effects }) => {
 
             if (rpcEnabled) {
               try {
-                const res = await rpcCall('getblockchaininfo')
+                // Sidecar first: kth's own `blocks` often lags `headers` by a
+                // few at the tip (e.g. 318811/318816 → "Syncing 100.00%").
+                let res = await rpcCall('getblockchaininfo', rpcPort)
+                if (res.exitCode !== 0 || !res.stdout) {
+                  res = await rpcCall('getblockchaininfo', internalRpcPort)
+                }
                 if (res.exitCode === 0 && res.stdout) {
                   const info = JSON.parse(String(res.stdout))?.result
                   if (info) {
@@ -225,7 +306,13 @@ export const main = sdk.setupMain(async ({ effects }) => {
                         result: 'loading' as const,
                       }
                     }
-                    if (blocks < headers) {
+                    const gap = headers - blocks
+                    // kth often sits 1–N blocks behind on the RPC `blocks`
+                    // field while fully caught up. A 0.1% gap at height
+                    // 300k is a handful of blocks, not IBD.
+                    const nearTip =
+                      blocks > 0 && gap >= 0 && gap / headers < 0.001
+                    if (blocks < headers && !nearTip) {
                       const pct = ((blocks / headers) * 100).toFixed(2)
                       return {
                         message: `Syncing blocks... ${pct}% (${netLabel})`,
@@ -233,7 +320,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
                       }
                     }
                     return {
-                      message: `Synced — block ${blocks} (${netLabel})`,
+                      message: `Synced — block ${Math.max(blocks, headers)} (${netLabel})`,
                       result: 'success' as const,
                     }
                   }
@@ -250,7 +337,12 @@ export const main = sdk.setupMain(async ({ effects }) => {
                 result: 'loading' as const,
               }
             }
-            if (heights.blocks < heights.headers) {
+            const gap = heights.headers - heights.blocks
+            const nearTip =
+              heights.blocks > 0 &&
+              gap >= 0 &&
+              gap / Math.max(heights.headers, 1) < 0.001
+            if (heights.blocks < heights.headers && !nearTip) {
               const pct = (
                 (heights.blocks / Math.max(heights.headers, 1)) *
                 100
@@ -261,7 +353,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
               }
             }
             return {
-              message: `Synced — block ${heights.blocks} (${netLabel})`,
+              message: `Synced — block ${Math.max(heights.blocks, heights.headers)} (${netLabel})`,
               result: 'success' as const,
             }
           },

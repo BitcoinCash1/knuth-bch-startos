@@ -65,12 +65,12 @@ export const networkConfig = sdk.Action.withInput(
     // kth.cfg pins ports, chain directory and hosts file explicitly — without
     // rewriting them the node would keep the previous network's ports and reuse
     // its chainstate/peer ban list.
-    const { peer: nextPeerPort, rpc: nextRpcPort } = networkPorts[next]
+    const { peer: nextPeerPort } = networkPorts[next]
     await knuthConf.merge(effects, {
       'net.inbound_port': nextPeerPort,
       'net.hosts_file': networkHostsFile(next),
       'db.directory': networkDbDir(next),
-      'rpc.port': nextRpcPort,
+      'rpc.port': 19332,
     })
 
     await effects.restart()
