@@ -131,9 +131,13 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 
 | Check | When | Method |
 |---|---|---|
-| **RPC** / **Node** (daemon ready) | Always | RPC `getblockchaininfo` if enabled; else `test -d` chain dir |
-| **Blockchain Sync** | RPC on | blocks vs headers |
-| **Tor** / **Clearnet** | Always | store + Tor package status |
+| **RPC** (daemon ready) | Always | `getblockchaininfo` when JSON-RPC is on; otherwise the `kth` process |
+| **Blockchain Sync** | Always | RPC blocks/headers when JSON-RPC is on, else Knuth debug log heights |
+| **Peer Connections** | Always | Knuth `Peers: n/m` status log (no `getpeerinfo` in v1.3.0) |
+| **Tor** | Always | Optional — disabled until Tor routing is turned on |
+| **I2P** | Always | Disabled (same as BCHN/Flowee until implemented) |
+| **Clearnet** | Always | Outbound unless a public address is published |
+| **UTXO-Z Storage** / **IPC / C-API** | Always | Knuth-specific capability rows |
 
 ---
 
@@ -141,7 +145,7 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 
 | Package | Optional | Purpose |
 |---|---|---|
-| `tor` | yes | SOCKS for Tor-routed P2P when enabled |
+| `tor` | yes (optional) | Same as BCHN/BCHD/Flowee. Not required to install or run. Becomes a running dependency only if **Node Settings → Tor** is enabled. |
 
 ---
 

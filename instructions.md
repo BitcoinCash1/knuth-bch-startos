@@ -20,7 +20,7 @@ what is specific to running it on StartOS once it is installed.
 ## Getting started
 
 1. Install and start Knuth — Initial Block Download begins immediately on mainnet.
-2. Watch the **Dashboard** health checks. With JSON-RPC enabled, **Blockchain Sync** shows height vs headers.
+2. Watch the **Dashboard** health checks — the same rows as BCHN / BCHD / Flowee: **RPC**, **Blockchain Sync** (percent), **Peer Connections**, **Tor** (optional), **I2P**, **Clearnet**.
 3. When you need RPC (pools, Fulcrum, Explorer): **Config → Node Settings → JSON-RPC Server**, then **Actions → RPC Credentials**.
 
 ## JSON-RPC
@@ -47,7 +47,7 @@ Use the **Interfaces** tab for the RPC endpoint other services should call. gRPC
 
 ## Tor
 
-Enable **Tor** in Node Settings when the Tor package is installed and running. For inbound onion: **Interfaces → Peer Interface → Add Onion Service**.
+**Tor is optional** (same as the other BCH nodes). Knuth runs on clearnet without it. Install the Tor package and enable **Tor** in Node Settings only if you want outbound peer traffic through Tor. For inbound onion: **Interfaces → Peer Interface → Add Onion Service**.
 
 ## Maintenance
 
