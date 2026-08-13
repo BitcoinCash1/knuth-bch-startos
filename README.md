@@ -11,10 +11,9 @@
 > `/data/<network>/`.
 >
 > **Versioning:** the number before `:` is **kth upstream** (today `1.3.0`). The
-> number after `:` is the StartOS package revision. Do not invent new kth
-> versions for sidecar/packaging fixes — those are `:N` bumps. Sideload-only
-> `1.3.5`–`1.3.9` tags were forced upstream bumps because StartOS ignores
-> revision-only sideloads; they are still kth 1.3.0.
+> number after `:` is the StartOS package revision, starting at `:0`
+> (`1.3.0:0`, `1.3.0:1`, …). Packaging-only fixes bump `:N` only — never invent
+> a fake kth version.
 
 ---
 
@@ -176,7 +175,7 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 2. **No `initialblockdownload` / `verificationprogress`** — sync health uses Knuth's coordinator log (RPC `getblockchaininfo.blocks` is often 0 at the tip).
 3. **gRPC not exposed** in this package.
 4. Tor proxy passthrough to `kth` is opt-in; verify after enabling.
-5. **RPC compatibility sidecar** — kth 1.3.0 `fetch_block()` is a stub after the LMDB→`blk*.dat` move (`object does not exist` for every hash). The package runs `scripts/rpc_compat.py` on the public RPC port and leaves kth on `127.0.0.1:19332`. v1.3.6 probes kth on 127.0.0.1:19332 so the sidecar can start (a 1.3.5 deadlock). The sidecar also implements `getnetworkinfo`, classic `getblocktemplate` (from `getblocktemplatelight`), `submitblock`→`submitblocklight`, and cashaddr `validateaddress`. v1.3.8 appends a trailing LF on every JSON-RPC body so ckpool/EloPool (`read_socket_line`) does not hang 20s after `HTTP/1.1 200 OK`.
+5. **RPC compatibility sidecar** — kth 1.3.0 `fetch_block()` is a stub after the LMDB→`blk*.dat` move (`object does not exist` for every hash). The package runs `scripts/rpc_compat.py` on the public RPC port and leaves kth on `127.0.0.1:19332`. Ready probes kth on that internal port so the sidecar can start. The sidecar also implements `getnetworkinfo`, classic `getblocktemplate` (from `getblocktemplatelight`), `submitblock`→`submitblocklight`, and cashaddr `validateaddress`. JSON-RPC bodies end with a trailing LF so ckpool/EloPool (`read_socket_line`) does not hang 20s after `HTTP/1.1 200 OK`.
 
 ---
 
