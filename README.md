@@ -9,6 +9,11 @@
 > package mirrors the BCHN / BCHD / Flowee schema: per-network ports, optional
 > JSON-RPC (v1.3.0+), Tor dependency, and test-network data isolation under
 > `/data/<network>/`.
+>
+> **Versioning:** the number before `:` is **kth upstream** (today `1.3.0`). The
+> number after `:` is the StartOS package revision, starting at `:0`
+> (`1.3.0:0`, `1.3.0:1`, …). Packaging-only fixes bump `:N` only — never invent
+> a fake kth version.
 
 ---
 
@@ -114,7 +119,8 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 | `node-settings` | Node Settings | Configuration |
 | `rpc-credentials` | RPC Credentials | Credentials |
 | `delete-peer-list` | Delete Peer List | Maintenance (stopped only) |
-| `delete-test-network-data` | Delete Test Network Data | Maintenance |
+| `delete-test-network-data` | Delete Test Network Data | Maintenance (stopped only; can wipe the active testnet) |
+| `rebuild-chain-data` | Rebuild Blockchain Database | Maintenance (stopped only) |
 | `autoconfig` | Auto-Configure | Hidden (cross-package) |
 
 ---
@@ -131,9 +137,13 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 
 | Check | When | Method |
 |---|---|---|
-| **RPC** / **Node** (daemon ready) | Always | RPC `getblockchaininfo` if enabled; else `test -d` chain dir |
-| **Blockchain Sync** | RPC on | blocks vs headers |
-| **Tor** / **Clearnet** | Always | store + Tor package status |
+| **RPC** (daemon ready) | Always | `getblockchaininfo` when JSON-RPC is on; otherwise the `kth` process |
+| **Blockchain Sync** | Always | Sidecar `getblockchaininfo` (lifts stale kth `blocks` to the blk*.dat tip). A &lt;0.1% header gap at the tip is **Synced**, not `Syncing 100%`. |
+| **Peer Connections** | Always | Knuth `Peers: n/m` status log (no `getpeerinfo` in v1.3.0) |
+| **Tor** | Always | Optional — listed as a dependency; health is disabled until Tor routing is turned on |
+| **I2P** | Always | Disabled (same as BCHN/Flowee until implemented) |
+| **Clearnet** | Always | Outbound unless a public address is published |
+| **UTXO-Z Storage** / **IPC / C-API** | Always | Knuth-specific capability rows |
 
 ---
 
@@ -141,7 +151,7 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 
 | Package | Optional | Purpose |
 |---|---|---|
-| `tor` | yes | SOCKS for Tor-routed P2P when enabled |
+| `tor` | yes (optional) | Always listed on the Dependencies tab (`kind: exists` when Tor Routing is off, `kind: running` when on). Not required to be running unless **Node Settings → Tor Routing** is enabled. |
 
 ---
 
@@ -162,9 +172,10 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 ## 12. Limitations and Differences
 
 1. **Official `ghcr.io/k-nuth/kth` may lack RPC** until upstream builds with `rpc=True` (see `k-nuth/docker-images` PR #7). This package can use a local RPC-enabled image interim.
-2. **No `initialblockdownload` / `verificationprogress`** — sync health uses blocks vs headers only.
+2. **No `initialblockdownload` / `verificationprogress`** — sync health uses Knuth's coordinator log (RPC `getblockchaininfo.blocks` is often 0 at the tip).
 3. **gRPC not exposed** in this package.
 4. Tor proxy passthrough to `kth` is opt-in; verify after enabling.
+5. **RPC compatibility sidecar** — kth 1.3.0 `fetch_block()` is a stub after the LMDB→`blk*.dat` move (`object does not exist` for every hash). The package runs `scripts/rpc_compat.py` on the public RPC port and leaves kth on `127.0.0.1:19332`. Ready probes kth on that internal port so the sidecar can start. The sidecar also implements `getnetworkinfo`, classic `getblocktemplate` (from `getblocktemplatelight`), `submitblock`→`submitblocklight`, and cashaddr `validateaddress`. JSON-RPC bodies end with a trailing LF so ckpool/EloPool (`read_socket_line`) does not hang 20s after `HTTP/1.1 200 OK`.
 
 ---
 

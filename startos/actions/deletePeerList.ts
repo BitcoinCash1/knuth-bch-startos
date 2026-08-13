@@ -36,7 +36,13 @@ export const deletePeerList = sdk.Action.withoutInput(
       mainMounts,
       'delete-peer-list',
       async (sub) => {
-        await sub.exec(['rm', '-f', hostsFile, ...legacy])
+        // Per-network peers.dat (chipnet/testnet/…) plus every legacy path.
+        // kth keeps bans in this file — leaving any copy makes seeds stay banned.
+        await sub.exec([
+          'sh',
+          '-c',
+          `rm -f ${[hostsFile, ...legacy].join(' ')} ${rootDir}/*/peers.dat`,
+        ])
       },
     )
     return {
