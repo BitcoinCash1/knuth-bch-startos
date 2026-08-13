@@ -114,7 +114,8 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 | `node-settings` | Node Settings | Configuration |
 | `rpc-credentials` | RPC Credentials | Credentials |
 | `delete-peer-list` | Delete Peer List | Maintenance (stopped only) |
-| `delete-test-network-data` | Delete Test Network Data | Maintenance |
+| `delete-test-network-data` | Delete Test Network Data | Maintenance (stopped only; can wipe the active testnet) |
+| `rebuild-chain-data` | Rebuild Blockchain Database | Maintenance (stopped only) |
 | `autoconfig` | Auto-Configure | Hidden (cross-package) |
 
 ---
@@ -132,9 +133,9 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 | Check | When | Method |
 |---|---|---|
 | **RPC** (daemon ready) | Always | `getblockchaininfo` when JSON-RPC is on; otherwise the `kth` process |
-| **Blockchain Sync** | Always | RPC blocks/headers when JSON-RPC is on, else Knuth debug log heights |
+| **Blockchain Sync** | Always | Knuth `Fully synced at height` / `Stats:` log, merged with RPC (RPC `blocks` often stays 0) |
 | **Peer Connections** | Always | Knuth `Peers: n/m` status log (no `getpeerinfo` in v1.3.0) |
-| **Tor** | Always | Optional — disabled until Tor routing is turned on |
+| **Tor** | Always | Optional — listed as a dependency; health is disabled until Tor routing is turned on |
 | **I2P** | Always | Disabled (same as BCHN/Flowee until implemented) |
 | **Clearnet** | Always | Outbound unless a public address is published |
 | **UTXO-Z Storage** / **IPC / C-API** | Always | Knuth-specific capability rows |
@@ -145,7 +146,7 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 
 | Package | Optional | Purpose |
 |---|---|---|
-| `tor` | yes (optional) | Same as BCHN/BCHD/Flowee. Not required to install or run. Becomes a running dependency only if **Node Settings → Tor** is enabled. |
+| `tor` | yes (optional) | Always listed on the Dependencies tab (`kind: exists` when Tor Routing is off, `kind: running` when on). Not required to be running unless **Node Settings → Tor Routing** is enabled. |
 
 ---
 
@@ -166,7 +167,7 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 ## 12. Limitations and Differences
 
 1. **Official `ghcr.io/k-nuth/kth` may lack RPC** until upstream builds with `rpc=True` (see `k-nuth/docker-images` PR #7). This package can use a local RPC-enabled image interim.
-2. **No `initialblockdownload` / `verificationprogress`** — sync health uses blocks vs headers only.
+2. **No `initialblockdownload` / `verificationprogress`** — sync health uses Knuth's coordinator log (RPC `getblockchaininfo.blocks` is often 0 at the tip).
 3. **gRPC not exposed** in this package.
 4. Tor proxy passthrough to `kth` is opt-in; verify after enabling.
 

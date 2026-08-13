@@ -41,18 +41,18 @@ export const deleteTestNetworkData = sdk.Action.withInput(
       'Delete blockchain data for one or more test networks (Testnet3, Testnet4, Scalenet, Chipnet, Regtest). This frees disk space without touching mainnet.',
     warning:
       'All block data and chainstate for the selected networks will be permanently deleted. Mainnet is never affected.',
-    allowedStatuses: 'any' as const,
+    // Must be stopped: deleting the active network while kth is still
+    // running just gets rewritten. Stop used to hang (5 min SIGTERM);
+    // it now SIGKILLs after 45s so this action can actually run.
+    allowedStatuses: 'only-stopped' as const,
     group: 'Maintenance',
     visibility: 'enabled' as const,
   }),
   inputSpec,
   async ({ effects: _effects }) => {
-    const store = await storeJson.read().once()
-    const active: Network = store?.network ?? 'mainnet'
-    const defaults = (['testnet3', 'testnet4', 'scalenet', 'chipnet', 'regtest'] as const).filter(
-      (n) => n !== active,
-    )
-    return { networks: defaults }
+    const all: Array<'testnet3' | 'testnet4' | 'scalenet' | 'chipnet' | 'regtest'> =
+      ['testnet3', 'testnet4', 'scalenet', 'chipnet', 'regtest']
+    return { networks: all }
   },
   async ({ effects, input }) => {
     const networks = (input.networks ?? []).filter(Boolean) as string[]
@@ -66,14 +66,8 @@ export const deleteTestNetworkData = sdk.Action.withInput(
     }
     const store = await storeJson.read().once()
     const activeNetwork: Network = store?.network ?? 'mainnet'
-    const activeTestNet = activeNetwork !== 'mainnet' ? activeNetwork : null
-    if (activeTestNet && networks.includes(activeTestNet)) {
-      return {
-        version: '1' as const,
-        title: 'Cannot Delete Active Network',
-        message: `Knuth is currently configured for ${activeTestNet}. Switch to a different network before deleting its data.`,
-        result: null,
-      }
+    if (networks.includes(activeNetwork)) {
+      await storeJson.merge(effects, { fullySynced: false })
     }
     const removed: string[] = []
     await sdk.SubContainer.withTemp(

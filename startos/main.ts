@@ -84,12 +84,15 @@ export const main = sdk.setupMain(async ({ effects }) => {
     throw lastErr
   }
 
-  async function debugLogTail(): Promise<string> {
+  // debug.log is huge and chatty. Pull only the sync/peer lines from the
+  // last 2 MiB — a raw `tail -n 400` is all handshake noise and misses
+  // "Fully synced" / "Peers:".
+  async function debugLogSnippet(): Promise<string> {
     try {
       const res = await knuthSub.exec([
         'sh',
         '-c',
-        'tail -n 400 /data/debug.log 2>/dev/null || true',
+        "tail -c 2000000 /data/debug.log 2>/dev/null | grep -E 'Fully synced at height|Stats: .* blocks at height|Peers:|Validation complete:|header_height=|block_height=' | tail -n 80 || true",
       ])
       return String(res.stdout ?? '')
     } catch {
@@ -106,13 +109,29 @@ export const main = sdk.setupMain(async ({ effects }) => {
   function parseLogHeights(
     log: string,
   ): { blocks: number; headers: number } | null {
+    // Knuth's own coordinator is the source of truth. RPC getblockchaininfo
+    // often reports blocks=0 / genesis even after "Fully synced at height N".
+    const fully = [...log.matchAll(/Fully synced at height (\d+)/g)]
+    if (fully.length) {
+      const n = Number(fully.at(-1)![1])
+      return { blocks: n, headers: n }
+    }
+    const stats = [...log.matchAll(/Stats:\s+(\d+)\s+blocks at height (\d+)/g)]
+    if (stats.length) {
+      const m = stats.at(-1)!
+      return { blocks: Number(m[1]), headers: Number(m[2]) }
+    }
+    const totals = [...log.matchAll(/Validation complete:.*?total size (\d+)/g)]
     const headerMs = [...log.matchAll(/header_height=(\d+)/g)]
     const blockMs = [...log.matchAll(/block_height=(\d+)/g)]
-    if (headerMs.length === 0 && blockMs.length === 0) return null
-    return {
-      headers: headerMs.length ? Number(headerMs.at(-1)![1]) : 0,
-      blocks: blockMs.length ? Number(blockMs.at(-1)![1]) : 0,
-    }
+    const headers = totals.length
+      ? Number(totals.at(-1)![1])
+      : headerMs.length
+        ? Number(headerMs.at(-1)![1])
+        : 0
+    const blocks = blockMs.length ? Number(blockMs.at(-1)![1]) : 0
+    if (headers === 0 && blocks === 0) return null
+    return { headers, blocks }
   }
 
   async function nodeIsUp(): Promise<boolean> {
@@ -130,7 +149,9 @@ export const main = sdk.setupMain(async ({ effects }) => {
         subcontainer: knuthSub,
         exec: {
           command: ['kth', ...knuthArgs],
-          sigtermTimeout: 300_000,
+          // 5 min left the UI "Stopped" while kth kept running, so Delete
+          // Peer List / Delete Test Network Data never actually took effect.
+          sigtermTimeout: 45_000,
         },
         ready: {
           // Same row label as BCHN/BCHD/Flowee. Do not stall the whole health
@@ -182,14 +203,22 @@ export const main = sdk.setupMain(async ({ effects }) => {
         ready: {
           display: 'Blockchain Sync',
           fn: async () => {
+            const logHeights = parseLogHeights(await debugLogSnippet())
+
             if (rpcEnabled) {
               try {
                 const res = await rpcCall('getblockchaininfo')
                 if (res.exitCode === 0 && res.stdout) {
                   const info = JSON.parse(String(res.stdout))?.result
                   if (info) {
-                    const blocks = Number(info.blocks ?? 0)
-                    const headers = Number(info.headers ?? 0)
+                    let blocks = Number(info.blocks ?? 0)
+                    let headers = Number(info.headers ?? 0)
+                    // Prefer the coordinator log when RPC is stuck at genesis.
+                    if (logHeights) {
+                      if (logHeights.blocks > blocks) blocks = logHeights.blocks
+                      if (logHeights.headers > headers)
+                        headers = logHeights.headers
+                    }
                     if (headers === 0) {
                       return {
                         message: `Connecting to ${netLabel} peers and fetching headers...`,
@@ -214,7 +243,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
               }
             }
 
-            const heights = parseLogHeights(await debugLogTail())
+            const heights = logHeights
             if (!heights || (heights.headers === 0 && heights.blocks === 0)) {
               return {
                 message: `Connecting to ${netLabel} peers and fetching headers...`,
@@ -256,7 +285,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
         ready: {
           display: 'Peer Connections',
           fn: async () => {
-            const count = parsePeerCount(await debugLogTail())
+            const count = parsePeerCount(await debugLogSnippet())
             if (count === null) {
               return {
                 message:

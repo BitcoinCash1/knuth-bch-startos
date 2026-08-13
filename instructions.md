@@ -47,17 +47,17 @@ Use the **Interfaces** tab for the RPC endpoint other services should call. gRPC
 
 ## Tor
 
-**Tor is optional** (same as the other BCH nodes). Knuth runs on clearnet without it. Install the Tor package and enable **Tor** in Node Settings only if you want outbound peer traffic through Tor. For inbound onion: **Interfaces → Peer Interface → Add Onion Service**.
+**Tor is optional** (same as the other BCH nodes). It always shows on the Knuth **Dependencies** tab. Knuth runs on clearnet without Tor running; install the Tor package and enable **Tor Routing** in Node Settings only if you want outbound peer traffic through Tor. For inbound onion: **Interfaces → Peer Interface → Add Onion Service**.
 
 ## Maintenance
 
-- **Delete Peer List** — reset peer discovery (service must be stopped)
-- **Delete Test Network Data** — wipe selected test-network chain data without touching mainnet
+- **Delete Peer List** — stop the service first, then run this to reset peer discovery and unban seeds. Stop now kills the node within 45 seconds.
+- **Delete Test Network Data** — stop first, then wipe selected test-network chain data (including the network you are currently on). Mainnet is never touched.
 - **RPC Credentials** — username, password, port
 - **Node Info** — runtime summary
 
 ## Limitations
 
-- Sync progress in the UI requires JSON-RPC enabled (Knuth has no separate IBD progress field when RPC is off).
+- Sync progress comes from Knuth's own log (`Fully synced at height`). The JSON-RPC `blocks` field often stays 0 even at the tip.
 - The official upstream container image must be built with `rpc=True` for the JSON-RPC server to exist at all; this package expects that.
 - Blockchain data is not included in StartOS backups — after restore the node re-syncs.
