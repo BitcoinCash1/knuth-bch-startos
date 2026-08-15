@@ -43,7 +43,7 @@
 |---|---|
 | **Image ID** | `knuth` |
 | **Build** | `Dockerfile` copies `kth` + GCC 15 runtime from upstream `ghcr.io/k-nuth/kth` (or a local RPC-enabled build until upstream ships `rpc=True`) |
-| **Architectures** | `x86_64` (upstream currently ships amd64; others emulate) |
+| **Architectures** | `x86_64`, `aarch64`, `riscv64` (kth is compiled on amd64; other arches use StartOS qemu via `emulateMissingAs`) |
 | **Command** | `kth -c /data/kth.cfg --init_run --network <name>` |
 
 ---

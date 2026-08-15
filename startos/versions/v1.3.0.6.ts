@@ -8,7 +8,8 @@ export const v_1_3_0_6 = VersionInfo.of({
     'sidecar serves getblock/getrawtransaction/getblocktemplate from blk*.dat ' +
     'so Fulcrum, Explorer, and the pools can use Knuth. Blockchain Sync prefers ' +
     'the sidecar tip so a few-block native blocks/headers lag is Synced, not ' +
-    '"Syncing 100%". Tor stays optional.',
+    '"Syncing 100%". The s9pk is packed for x86_64, aarch64 and riscv64 ' +
+    '(non-x86 runs the amd64 image under StartOS qemu). Tor stays optional.',
   migrations: {
     up: async () => {},
     down: async () => {},

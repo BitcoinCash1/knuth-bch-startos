@@ -11,7 +11,9 @@
 # profile published on packages.kth.cash.
 ARG TOOLCHAIN=kthnode/gcc15-ubuntu24.04@sha256:4988fdeb3654c2b5ea591ffa4454f67e1a631549449c62e35060ba69da79eb67
 
-FROM ${TOOLCHAIN} AS kth-build
+# The official gcc15 toolchain image is linux/amd64 only. Packing aarch64 and
+# riscv64 s9pks reuses this image; StartOS runs it under qemu (emulateMissingAs).
+FROM --platform=linux/amd64 ${TOOLCHAIN} AS kth-build
 
 # kth release version WITHOUT the leading "v" (conan wants 1.3.0, not v1.3.0).
 ARG KNUTH_VERSION=1.3.0
@@ -38,7 +40,7 @@ RUN conan profile detect --force \
       -s compiler.cppstd=23
 
 # ── Runtime ─────────────────────────────────────────────────────────
-FROM ubuntu:24.04
+FROM --platform=linux/amd64 ubuntu:24.04
 
 # curl is used by the package health checks to reach the JSON-RPC interface;
 # kth ships no RPC client CLI of its own.
