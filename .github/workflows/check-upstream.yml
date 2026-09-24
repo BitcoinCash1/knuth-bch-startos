@@ -27,7 +27,7 @@ jobs:
           if [ -z "$LATEST" ]; then echo "Could not fetch upstream version"; exit 0; fi
 
           CURRENT=$(grep -E '^ARG KNUTH_VERSION=' Dockerfile | cut -d= -f2)
-          if [ "$LATEST" = "$CURRENT" ]; then echo "Already at $LATEST — no update"; exit 0; fi
+          if [ "${LATEST#v}" = "$CURRENT" ]; then echo "Already at $LATEST — no update"; exit 0; fi
 
           echo "Updating $CURRENT -> $LATEST"
           bash scripts/auto-bump.sh "$LATEST"

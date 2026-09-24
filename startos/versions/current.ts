@@ -1,6 +1,13 @@
-import { VersionInfo } from '@start9labs/start-sdk'
+import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 
-export const v_1_3_0_6 = VersionInfo.of({
+/**
+ * Whether users may downgrade from this release to an earlier one. Set it per
+ * release: `true` only when earlier versions can still read the data this one
+ * leaves behind, `false` when this release is one-way.
+ */
+const ALLOW_DOWNGRADE = false
+
+export const current = VersionInfo.of({
   version: '1.3.0:6',
   releaseNotes:
     'Packaging revision of kth 1.3.0 (upstream version is unchanged). ' +
@@ -12,6 +19,6 @@ export const v_1_3_0_6 = VersionInfo.of({
     '(non-x86 runs the amd64 image under StartOS qemu). Tor stays optional.',
   migrations: {
     up: async () => {},
-    down: async () => {},
+    down: ALLOW_DOWNGRADE ? async () => {} : IMPOSSIBLE,
   },
 })

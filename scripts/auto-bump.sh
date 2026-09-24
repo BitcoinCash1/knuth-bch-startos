@@ -10,10 +10,8 @@ fi
 # Knuth tags as v0.83.0 — strip leading v for Start9 version
 CLEAN_TAG="${DISPATCHED_TAG#v}"
 
-CURRENT_VAR=$(grep -E '^[[:space:]]*current:' startos/versions/index.ts | head -1 \
-  | sed -E 's/.*current:[[:space:]]*([A-Za-z0-9_]+).*/\1/')
-VERSION_FILE_BASE=$(echo "$CURRENT_VAR" | sed -E 's/^v_//; s/_/./g')
-CURRENT_VERSION=$(grep -E "version:[[:space:]]*'" "startos/versions/v${VERSION_FILE_BASE}.ts" \
+CURRENT_FILE=startos/versions/current.ts
+CURRENT_VERSION=$(grep -E "version:[[:space:]]*'" "$CURRENT_FILE" \
   | head -1 | sed -E "s/.*version:[[:space:]]*'([^']+)'.*/\1/")
 CURRENT_UPSTREAM="${CURRENT_VERSION%%:*}"
 
@@ -23,31 +21,29 @@ if [ "$CURRENT_UPSTREAM" = "$CLEAN_TAG" ]; then
 fi
 echo "Bumping $CURRENT_UPSTREAM -> $CLEAN_TAG"
 
-TAG_VAR="v_$(echo "$CLEAN_TAG" | tr '.' '_')_0"
 NEW_VERSION="${CLEAN_TAG}:0"
-NEW_FILE="startos/versions/v${CLEAN_TAG}.0.ts"
 
-cat > "$NEW_FILE" <<EOF
-import { VersionInfo } from '@start9labs/start-sdk'
+# current.ts is edited in place: new version, fresh release notes, and
+# ALLOW_DOWNGRADE back to false for the new upstream.
+python3 - "$CURRENT_FILE" "$NEW_VERSION" "$DISPATCHED_TAG" <<'PY'
+import re, sys
+path, new_version, tag = sys.argv[1:]
+src = open(path).read()
+src, n = re.subn(r"(\n\s*version:\s*)'[^']+'", rf"\g<1>'{new_version}'", src, count=1)
+assert n == 1, 'version line not found'
+src, n = re.subn(r"releaseNotes:\s*(\{.*?\n  \}|(?:'[^']*'(?:\s*\+\s*'[^']*')*)|`[^`]*`),",
+                 f"releaseNotes: 'Upstream {tag}.',", src, count=1, flags=re.S)
+assert n == 1, 'releaseNotes not found'
+src = re.sub(r"const ALLOW_DOWNGRADE = (true|false)", "const ALLOW_DOWNGRADE = false", src)
+open(path, 'w').write(src)
+PY
 
-export const ${TAG_VAR} = VersionInfo.of({
-  version: '${NEW_VERSION}',
-  releaseNotes: 'Upstream ${DISPATCHED_TAG}.',
-  migrations: {
-    up: async ({ effects }) => {},
-    down: async ({ effects }) => {},
-  },
-})
-EOF
-
-sed -i "s|^ARG KNUTH_VERSION=.*|ARG KNUTH_VERSION=${DISPATCHED_TAG}|" Dockerfile
-sed -i "1a import { ${TAG_VAR} } from './v${CLEAN_TAG}.0'" startos/versions/index.ts
-sed -i "s/current: ${CURRENT_VAR}/current: ${TAG_VAR}/" startos/versions/index.ts
-sed -i "s/other: \[/other: [${CURRENT_VAR}, /" startos/versions/index.ts
+# The Dockerfile wants the version without the leading v (conan: 1.3.0).
+sed -i "s|^ARG KNUTH_VERSION=.*|ARG KNUTH_VERSION=${CLEAN_TAG}|" Dockerfile
 
 git config user.name "github-actions[bot]"
 git config user.email "github-actions[bot]@users.noreply.github.com"
-git add startos/versions/index.ts "$NEW_FILE" Dockerfile
+git add "$CURRENT_FILE" Dockerfile
 git commit -m "feat: auto-bump to upstream ${DISPATCHED_TAG} (v${NEW_VERSION})"
 git push origin master
 echo "Version bump committed"

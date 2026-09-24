@@ -1,5 +1,5 @@
-import { knuthConf, fullConfigSpec } from '../../file-models/knuth.conf'
-import { storeJson } from '../../file-models/store.json'
+import { knuthConf, fullConfigSpec } from '../../fileModels/knuth.conf'
+import { storeJson } from '../../fileModels/store.json'
 import { sdk } from '../../sdk'
 
 // Hidden cross-package action (Fulcrum / Explorer / pools). Mirrors BCHN

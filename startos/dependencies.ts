@@ -1,5 +1,5 @@
 import { sdk } from './sdk'
-import { storeJson } from './file-models/store.json'
+import { storeJson } from './fileModels/store.json'
 
 // Tor is optional in the manifest (same as BCHN/BCHD/Flowee). StartOS only
 // lists dependencies that setupDependencies returns — returning {} hid the

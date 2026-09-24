@@ -171,7 +171,7 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 
 ## 12. Limitations and Differences
 
-1. **Official `ghcr.io/k-nuth/kth` may lack RPC** until upstream builds with `rpc=True` (see `k-nuth/docker-images` PR #7). This package can use a local RPC-enabled image interim.
+1. **Built from source.** The official `ghcr.io/k-nuth/kth` image is built without `rpc=True` (see `k-nuth/docker-images` PR #7), so the `Dockerfile` compiles kth with the JSON-RPC server enabled.
 2. **No `initialblockdownload` / `verificationprogress`** — sync health uses Knuth's coordinator log (RPC `getblockchaininfo.blocks` is often 0 at the tip).
 3. **gRPC not exposed** in this package.
 4. Tor proxy passthrough to `kth` is opt-in; verify after enabling.
@@ -190,6 +190,8 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 ## 14. Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md)
+
+`check-upstream.yml` looks for a new Knuth release on `k-nuth/kth` daily. When one appears, `scripts/auto-bump.sh` sets `ARG KNUTH_VERSION` in the `Dockerfile`, sets `startos/versions/current.ts` to `<upstream>:0`, resets `ALLOW_DOWNGRADE` to `false`, commits the bump straight to `master`, and dispatches Tag and Release, which builds and publishes the new version. Package-only fixes bump the revision after the colon by hand.
 
 ---
 

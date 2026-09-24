@@ -1,6 +1,6 @@
 import { sdk } from '../sdk'
-import { storeJson } from '../file-models/store.json'
-import { knuthConf } from '../file-models/knuth.conf'
+import { storeJson } from '../fileModels/store.json'
+import { knuthConf } from '../fileModels/knuth.conf'
 
 const randomHex = (bytes: number) =>
   Array.from({ length: bytes }, () =>
