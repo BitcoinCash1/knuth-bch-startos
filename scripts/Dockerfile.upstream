@@ -1,0 +1,32 @@
+# Wraps the official Knuth image instead of compiling kth here. check-upstream
+# installs this as the Dockerfile once ghcr.io/k-nuth/kth ships with JSON-RPC
+# (k-nuth/docker-images#7); until then the Dockerfile builds kth from source.
+ARG KNUTH_VERSION=1.3.0
+
+# The official image is linux/amd64 only. Packing aarch64 and riscv64 s9pks
+# reuses it; StartOS runs it under qemu (emulateMissingAs).
+FROM --platform=linux/amd64 ghcr.io/k-nuth/kth:${KNUTH_VERSION} AS upstream
+
+FROM --platform=linux/amd64 ubuntu:24.04
+
+# curl is used by the package health checks to reach the JSON-RPC interface;
+# kth ships no RPC client CLI of its own. python3 runs the RPC sidecar.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates curl python3 && \
+    rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /data
+
+# kth and the GCC runtime it was built against, as shipped in the official image.
+COPY --from=upstream /usr/local/bin/kth /usr/local/bin/kth
+COPY --from=upstream /opt/kth/lib/ /opt/kth/lib/
+COPY --from=upstream /etc/ld.so.conf.d/kth.conf /etc/ld.so.conf.d/kth.conf
+RUN ldconfig
+
+COPY scripts/rpc_compat.py /usr/local/bin/rpc_compat.py
+RUN chmod 755 /usr/local/bin/rpc_compat.py
+
+WORKDIR /data
+VOLUME /data
+# P2P and JSON-RPC (mainnet defaults; per-network ports are set in kth.cfg).
+EXPOSE 8333 8332
+ENTRYPOINT ["kth"]

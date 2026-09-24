@@ -171,7 +171,7 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 
 ## 12. Limitations and Differences
 
-1. **Built from source.** The official `ghcr.io/k-nuth/kth` image is built without `rpc=True` (see `k-nuth/docker-images` PR #7), so the `Dockerfile` compiles kth with the JSON-RPC server enabled.
+1. **Built from source.** The official `ghcr.io/k-nuth/kth` image is built without `rpc=True` (see `k-nuth/docker-images` PR #7), so the `Dockerfile` compiles kth with the JSON-RPC server enabled. `check-upstream.yml` checks the official image daily; once the image for the pinned version ships JSON-RPC, `scripts/use-upstream-image.sh` swaps the `Dockerfile` for `scripts/Dockerfile.upstream` (a thin wrapper around the official image), commits it to `master` and dispatches Tag and Release.
 2. **No `initialblockdownload` / `verificationprogress`** — sync health uses Knuth's coordinator log (RPC `getblockchaininfo.blocks` is often 0 at the tip).
 3. **gRPC not exposed** in this package.
 4. Tor proxy passthrough to `kth` is opt-in; verify after enabling.
