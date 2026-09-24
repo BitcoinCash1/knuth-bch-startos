@@ -1,6 +1,6 @@
 import { sdk } from '../sdk'
-import { storeJson } from '../file-models/store.json'
-import { knuthConf } from '../file-models/knuth.conf'
+import { storeJson } from '../fileModels/store.json'
+import { knuthConf } from '../fileModels/knuth.conf'
 
 // kth falls back to a generated .cookie file when rpc.user / rpc.password are
 // empty, so clearing them does not lock the node out — it just revokes the

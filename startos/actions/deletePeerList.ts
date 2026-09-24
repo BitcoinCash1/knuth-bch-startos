@@ -1,8 +1,8 @@
 import { sdk } from '../sdk'
 import { mainMounts } from '../mounts'
 import { networkHostsFile, Network, rootDir } from '../utils'
-import { storeJson } from '../file-models/store.json'
-import { knuthConf } from '../file-models/knuth.conf'
+import { storeJson } from '../fileModels/store.json'
+import { knuthConf } from '../fileModels/knuth.conf'
 
 export const deletePeerList = sdk.Action.withoutInput(
   'delete-peer-list',

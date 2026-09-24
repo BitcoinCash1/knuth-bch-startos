@@ -1,6 +1,6 @@
 import { sdk } from '../sdk'
-import { knuthConf } from '../file-models/knuth.conf'
-import { storeJson } from '../file-models/store.json'
+import { knuthConf } from '../fileModels/knuth.conf'
+import { storeJson } from '../fileModels/store.json'
 import {
   networkPorts,
   networkDbDir,

@@ -1,5 +1,5 @@
 import { sdk } from '../sdk'
-import { storeJson } from '../file-models/store.json'
+import { storeJson } from '../fileModels/store.json'
 import { mainMounts } from '../mounts'
 import { rootDir, Network } from '../utils'
 
