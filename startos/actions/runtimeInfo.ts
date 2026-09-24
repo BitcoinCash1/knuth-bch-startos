@@ -1,7 +1,7 @@
 import { sdk } from '../sdk'
 import { mainMounts } from '../mounts'
 import { rootDir, Network, networkPorts } from '../utils'
-import { storeJson } from '../fileModels/store.json'
+import { storeJson } from '../file-models/store.json'
 
 export const runtimeInfo = sdk.Action.withoutInput(
   'runtime-info',

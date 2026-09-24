@@ -7,8 +7,8 @@ import {
   internalRpcPort,
   Network,
 } from './utils'
-import { storeJson } from './fileModels/store.json'
-import { knuthConf } from './fileModels/knuth.conf'
+import { storeJson } from './file-models/store.json'
+import { knuthConf } from './file-models/knuth.conf'
 import { mainMounts } from './mounts'
 
 export { mainMounts }

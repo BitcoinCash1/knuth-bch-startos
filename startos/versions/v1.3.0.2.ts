@@ -1,6 +1,6 @@
 import { VersionInfo } from '@start9labs/start-sdk'
-import { knuthConf } from '../fileModels/knuth.conf'
-import { storeJson } from '../fileModels/store.json'
+import { knuthConf } from '../file-models/knuth.conf'
+import { storeJson } from '../file-models/store.json'
 import {
   Network,
   networkDbDir,

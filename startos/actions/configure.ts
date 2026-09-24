@@ -1,6 +1,6 @@
 import { sdk } from '../sdk'
-import { knuthConf, fullConfigSpec } from '../fileModels/knuth.conf'
-import { storeJson } from '../fileModels/store.json'
+import { knuthConf, fullConfigSpec } from '../file-models/knuth.conf'
+import { storeJson } from '../file-models/store.json'
 
 export const configure = sdk.Action.withInput(
   'node-settings',

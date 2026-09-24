@@ -1,6 +1,6 @@
 import { FileHelper, VersionInfo, z } from '@start9labs/start-sdk'
 import { sdk } from '../sdk'
-import { knuthConf } from '../fileModels/knuth.conf'
+import { knuthConf } from '../file-models/knuth.conf'
 
 const iniNumber = z.union([z.string().transform(Number), z.number()])
 

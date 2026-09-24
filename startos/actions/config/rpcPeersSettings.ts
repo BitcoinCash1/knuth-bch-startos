@@ -1,5 +1,5 @@
 import { sdk } from '../../sdk'
-import { knuthConf } from '../../fileModels/knuth.conf'
+import { knuthConf } from '../../file-models/knuth.conf'
 
 const { InputSpec, Value } = sdk
 

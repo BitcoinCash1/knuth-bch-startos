@@ -1,7 +1,7 @@
 import { sdk } from '../sdk'
 import { mainMounts } from '../mounts'
 import { networkDbDir, Network } from '../utils'
-import { storeJson } from '../fileModels/store.json'
+import { storeJson } from '../file-models/store.json'
 
 // BCHN offers "Reindex Blockchain" (re-verify from existing blocks) and
 // "Reindex Chainstate" (rebuild the UTXO set without re-downloading). kth v1.3.0

@@ -1,6 +1,6 @@
 import { sdk } from './sdk'
 import { peerInterfaceId, rpcInterfaceId, networkPorts, Network } from './utils'
-import { storeJson } from './fileModels/store.json'
+import { storeJson } from './file-models/store.json'
 
 export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
   const store = await storeJson.read().once()
