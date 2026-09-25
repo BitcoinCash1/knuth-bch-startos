@@ -1,6 +1,7 @@
 import { knuthConf, fullConfigSpec } from '../../fileModels/knuth.conf'
 import { storeJson } from '../../fileModels/store.json'
 import { sdk } from '../../sdk'
+import { i18n } from '../../i18n'
 
 // Hidden cross-package action (Fulcrum / Explorer / pools). Mirrors BCHN
 // autoconfig: apply only the fields a dependent asks for, leave the rest alone.
@@ -8,9 +9,9 @@ export const autoconfig = sdk.Action.withInput(
   'autoconfig',
 
   async ({ effects: _effects }) => ({
-    name: 'Auto-Configure',
+    name: i18n('Auto-Configure'),
     description:
-      'Automatically configure Knuth for the needs of another service',
+      i18n('Automatically configure Knuth for the needs of another service'),
     warning: null,
     allowedStatuses: 'any' as const,
     group: null,

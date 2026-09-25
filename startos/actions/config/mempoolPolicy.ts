@@ -1,5 +1,6 @@
 import { sdk } from '../../sdk'
 import { knuthConf } from '../../fileModels/knuth.conf'
+import { i18n } from '../../i18n'
 
 const { InputSpec, Value } = sdk
 
@@ -8,9 +9,9 @@ const { InputSpec, Value } = sdk
 // exposes the relay/fee policy and reorg pool knobs it does have.
 const mempoolPolicySpec = InputSpec.of({
   byteFeeSatoshis: Value.number({
-    name: 'Minimum Relay Fee',
+    name: i18n('Minimum Relay Fee'),
     description:
-      'Minimum fee in satoshis per byte required for a transaction to be relayed and mined.',
+      i18n('Minimum fee in satoshis per byte required for a transaction to be relayed and mined.'),
     warning: null,
     required: true,
     default: 1,
@@ -20,9 +21,9 @@ const mempoolPolicySpec = InputSpec.of({
     units: 'sat/byte',
   }),
   sigopFeeSatoshis: Value.number({
-    name: 'Sigop Fee',
+    name: i18n('Sigop Fee'),
     description:
-      'Fee in satoshis charged per signature operation when evaluating transaction cost.',
+      i18n('Fee in satoshis charged per signature operation when evaluating transaction cost.'),
     warning: null,
     required: true,
     default: 100,
@@ -32,9 +33,9 @@ const mempoolPolicySpec = InputSpec.of({
     units: 'satoshis',
   }),
   minimumOutputSatoshis: Value.number({
-    name: 'Dust Threshold',
+    name: i18n('Dust Threshold'),
     description:
-      'Outputs below this value are treated as dust and will not be relayed.',
+      i18n('Outputs below this value are treated as dust and will not be relayed.'),
     warning: null,
     required: true,
     default: 546,
@@ -44,20 +45,20 @@ const mempoolPolicySpec = InputSpec.of({
     units: 'satoshis',
   }),
   relayTransactions: Value.toggle({
-    name: 'Relay Transactions',
+    name: i18n('Relay Transactions'),
     description:
-      'Relay unconfirmed transactions to peers. Disable to run as a blocks-only node.',
+      i18n('Relay unconfirmed transactions to peers. Disable to run as a blocks-only node.'),
     default: true,
   }),
   refreshTransactions: Value.toggle({
-    name: 'Refresh Transactions',
-    description: 'Re-announce unconfirmed transactions that peers have not seen.',
+    name: i18n('Refresh Transactions'),
+    description: i18n('Re-announce unconfirmed transactions that peers have not seen.'),
     default: true,
   }),
   reorgPoolLimit: Value.number({
-    name: 'Reorg Pool Limit',
+    name: i18n('Reorg Pool Limit'),
     description:
-      'Number of blocks worth of transactions kept available for re-insertion after a chain reorganization.',
+      i18n('Number of blocks worth of transactions kept available for re-insertion after a chain reorganization.'),
     warning: null,
     required: true,
     default: 100,
@@ -67,9 +68,9 @@ const mempoolPolicySpec = InputSpec.of({
     units: 'blocks',
   }),
   reorganizationLimit: Value.number({
-    name: 'Maximum Reorganization Depth',
+    name: i18n('Maximum Reorganization Depth'),
     description:
-      'Deepest chain reorganization the node will accept. 0 disables the limit.',
+      i18n('Deepest chain reorganization the node will accept. 0 disables the limit.'),
     warning: null,
     required: true,
     default: 256,
@@ -84,12 +85,12 @@ export const mempoolPolicy = sdk.Action.withInput(
   'mempool-policy',
 
   async ({ effects: _effects }) => ({
-    name: 'Mempool & Block Policy',
+    name: i18n('Mempool & Block Policy'),
     description:
-      'Configure relay fees, dust threshold, transaction relay, and reorganization limits.',
+      i18n('Configure relay fees, dust threshold, transaction relay, and reorganization limits.'),
     warning: null,
     allowedStatuses: 'any',
-    group: 'Configuration',
+    group: i18n('Configuration'),
     visibility: 'enabled',
   }),
 

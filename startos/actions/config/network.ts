@@ -7,24 +7,25 @@ import {
   networkHostsFile,
 } from '../../utils'
 import { knuthConf } from '../../fileModels/knuth.conf'
+import { i18n } from '../../i18n'
 
 const { InputSpec, Value } = sdk
 
 // Select order must match BCHN exactly (mainnet → … → chipnet → regtest).
 const networkSpec = InputSpec.of({
   network: Value.select({
-    name: 'Network',
+    name: i18n('Network'),
     description:
-      'Bitcoin Cash network to connect to. Changing this requires a node restart and a separate data directory per network.',
+      i18n('Bitcoin Cash network to connect to. Changing this requires a node restart and a separate data directory per network.'),
     warning:
-      'Switching networks requires a full restart. The node will sync from scratch on the new network. Your mainnet data is preserved separately on disk.',
+      i18n('Switching networks requires a full restart. The node will sync from scratch on the new network. Your mainnet data is preserved separately on disk.'),
     values: {
-      mainnet: 'Mainnet',
-      testnet3: 'Testnet3 (legacy test network)',
-      testnet4: 'Testnet4 (light-weight test network)',
-      scalenet: 'Scalenet (high-throughput test network)',
-      chipnet: 'Chipnet (upgrade / CHIP staging)',
-      regtest: 'Regtest (local testing only)',
+      mainnet: i18n('Mainnet'),
+      testnet3: i18n('Testnet3 (legacy test network)'),
+      testnet4: i18n('Testnet4 (light-weight test network)'),
+      scalenet: i18n('Scalenet (high-throughput test network)'),
+      chipnet: i18n('Chipnet (upgrade / CHIP staging)'),
+      regtest: i18n('Regtest (local testing only)'),
     },
     default: 'mainnet',
   }),
@@ -33,13 +34,13 @@ const networkSpec = InputSpec.of({
 export const networkConfig = sdk.Action.withInput(
   'network-config',
   async ({ effects: _effects }) => ({
-    name: 'Network',
+    name: i18n('Network'),
     description:
-      'Select the Bitcoin Cash network. RPC and P2P ports adjust automatically for the selected network.',
+      i18n('Select the Bitcoin Cash network. RPC and P2P ports adjust automatically for the selected network.'),
     warning:
-      'Changing the network requires a node restart. RPC and P2P ports will change to match the selected network.',
+      i18n('Changing the network requires a node restart. RPC and P2P ports will change to match the selected network.'),
     allowedStatuses: 'any' as const,
-    group: 'Configuration',
+    group: i18n('Configuration'),
     visibility: 'enabled' as const,
   }),
   networkSpec,
@@ -54,8 +55,8 @@ export const networkConfig = sdk.Action.withInput(
     if (current === next) {
       return {
         version: '1' as const,
-        title: 'Network Unchanged',
-        message: `Knuth is already configured for ${next}.`,
+        title: i18n('Network Unchanged'),
+        message: i18n('Knuth is already configured for ${next}.', { next }),
         result: null,
       }
     }
@@ -76,8 +77,8 @@ export const networkConfig = sdk.Action.withInput(
     await effects.restart()
     return {
       version: '1' as const,
-      title: 'Network Updated',
-      message: `Switched Knuth from ${current} to ${next}. Restarting automatically.`,
+      title: i18n('Network Updated'),
+      message: i18n('Switched Knuth from ${current} to ${next}. Restarting automatically.', { current, next }),
       result: null,
     }
   },

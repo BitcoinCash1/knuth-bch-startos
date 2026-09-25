@@ -1,16 +1,17 @@
 import { sdk } from '../sdk'
 import { knuthConf, fullConfigSpec } from '../fileModels/knuth.conf'
 import { storeJson } from '../fileModels/store.json'
+import { i18n } from '../i18n'
 
 export const configure = sdk.Action.withInput(
   'node-settings',
 
   async ({ effects }) => ({
-    name: 'Node Settings',
-    description: 'Core node behavior, database mode, IPC capabilities, and UTXOZ support.',
+    name: i18n('Node Settings'),
+    description: i18n('Core node behavior, database mode, IPC capabilities, and UTXOZ support.'),
     warning: null,
     allowedStatuses: 'any',
-    group: 'Configuration',
+    group: i18n('Configuration'),
     visibility: 'enabled',
   }),
 

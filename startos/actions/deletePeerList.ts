@@ -3,17 +3,18 @@ import { mainMounts } from '../mounts'
 import { networkHostsFile, Network, rootDir } from '../utils'
 import { storeJson } from '../fileModels/store.json'
 import { knuthConf } from '../fileModels/knuth.conf'
+import { i18n } from '../i18n'
 
 export const deletePeerList = sdk.Action.withoutInput(
   'delete-peer-list',
   async ({ effects: _effects }) => ({
-    name: 'Delete Peer List',
+    name: i18n('Delete Peer List'),
     description:
-      'Delete the peer hosts file to reset the address database. The node will rebuild it from DNS seeds on next startup.',
+      i18n('Delete the peer hosts file to reset the address database. The node will rebuild it from DNS seeds on next startup.'),
     warning:
-      'All known peer addresses will be lost. The node will need to rediscover peers on next startup, which may take a few minutes.',
+      i18n('All known peer addresses will be lost. The node will need to rediscover peers on next startup, which may take a few minutes.'),
     allowedStatuses: 'only-stopped' as const,
-    group: 'Maintenance',
+    group: i18n('Maintenance'),
     visibility: 'enabled' as const,
   }),
   async ({ effects }) => {
@@ -47,8 +48,8 @@ export const deletePeerList = sdk.Action.withoutInput(
     )
     return {
       version: '1' as const,
-      title: 'Peer List Deleted',
-      message: `Peer hosts file removed (${hostsFile}). The node will rebuild it from DNS seeds on next startup.`,
+      title: i18n('Peer List Deleted'),
+      message: i18n('Peer hosts file removed (${hostsFile}). The node will rebuild it from DNS seeds on next startup.', { hostsFile }),
       result: null,
     }
   },

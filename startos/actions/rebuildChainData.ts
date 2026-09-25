@@ -2,6 +2,7 @@ import { sdk } from '../sdk'
 import { mainMounts } from '../mounts'
 import { networkDbDir, Network } from '../utils'
 import { storeJson } from '../fileModels/store.json'
+import { i18n } from '../i18n'
 
 // BCHN offers "Reindex Blockchain" (re-verify from existing blocks) and
 // "Reindex Chainstate" (rebuild the UTXO set without re-downloading). kth v1.3.0
@@ -12,13 +13,13 @@ export const rebuildChainData = sdk.Action.withoutInput(
   'rebuild-chain-data',
 
   async ({ effects: _effects }) => ({
-    name: 'Rebuild Blockchain Database',
+    name: i18n('Rebuild Blockchain Database'),
     description:
-      'Delete the blockchain, UTXO-Z and block-store databases for the active network so the node rebuilds them from scratch. Use this if the database is corrupted. Knuth has no in-place reindex, so this re-downloads the chain.',
+      i18n('Delete the blockchain, UTXO-Z and block-store databases for the active network so the node rebuilds them from scratch. Use this if the database is corrupted. Knuth has no in-place reindex, so this re-downloads the chain.'),
     warning:
-      'This deletes all chain data for the ACTIVE network and triggers a full re-sync, which can take hours. Peer list and RPC credentials are preserved.',
+      i18n('This deletes all chain data for the ACTIVE network and triggers a full re-sync, which can take hours. Peer list and RPC credentials are preserved.'),
     allowedStatuses: 'only-stopped' as const,
-    group: 'Maintenance',
+    group: i18n('Maintenance'),
     visibility: 'enabled' as const,
   }),
 
@@ -41,8 +42,8 @@ export const rebuildChainData = sdk.Action.withoutInput(
 
     return {
       version: '1' as const,
-      title: 'Blockchain Database Deleted',
-      message: `Chain data for ${network} removed from ${dir}. Start the node to rebuild it — this performs a full re-sync.`,
+      title: i18n('Blockchain Database Deleted'),
+      message: i18n('Chain data for ${network} removed from ${dir}. Start the node to rebuild it — this performs a full re-sync.', { network, dir }),
       result: null,
     }
   },

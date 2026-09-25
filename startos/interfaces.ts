@@ -1,6 +1,7 @@
 import { sdk } from './sdk'
 import { peerInterfaceId, rpcInterfaceId, networkPorts, Network } from './utils'
 import { storeJson } from './fileModels/store.json'
+import { i18n } from './i18n'
 
 export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
   const store = await storeJson.read().once()
@@ -19,9 +20,9 @@ export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
     secure: { ssl: false },
   })
   const peer = sdk.createInterface(effects, {
-    name: 'Peer Interface',
+    name: i18n('Peer Interface'),
     id: peerInterfaceId,
-    description: 'Peer-to-peer connections on the Bitcoin Cash network',
+    description: i18n('Peer-to-peer connections on the Bitcoin Cash network'),
     type: 'p2p',
     masked: false,
     schemeOverride: { ssl: null, noSsl: null },
@@ -41,10 +42,10 @@ export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
       secure: { ssl: false },
     })
     const rpc = sdk.createInterface(effects, {
-      name: 'JSON-RPC Interface',
+      name: i18n('JSON-RPC Interface'),
       id: rpcInterfaceId,
       description:
-        'Bitcoin-Cash-compatible JSON-RPC for mining pools and other services',
+        i18n('Bitcoin-Cash-compatible JSON-RPC for mining pools and other services'),
       type: 'api',
       masked: true,
       schemeOverride: { ssl: null, noSsl: null },

@@ -1,5 +1,6 @@
 import { sdk } from '../../sdk'
 import { knuthConf } from '../../fileModels/knuth.conf'
+import { i18n } from '../../i18n'
 
 const { InputSpec, Value } = sdk
 
@@ -8,8 +9,8 @@ const { InputSpec, Value } = sdk
 // group, so this covers server tuning, peer connection limits and bandwidth.
 const rpcPeersSpec = InputSpec.of({
   outboundConnections: Value.number({
-    name: 'Outbound Connections',
-    description: 'Target number of outbound peer connections.',
+    name: i18n('Outbound Connections'),
+    description: i18n('Target number of outbound peer connections.'),
     warning: null,
     required: true,
     default: 8,
@@ -19,8 +20,8 @@ const rpcPeersSpec = InputSpec.of({
     units: null,
   }),
   inboundConnections: Value.number({
-    name: 'Inbound Connections',
-    description: 'Maximum number of inbound peer connections accepted.',
+    name: i18n('Inbound Connections'),
+    description: i18n('Maximum number of inbound peer connections accepted.'),
     warning: null,
     required: true,
     default: 32,
@@ -30,8 +31,8 @@ const rpcPeersSpec = InputSpec.of({
     units: null,
   }),
   netThreads: Value.number({
-    name: 'Network Threads',
-    description: 'Threads dedicated to networking. 0 lets Knuth choose.',
+    name: i18n('Network Threads'),
+    description: i18n('Threads dedicated to networking. 0 lets Knuth choose.'),
     warning: null,
     required: true,
     default: 0,
@@ -41,8 +42,8 @@ const rpcPeersSpec = InputSpec.of({
     units: null,
   }),
   hostPoolCapacity: Value.number({
-    name: 'Host Pool Capacity',
-    description: 'Number of peer addresses kept in the host pool (peers.dat).',
+    name: i18n('Host Pool Capacity'),
+    description: i18n('Number of peer addresses kept in the host pool (peers.dat).'),
     warning: null,
     required: true,
     default: 10000,
@@ -52,8 +53,8 @@ const rpcPeersSpec = InputSpec.of({
     units: 'addresses',
   }),
   connectBatchSize: Value.number({
-    name: 'Connect Batch Size',
-    description: 'Number of connection attempts made in parallel.',
+    name: i18n('Connect Batch Size'),
+    description: i18n('Number of connection attempts made in parallel.'),
     warning: null,
     required: true,
     default: 5,
@@ -63,8 +64,8 @@ const rpcPeersSpec = InputSpec.of({
     units: null,
   }),
   connectTimeoutSeconds: Value.number({
-    name: 'Connect Timeout',
-    description: 'Seconds to wait for a peer connection to be established.',
+    name: i18n('Connect Timeout'),
+    description: i18n('Seconds to wait for a peer connection to be established.'),
     warning: null,
     required: true,
     default: 5,
@@ -74,8 +75,8 @@ const rpcPeersSpec = InputSpec.of({
     units: 'seconds',
   }),
   channelInactivityMinutes: Value.number({
-    name: 'Peer Inactivity Timeout',
-    description: 'Drop a peer after this many minutes with no traffic.',
+    name: i18n('Peer Inactivity Timeout'),
+    description: i18n('Drop a peer after this many minutes with no traffic.'),
     warning: null,
     required: true,
     default: 10,
@@ -85,14 +86,14 @@ const rpcPeersSpec = InputSpec.of({
     units: 'minutes',
   }),
   useIpv6: Value.toggle({
-    name: 'Enable IPv6',
-    description: 'Allow connections to peers over IPv6.',
+    name: i18n('Enable IPv6'),
+    description: i18n('Allow connections to peers over IPv6.'),
     default: false,
   }),
   gbtCacheSize: Value.number({
-    name: 'GBT Job Cache Size',
+    name: i18n('GBT Job Cache Size'),
     description:
-      'Number of getblocktemplatelight jobs kept cached for mining pools.',
+      i18n('Number of getblocktemplatelight jobs kept cached for mining pools.'),
     warning: null,
     required: true,
     default: 10,
@@ -102,9 +103,9 @@ const rpcPeersSpec = InputSpec.of({
     units: 'jobs',
   }),
   gbtStoreTime: Value.number({
-    name: 'GBT Job Retention',
+    name: i18n('GBT Job Retention'),
     description:
-      'Seconds a getblocktemplatelight job stays valid before it expires.',
+      i18n('Seconds a getblocktemplatelight job stays valid before it expires.'),
     warning: null,
     required: true,
     default: 3600,
@@ -119,12 +120,12 @@ export const rpcPeersSettings = sdk.Action.withInput(
   'rpc-peers-settings',
 
   async ({ effects: _effects }) => ({
-    name: 'RPC & Peers Settings',
+    name: i18n('RPC & Peers Settings'),
     description:
-      'Configure RPC server tuning, peer connections, network restrictions, and bandwidth limits.',
+      i18n('Configure RPC server tuning, peer connections, network restrictions, and bandwidth limits.'),
     warning: null,
     allowedStatuses: 'any',
-    group: 'Configuration',
+    group: i18n('Configuration'),
     visibility: 'enabled',
   }),
 

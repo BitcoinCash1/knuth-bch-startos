@@ -2,12 +2,13 @@ import { sdk } from '../sdk'
 import { mainMounts } from '../mounts'
 import { rootDir, Network, networkPorts } from '../utils'
 import { storeJson } from '../fileModels/store.json'
+import { i18n } from '../i18n'
 
 export const runtimeInfo = sdk.Action.withoutInput(
   'runtime-info',
   async ({ effects: _effects }) => ({
-    name: 'Node Info',
-    description: 'Display current Knuth node runtime information: network, sync status, database mode.',
+    name: i18n('Node Info'),
+    description: i18n('Display current Knuth node runtime information: network, sync status, database mode.'),
     warning: null,
     allowedStatuses: 'only-running' as const,
     group: null,
@@ -26,23 +27,23 @@ export const runtimeInfo = sdk.Action.withoutInput(
       async (sub) => {
         const lines: string[] = []
 
-        lines.push(`Network: ${network}`)
-        lines.push(`P2P Port: ${peerPort}`)
+        lines.push(i18n('Network: ${network}', { network }))
+        lines.push(i18n('P2P Port: ${port}', { port: String(peerPort) }))
 
         // Check blockchain directory exists
         const chainRes = await sub.exec(['test', '-d', `${rootDir}/blockchain`])
-        lines.push(`Blockchain data: ${chainRes.exitCode === 0 ? 'present' : 'not initialized'}`)
+        lines.push(i18n('Blockchain data: ${status}', { status: chainRes.exitCode === 0 ? i18n('present') : i18n('not initialized') }))
 
         // Count block files as a sync proxy
         const lsRes = await sub.exec(['sh', '-c', `ls ${rootDir}/blockchain/blocks/ 2>/dev/null | wc -l`]).catch(() => null)
         if (lsRes?.exitCode === 0) {
           const count = lsRes.stdout.toString().trim()
-          lines.push(`Block segments: ${count}`)
+          lines.push(i18n('Block segments: ${count}', { count }))
         }
 
         return {
           version: '1' as const,
-          title: 'Knuth Node Info',
+          title: i18n('Knuth Node Info'),
           message: null,
           result: {
             type: 'single' as const,

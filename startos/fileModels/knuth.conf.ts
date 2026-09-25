@@ -1,5 +1,6 @@
 import { FileHelper, z } from '@start9labs/start-sdk'
 import { sdk } from '../sdk'
+import { i18n } from '../i18n'
 
 const iniNumber = z.union([z.string().transform(Number), z.number()])
 
@@ -140,13 +141,13 @@ export const knuthConf = FileHelper.ini(
 // Config spec for user-facing settings
 export const fullConfigSpec = sdk.InputSpec.of({
   verboseLogging: sdk.Value.toggle({
-    name: 'Verbose Logging',
-    description: 'Enable verbose debug logging.',
+    name: i18n('Verbose Logging'),
+    description: i18n('Enable verbose debug logging.'),
     default: false,
   }),
   outboundConnections: sdk.Value.number({
-    name: 'Outbound Connections',
-    description: 'Target number of outbound peer connections.',
+    name: i18n('Outbound Connections'),
+    description: i18n('Target number of outbound peer connections.'),
     required: true,
     default: 8,
     min: 0,
@@ -155,8 +156,8 @@ export const fullConfigSpec = sdk.InputSpec.of({
     units: null,
   }),
   inboundConnections: sdk.Value.number({
-    name: 'Inbound Connections',
-    description: 'Target number of inbound peer connections.',
+    name: i18n('Inbound Connections'),
+    description: i18n('Target number of inbound peer connections.'),
     required: true,
     default: 32,
     min: 0,
@@ -165,8 +166,8 @@ export const fullConfigSpec = sdk.InputSpec.of({
     units: null,
   }),
   blockLatencySeconds: sdk.Value.number({
-    name: 'Block Latency Seconds',
-    description: 'Block processing latency threshold used by the node.',
+    name: i18n('Block Latency Seconds'),
+    description: i18n('Block processing latency threshold used by the node.'),
     required: true,
     default: 60,
     min: 1,
@@ -175,23 +176,22 @@ export const fullConfigSpec = sdk.InputSpec.of({
     units: 'seconds',
   }),
   databaseMode: sdk.Value.select({
-    name: 'Database Mode',
+    name: i18n('Database Mode'),
     description:
-      'Controls the indexing level of the Knuth blockchain database. ' +
-      'Full Indexed is required for Fulcrum and BCH Explorer to work.',
+      i18n('Controls the indexing level of the Knuth blockchain database. Full Indexed is required for Fulcrum and BCH Explorer to work.'),
     warning:
-      'Switching from Full Indexed to Pruned will prevent Fulcrum and BCH Explorer from connecting.',
+      i18n('Switching from Full Indexed to Pruned will prevent Fulcrum and BCH Explorer from connecting.'),
     default: 'full',
     values: {
-      full: 'Full Indexed (required for Fulcrum and BCH Explorer)',
-      blocks:       'Blocks (standard node, no full tx index)',
-      pruned:       'Pruned (saves disk space, incompatible with Fulcrum and BCH Explorer)',
+      full: i18n('Full Indexed (required for Fulcrum and BCH Explorer)'),
+      blocks:       i18n('Blocks (standard node, no full tx index)'),
+      pruned:       i18n('Pruned (saves disk space, incompatible with Fulcrum and BCH Explorer)'),
     },
   }),
   dbMaxSize: sdk.Value.number({
-    name: 'Max Database Size',
+    name: i18n('Max Database Size'),
     description:
-      'Maximum blockchain database size in GB. Only applies when Database Mode is set to Pruned.',
+      i18n('Maximum blockchain database size in GB. Only applies when Database Mode is set to Pruned.'),
     warning: null,
     required: false,
     default: null,
@@ -202,33 +202,27 @@ export const fullConfigSpec = sdk.InputSpec.of({
     placeholder: '600',
   }),
   rpcEnabled: sdk.Value.toggle({
-    name: 'JSON-RPC Server',
+    name: i18n('JSON-RPC Server'),
     description:
-      'Expose the Bitcoin-Cash-compatible JSON-RPC interface (added in Knuth v1.3.0). ' +
-      'Required by mining pools for getblocktemplatelight/submitblocklight. ' +
-      'Credentials are generated automatically — see the RPC Credentials action.',
+      i18n('Expose the Bitcoin-Cash-compatible JSON-RPC interface (added in Knuth v1.3.0). Required by mining pools for getblocktemplatelight/submitblocklight. Credentials are generated automatically — see the RPC Credentials action.'),
     default: false,
   }),
   ipcEnabled: sdk.Value.toggle({
-    name: 'IPC (C-API) Capability',
+    name: i18n('IPC (C-API) Capability'),
     description:
-      'Expose Knuth IPC/C-API capability for compatibility checks in dependent services.',
+      i18n('Expose Knuth IPC/C-API capability for compatibility checks in dependent services.'),
     default: true,
   }),
   utxozEnabled: sdk.Value.toggle({
-    name: 'UTXOZ Capability',
+    name: i18n('UTXOZ Capability'),
     description:
-      'Expose UTXOZ support capability for compatibility checks in dependent services.',
+      i18n('Expose UTXOZ support capability for compatibility checks in dependent services.'),
     default: true,
   }),
   torEnabled: sdk.Value.toggle({
-    name: 'Tor Routing',
+    name: i18n('Tor Routing'),
     description:
-      'Prefer Tor for outbound peer connections when the Tor package is installed ' +
-      'and running (same optional dependency pattern as BCHN/BCHD/Flowee). ' +
-      'Knuth does not yet expose SOCKS/onion CLI flags equivalent to BCHN; this ' +
-      'toggle marks the Tor dependency and surfaces Tor health. Inbound .onion ' +
-      'is published via StartOS Interfaces → Peer → Add Onion Service.',
+      i18n('Prefer Tor for outbound peer connections when the Tor package is installed and running (same optional dependency pattern as BCHN/BCHD/Flowee). Knuth does not yet expose SOCKS/onion CLI flags equivalent to BCHN; this toggle marks the Tor dependency and surfaces Tor health. Inbound .onion is published via StartOS Interfaces → Peer → Add Onion Service.'),
     default: false,
   }),
 })

@@ -2,25 +2,26 @@ import { sdk } from '../sdk'
 import { storeJson } from '../fileModels/store.json'
 import { mainMounts } from '../mounts'
 import { rootDir, Network } from '../utils'
+import { i18n } from '../i18n'
 
 const { InputSpec, Value } = sdk
 
 const inputSpec = InputSpec.of({
   networks: Value.multiselect({
-    name: 'Networks To Delete',
+    name: i18n('Networks To Delete'),
     description:
-      'Delete all Knuth blockchain data for the selected test networks. Mainnet is intentionally excluded and cannot be selected.',
+      i18n('Delete all Knuth blockchain data for the selected test networks. Mainnet is intentionally excluded and cannot be selected.'),
     warning:
-      'This permanently deletes all blockchain data for the selected networks. You cannot undo this. Mainnet data is never affected.',
+      i18n('This permanently deletes all blockchain data for the selected networks. You cannot undo this. Mainnet data is never affected.'),
     default: [],
     minLength: 0,
     maxLength: null,
     values: {
-      testnet3: 'Testnet3',
-      testnet4: 'Testnet4',
-      scalenet: 'Scalenet',
-      chipnet:  'Chipnet',
-      regtest:  'Regtest',
+      testnet3: i18n('Testnet3'),
+      testnet4: i18n('Testnet4'),
+      scalenet: i18n('Scalenet'),
+      chipnet:  i18n('Chipnet'),
+      regtest:  i18n('Regtest'),
     },
   }),
 })
@@ -36,16 +37,16 @@ const testNetSubdirs: Record<string, string> = {
 export const deleteTestNetworkData = sdk.Action.withInput(
   'delete-test-network-data',
   async ({ effects: _effects }) => ({
-    name: 'Delete Test Network Data',
+    name: i18n('Delete Test Network Data'),
     description:
-      'Delete blockchain data for one or more test networks (Testnet3, Testnet4, Scalenet, Chipnet, Regtest). This frees disk space without touching mainnet.',
+      i18n('Delete blockchain data for one or more test networks (Testnet3, Testnet4, Scalenet, Chipnet, Regtest). This frees disk space without touching mainnet.'),
     warning:
-      'All block data and chainstate for the selected networks will be permanently deleted. Mainnet is never affected.',
+      i18n('All block data and chainstate for the selected networks will be permanently deleted. Mainnet is never affected.'),
     // Must be stopped: deleting the active network while kth is still
     // running just gets rewritten. Stop used to hang (5 min SIGTERM);
     // it now SIGKILLs after 45s so this action can actually run.
     allowedStatuses: 'only-stopped' as const,
-    group: 'Maintenance',
+    group: i18n('Maintenance'),
     visibility: 'enabled' as const,
   }),
   inputSpec,
@@ -59,8 +60,8 @@ export const deleteTestNetworkData = sdk.Action.withInput(
     if (networks.length === 0) {
       return {
         version: '1' as const,
-        title: 'Nothing to Delete',
-        message: 'No networks were selected.',
+        title: i18n('Nothing to Delete'),
+        message: i18n('No networks were selected.'),
         result: null,
       }
     }
@@ -88,15 +89,15 @@ export const deleteTestNetworkData = sdk.Action.withInput(
     if (removed.length === 0) {
       return {
         version: '1' as const,
-        title: 'Nothing Removed',
-        message: 'The selected network data directories did not exist.',
+        title: i18n('Nothing Removed'),
+        message: i18n('The selected network data directories did not exist.'),
         result: null,
       }
     }
     return {
       version: '1' as const,
-      title: 'Test Network Data Deleted',
-      message: `Removed: ${removed.join(', ')}. Mainnet data was not touched.`,
+      title: i18n('Test Network Data Deleted'),
+      message: i18n('Removed: ${removed}. Mainnet data was not touched.', { removed: removed.join(', ') }),
       result: null,
     }
   },
