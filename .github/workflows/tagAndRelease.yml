@@ -54,6 +54,10 @@ jobs:
         run: start-cli s9pk init-workspace 2>/dev/null || true
         shell: bash
 
+      - name: Install dependencies
+        run: npm ci
+        shell: bash
+
       - name: Build service package
         run: |
           RUST_LOG=debug RUST_BACKTRACE=1 make
