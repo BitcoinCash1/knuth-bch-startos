@@ -17,7 +17,7 @@ export const rebuildChainData = sdk.Action.withoutInput(
     description:
       i18n('Delete the blockchain, UTXO-Z and block-store databases for the active network so the node rebuilds them from scratch. Use this if the database is corrupted. Knuth has no in-place reindex, so this re-downloads the chain.'),
     warning:
-      i18n('This deletes all chain data for the ACTIVE network and triggers a full re-sync, which can take hours. Peer list and RPC credentials are preserved.'),
+      i18n('This deletes all chain data for the ACTIVE network and triggers a full re-sync, which can take hours. On test networks the peer list is cleared too. RPC credentials are preserved.'),
     allowedStatuses: 'only-stopped' as const,
     group: i18n('Maintenance'),
     visibility: 'enabled' as const,
@@ -34,9 +34,12 @@ export const rebuildChainData = sdk.Action.withoutInput(
       mainMounts,
       'rebuild-chain-data',
       async (sub) => {
-        // Remove the chain databases but keep the directory and peers.dat,
-        // which lives outside these subpaths.
-        await sub.exec(['sh', '-c', `rm -rf ${dir}/utxoz ${dir}/blocks ${dir}/*.ldb ${dir}/header_index ${dir}/mempool.dat || true`])
+        // Remove the whole network directory. kth's --init_run only creates a
+        // fresh database when the directory is absent, and its header index
+        // lives in internal_db/ inside it, so a partial delete either keeps the
+        // old header chain or leaves a directory kth cannot open. Mainnet's
+        // hosts file lives outside it; a test network's lives inside.
+        await sub.exec(['sh', '-c', `rm -rf ${dir} || true`])
       },
     )
 

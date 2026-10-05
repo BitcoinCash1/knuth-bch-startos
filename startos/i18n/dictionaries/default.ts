@@ -173,7 +173,7 @@ const dict = {
   // actions/rebuildChainData.ts
   'Rebuild Blockchain Database': 157,
   'Delete the blockchain, UTXO-Z and block-store databases for the active network so the node rebuilds them from scratch. Use this if the database is corrupted. Knuth has no in-place reindex, so this re-downloads the chain.': 158,
-  'This deletes all chain data for the ACTIVE network and triggers a full re-sync, which can take hours. Peer list and RPC credentials are preserved.': 159,
+  'This deletes all chain data for the ACTIVE network and triggers a full re-sync, which can take hours. On test networks the peer list is cleared too. RPC credentials are preserved.': 159,
   'Blockchain Database Deleted': 160,
   'Chain data for ${network} removed from ${dir}. Start the node to rebuild it — this performs a full re-sync.': 161,
   // actions/runtimeInfo.ts

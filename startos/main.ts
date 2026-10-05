@@ -4,6 +4,7 @@ import {
   networkPorts,
   networkName,
   networkDbDir,
+  networkHostsFile,
   internalRpcPort,
   Network,
 } from './utils'
@@ -51,6 +52,17 @@ export const main = sdk.setupMain(async ({ effects }) => {
     '--network',
     netName,
   ]
+
+  // kth tells chipnet from testnet4 (same network magic) only by
+  // net.inbound_port == 48333, and kth.cfg is read after --network, so a port
+  // left over from another network silently runs testnet4 parameters on
+  // chipnet. Reassert the active network's port, chain directory and hosts
+  // file on every start.
+  await knuthConf.merge(effects, {
+    'net.inbound_port': networkPorts[network].peer,
+    'net.hosts_file': networkHostsFile(network),
+    'db.directory': dataDir,
+  })
 
   // Public RPC is the compatibility sidecar. kth itself only binds localhost
   // so dependents never hit the stub getblock / missing getnetworkinfo.

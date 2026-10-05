@@ -94,7 +94,7 @@
 
 | Group | Settings |
 |---|---|
-| **Network** | mainnet / testnet3 / testnet4 / scalenet / chipnet / regtest — rewrites peer port, RPC port, `db.directory`, `net.hosts_file` |
+| **Network** | mainnet / testnet3 / testnet4 / scalenet / chipnet / regtest — rewrites peer port, RPC port, `db.directory`, `net.hosts_file` (the peer port, `db.directory` and `net.hosts_file` are also reasserted on every start, because kth tells chipnet from testnet4 only by peer port 48333) |
 | **Node Settings** | db mode (`full` / `blocks` / `pruned`), max size (pruned), connections, latency, verbose log, **JSON-RPC toggle**, IPC, UTXOZ, Tor |
 
 ---
