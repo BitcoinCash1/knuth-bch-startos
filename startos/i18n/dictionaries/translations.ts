@@ -181,6 +181,8 @@ export default {
     176: 'Credenciales para conectar pools de minería y otros servicios',
     177: 'Puerto',
     178: 'Puerto JSON-RPC de esta red',
+    179: 'Por detrás de la red: el bloque más reciente, ${blocks}, tiene ${age} de antigüedad (${netLabel})',
+    180: 'Sin pares conectados: puede que el bloque ${blocks} no sea la punta de la cadena (${netLabel})',
   },
   de_DE: {
     0: 'Knuth wird gestartet!',
@@ -362,6 +364,8 @@ export default {
     176: 'Zugangsdaten zum Verbinden von Mining-Pools und anderen Diensten',
     177: 'Port',
     178: 'JSON-RPC-Port für dieses Netzwerk',
+    179: 'Hinter dem Netzwerk – der neueste Block ${blocks} ist ${age} alt (${netLabel})',
+    180: 'Keine Peers verbunden – Block ${blocks} ist möglicherweise nicht die Kettenspitze (${netLabel})',
   },
   pl_PL: {
     0: 'Uruchamianie Knuth!',
@@ -543,6 +547,8 @@ export default {
     176: 'Dane uwierzytelniające do łączenia pul wydobywczych i innych usług',
     177: 'Port',
     178: 'Port JSON-RPC dla tej sieci',
+    179: 'Węzeł jest w tyle za siecią — najnowszy blok ${blocks} ma ${age} (${netLabel})',
+    180: 'Brak połączonych węzłów — blok ${blocks} może nie być czubkiem łańcucha (${netLabel})',
   },
   fr_FR: {
     0: 'Démarrage de Knuth !',
@@ -724,5 +730,7 @@ export default {
     176: 'Identifiants pour connecter les pools de minage et les autres services',
     177: 'Port',
     178: 'Port JSON-RPC pour ce réseau',
+    179: 'En retard sur le réseau — le bloc le plus récent, ${blocks}, date de ${age} (${netLabel})',
+    180: 'Aucun pair connecté — le bloc ${blocks} n’est peut-être pas le sommet de la chaîne (${netLabel})',
   },
 } satisfies Record<string, LangDict>

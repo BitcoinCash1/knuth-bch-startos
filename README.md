@@ -138,7 +138,7 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 | Check | When | Method |
 |---|---|---|
 | **RPC** (daemon ready) | Always | `getblockchaininfo` when JSON-RPC is on; otherwise the `kth` process |
-| **Blockchain Sync** | Always | Sidecar `getblockchaininfo` (lifts stale kth `blocks` to the blk*.dat tip). A &lt;0.1% header gap at the tip is **Synced**, not `Syncing 100%`. |
+| **Blockchain Sync** | Always | Sidecar `getblockchaininfo` (lifts stale kth `blocks` to the blk*.dat tip). A &lt;0.1% header gap at the tip is **Synced**, not `Syncing 100%`. With no peers, or a newest block more than 3 hours old (24 hours on scalenet, never on regtest), it stays loading instead of **Synced**, because a node cut off from the chain still finds its tip at the top of its own headers. |
 | **Peer Connections** | Always | Knuth `Peers: n/m` status log (no `getpeerinfo` in v1.3.0) |
 | **Tor** | Always | Optional — listed as a dependency; health is disabled until Tor routing is turned on |
 | **I2P** | Always | Disabled (same as BCHN/Flowee until implemented) |

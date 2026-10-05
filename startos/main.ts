@@ -83,7 +83,11 @@ export const main = sdk.setupMain(async ({ effects }) => {
 
   // Helper: JSON-RPC via curl (no knuth-cli). Retry transient attach failures
   // the way BCHN retries bitcoin-cli under mount-namespace pressure.
-  async function rpcCall(method: string, port: number = internalRpcPort) {
+  async function rpcCall(
+    method: string,
+    port: number = internalRpcPort,
+    params: unknown[] = [],
+  ) {
     const args = [
       'curl',
       '-s',
@@ -94,7 +98,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
       '-H',
       'content-type: application/json',
       '-d',
-      JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: [] }),
+      JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
       // Primary ready must probe kth on the internal port (sidecar needs
       // primary up). Sync health prefers the sidecar, which lifts stale
       // kth `blocks` to the blk*.dat tip.
@@ -160,6 +164,57 @@ export const main = sdk.setupMain(async ({ effects }) => {
     const blocks = blockMs.length ? Number(blockMs.at(-1)![1]) : 0
     if (headers === 0 && blocks === 0) return null
     return { headers, blocks }
+  }
+
+  // A node cut off from the chain (no peers, every peer banned, or parked on a
+  // stale branch it cannot leave) still finds its tip at the top of its own
+  // headers, so the height comparison alone reads "Synced". Before reporting
+  // Synced, require a peer and a tip that is not hours old. Regtest only moves
+  // when blocks are generated and scalenet idles for long stretches.
+  const staleTipSeconds =
+    network === 'regtest' ? null : network === 'scalenet' ? 24 * 3600 : 3 * 3600
+
+  function formatAge(seconds: number): string {
+    const hours = Math.floor(seconds / 3600)
+    return hours >= 48 ? `${Math.floor(hours / 24)} d` : `${hours} h`
+  }
+
+  async function tipAgeSeconds(hash: unknown): Promise<number | null> {
+    if (typeof hash !== 'string' || !hash) return null
+    try {
+      const res = await rpcCall('getblockheader', internalRpcPort, [hash, true])
+      const time = Number(JSON.parse(String(res.stdout ?? ''))?.result?.time)
+      if (!Number.isFinite(time) || time <= 0) return null
+      return Math.floor(Date.now() / 1000) - time
+    } catch {
+      return null
+    }
+  }
+
+  async function syncedUnlessCutOff(
+    blocks: number,
+    peers: number | null,
+    tipHash?: unknown,
+  ) {
+    if (network !== 'regtest' && peers === 0) {
+      return {
+        message: i18n('No peers connected — block ${blocks} may not be the tip (${netLabel})', { blocks: String(blocks), netLabel }),
+        result: 'loading' as const,
+      }
+    }
+    if (staleTipSeconds !== null) {
+      const age = await tipAgeSeconds(tipHash)
+      if (age !== null && age > staleTipSeconds) {
+        return {
+          message: i18n('Behind the network — newest block ${blocks} is ${age} old (${netLabel})', { blocks: String(blocks), age: formatAge(age), netLabel }),
+          result: 'loading' as const,
+        }
+      }
+    }
+    return {
+      message: i18n('Synced — block ${blocks} (${netLabel})', { blocks: String(blocks), netLabel }),
+      result: 'success' as const,
+    }
   }
 
   async function nodeIsUp(): Promise<boolean> {
@@ -292,7 +347,9 @@ export const main = sdk.setupMain(async ({ effects }) => {
         ready: {
           display: i18n('Blockchain Sync'),
           fn: async () => {
-            const logHeights = parseLogHeights(await debugLogSnippet())
+            const log = await debugLogSnippet()
+            const logHeights = parseLogHeights(log)
+            const peers = parsePeerCount(log)
 
             if (rpcEnabled) {
               try {
@@ -332,10 +389,11 @@ export const main = sdk.setupMain(async ({ effects }) => {
                         result: 'loading' as const,
                       }
                     }
-                    return {
-                      message: i18n('Synced — block ${blocks} (${netLabel})', { blocks: String(Math.max(blocks, headers)), netLabel }),
-                      result: 'success' as const,
-                    }
+                    return syncedUnlessCutOff(
+                      Math.max(blocks, headers),
+                      peers,
+                      info.bestblockhash,
+                    )
                   }
                 }
               } catch {
@@ -365,10 +423,10 @@ export const main = sdk.setupMain(async ({ effects }) => {
                 result: 'loading' as const,
               }
             }
-            return {
-              message: i18n('Synced — block ${blocks} (${netLabel})', { blocks: String(Math.max(heights.blocks, heights.headers)), netLabel }),
-              result: 'success' as const,
-            }
+            return syncedUnlessCutOff(
+              Math.max(heights.blocks, heights.headers),
+              peers,
+            )
           },
         },
         requires: ['primary'],

@@ -21,7 +21,9 @@ export const current = VersionInfo.of({
     'hosts file on every start: kth tells chipnet from testnet4 only by port ' +
     '48333, so a port left over from another network ran testnet4 rules on ' +
     'chipnet. Rebuild Blockchain Database now removes the whole network ' +
-    'directory, including the header index it used to leave behind.',
+    'directory, including the header index it used to leave behind. ' +
+    'Blockchain Sync no longer reports Synced with no peers or with a newest ' +
+    'block hours old, which is how a node cut off from the chain looked.',
   migrations: {
     up: async () => {},
     down: ALLOW_DOWNGRADE ? async () => {} : IMPOSSIBLE,

@@ -195,6 +195,9 @@ const dict = {
   'Credentials for connecting mining pools and other services': 176,
   Port: 177,
   'JSON-RPC port for this network': 178,
+  // main.ts (sync health when cut off from the chain)
+  'Behind the network — newest block ${blocks} is ${age} old (${netLabel})': 179,
+  'No peers connected — block ${blocks} may not be the tip (${netLabel})': 180,
 } as const
 
 /**
