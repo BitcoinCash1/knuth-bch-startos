@@ -39,7 +39,10 @@ export const rebuildChainData = sdk.Action.withoutInput(
         // lives in internal_db/ inside it, so a partial delete either keeps the
         // old header chain or leaves a directory kth cannot open. Mainnet's
         // hosts file lives outside it; a test network's lives inside.
-        await sub.exec(['sh', '-c', `rm -rf ${dir} || true`])
+        const result = await sub.exec(['rm', '-rf', dir], { timeout: null })
+        if (result.exitCode !== 0) {
+          throw new Error(String(result.stderr || result.stdout || 'rm failed'))
+        }
       },
     )
 
