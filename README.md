@@ -9,7 +9,7 @@
 > upstream documentation is accurate and fully applicable — see the
 > Documentation section of `instructions.md` for links.
 
-[Knuth](https://github.com/k-nuth/kth) is a Bitcoin Cash full node written in C++. Two things about this package are not upstream behavior: it is **built from source** so the JSON-RPC server exists at all, and the JSON-RPC port a dependent service connects to is served by a **compatibility sidecar**, not by kth directly.
+[Knuth](https://github.com/k-nuth/kth) is a Bitcoin Cash full node written in C++. Two things about this package are not upstream behavior: it is **built from source with JSON-RPC enabled**, and the JSON-RPC port a dependent service connects to is served by a **compatibility sidecar**, not by kth directly.
 
 - **Upstream repo:** <https://github.com/k-nuth/kth>
 - **Wrapper repo:** <https://github.com/Start9-Community/knuth-bch-startos>
@@ -40,14 +40,16 @@ One image, built here from upstream source rather than pulled.
 | Property      | Value                                                  |
 | ------------- | ------------------------------------------------------ |
 | Image         | built from `Dockerfile` (kth compiled with `rpc=True`) |
-| Architectures | x86_64 native; aarch64 and riscv64 emulated as x86_64  |
+| Architectures | x86_64 native; other architectures use StartOS emulation |
 | Command       | `kth -c /data/kth.cfg --init_run --network <name>`     |
 
 | Subcontainer | Purpose                                                                                                             |
 | ------------ | ------------------------------------------------------------------------------------------------------------------- |
 | `knuth-sub`  | Shared by the `primary` and `rpc-compat` daemons and by every action's temporary container — the one to `attach` to |
 
-The build is from source because the published `ghcr.io/k-nuth/kth` image omits the `rpc` conan option, so it has no JSON-RPC server. The toolchain image upstream publishes is amd64-only, which is why the manifest sets `emulateMissingAs: 'x86_64'`: on ARM or RISC-V hardware this runs under emulation, at a speed that makes an initial sync impractical. Treat non-x86_64 as functional, not usable for mainnet.
+The package builds its pinned release from source with the `rpc` Conan option enabled. The toolchain image is amd64-only. The SDK manifest therefore declares `arch: ['x86_64']` and `emulateMissing: true`: ARM and RISC-V installations use emulation rather than native builds. Their practical mainnet sync performance has not been verified.
+
+The package uses the current SDK dependency classes and manifest builder. The read-only validation workflow checks TypeScript, the delivered numeric configuration schema, and the package bundle on pull requests, including drafts; it does not publish a package or replace installation testing.
 
 The runtime image also carries `curl` and `python3` — `curl` because kth ships no RPC client to health-check with, `python3` for the compatibility sidecar below.
 
@@ -82,15 +84,17 @@ Two, and they hold different kinds of state.
 
 **A misspelled key fails silently.** kth calls `allow_config_extras()`, so an unrecognised key is ignored and the node runs on its own default with no warning. An _invalid value_ for a recognised key does the opposite and aborts startup with "illegal value" — which is why `log.statistics_server` and `net.self` are omitted rather than written blank, and why the 1.3.0 `db.db_mode` value rename needed a migration.
 
+Numeric configuration values are validated after conversion. Non-numeric strings, `NaN`, and infinities are rejected instead of being carried into the generated INI file; fields with declared defaults use those defaults.
+
 ## Dependencies
 
-One, optional, and always declared so its card stays visible.
+One optional dependency, activated by the Tor Routing setting.
 
 | Dependency | Kind                                          | Why                                |
 | ---------- | --------------------------------------------- | ---------------------------------- |
-| `tor`      | `exists`, or `running` when Tor Routing is on | Outbound peer connections over Tor |
+| `tor`      | Optional; `running` when Tor Routing is on | Tor package integration |
 
-It is declared even when Tor Routing is off — as `exists` rather than `running` — because a dependency this package does not return is not listed at all, and the card is how a user discovers the option.
+The dependency is declared through the SDK dependency class. Enabling the setting requires Tor to be running; it does not configure an outbound SOCKS proxy in kth. Inbound onion access is configured through StartOS Interfaces.
 
 ## Network Access and Interfaces
 
@@ -184,9 +188,9 @@ So a backup holds `kth.cfg` and `store.json`: the configuration, the network sel
 ## Limitations and Differences
 
 1. **The exported JSON-RPC port is a compatibility sidecar, not kth.** It answers `getblock`, `getrawtransaction`, and `getblocktemplate` from the block store on disk, because kth 1.3.0's `fetch_block()` is a stub. Anything the sidecar does not implement is proxied to kth, and anything kth does not implement is absent.
-2. **Only x86_64 is native.** aarch64 and riscv64 run the amd64 image under emulation; the node works but is too slow to sync mainnet.
+2. **Only x86_64 is native.** ARM and RISC-V installations use StartOS emulation of the amd64 image. Native builds and practical mainnet sync on those architectures remain unverified.
 3. **No I2P.** kth has no I2P support; the health row is a placeholder.
-4. **Tor is outbound-preference only.** kth exposes no SOCKS or onion command-line options, so the toggle marks the dependency and surfaces Tor's health rather than configuring a proxy. Inbound Tor is a StartOS onion address on the peer interface, which works regardless of the toggle.
+4. **The Tor setting activates an optional dependency.** kth exposes no SOCKS or onion command-line options, so the toggle surfaces Tor's health rather than configuring an outbound proxy. Inbound Tor is a StartOS onion address on the peer interface, configured independently of the toggle.
 5. **One JSON-RPC credential.** kth has a single `rpc.user`/`rpc.password` pair, not BCHN's multiple `rpcauth` entries, so rotating it breaks every dependent at once.
 6. **No in-place reindex.** kth's only chain-init flag builds a fresh database, so the repair action re-downloads rather than re-verifying.
 7. **The chain is not backed up.** Restoring gives you a configured node that must sync from genesis.
@@ -200,8 +204,7 @@ package_id: knuth-bch
 image: built from Dockerfile # k-nuth/kth compiled with rpc=True
 architectures:
   - x86_64 # native
-  - aarch64 # emulated as x86_64
-  - riscv64 # emulated as x86_64
+emulate_missing: true # other architectures emulate the x86_64 image
 subcontainers:
   - knuth-sub # shared by both daemons and every action
 volumes:
@@ -211,7 +214,7 @@ file_models:
   - /data/store.json
 startos_managed_env_vars: []
 dependencies:
-  - tor # optional; exists, or running when Tor Routing is on
+  - tor # optional; activated as running when Tor Routing is on
 interfaces:
   peer: { type: p2p, port: 8333 } # mainnet; per-network
   rpc: { type: api, port: 8332 } # mainnet; per-network, only when JSON-RPC is on

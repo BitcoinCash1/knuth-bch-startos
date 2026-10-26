@@ -44,8 +44,7 @@ export const rebuildChainData = sdk.Action.withoutInput(
             '-c',
             `rm -rf ${dir}/utxoz ${dir}/blocks ${dir}/*.ldb ${dir}/header_index ${dir}/mempool.dat || true`,
           ],
-          undefined,
-          null,
+          { timeout: null },
         )
       },
     )

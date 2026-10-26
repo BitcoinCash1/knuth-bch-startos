@@ -21,13 +21,13 @@ export const long = {
 
 export const torDescription = {
   en_US:
-    'Route outbound peer connections over Tor when Tor Routing is turned on in Node Settings.',
+    'Optional Tor package integration. Inbound onion access is configured through StartOS Interfaces. This toggle does not configure an outbound SOCKS proxy in Knuth.',
   es_ES:
-    'Enrutar las conexiones salientes con pares a través de Tor cuando el enrutamiento por Tor esté activado en Ajustes del nodo.',
+    'Integración opcional con el paquete Tor. El acceso onion entrante se configura en Interfaces de StartOS. Esta opción no configura un proxy SOCKS saliente en Knuth.',
   de_DE:
-    'Ausgehende Peer-Verbindungen über Tor leiten, wenn Tor-Routing in den Knoteneinstellungen eingeschaltet ist.',
+    'Optionale Integration des Tor-Pakets. Eingehender Onion-Zugriff wird über die StartOS-Schnittstellen eingerichtet. Diese Option richtet keinen ausgehenden SOCKS-Proxy in Knuth ein.',
   pl_PL:
-    'Kieruj wychodzące połączenia z węzłami przez Tor, gdy trasowanie przez Tor jest włączone w Ustawieniach węzła.',
+    'Opcjonalna integracja z pakietem Tor. Dostęp przychodzący onion konfiguruje się przez Interfejsy StartOS. Ta opcja nie konfiguruje wychodzącego proxy SOCKS w Knuth.',
   fr_FR:
-    'Router les connexions sortantes vers les pairs via Tor lorsque le routage Tor est activé dans les Paramètres du nœud.',
+    'Intégration facultative du paquet Tor. L’accès onion entrant se configure dans les Interfaces StartOS. Cette option ne configure pas de proxy SOCKS sortant dans Knuth.',
 }

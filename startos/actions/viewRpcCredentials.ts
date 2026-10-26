@@ -55,6 +55,7 @@ export const viewRpcCredentials = sdk.Action.withoutInput(
             copyable: true,
             qr: false,
             masked: false,
+            launchable: false,
           },
           {
             type: 'single' as const,
@@ -64,6 +65,7 @@ export const viewRpcCredentials = sdk.Action.withoutInput(
             copyable: true,
             qr: false,
             masked: true,
+            launchable: false,
           },
           {
             type: 'single' as const,
@@ -73,6 +75,7 @@ export const viewRpcCredentials = sdk.Action.withoutInput(
             copyable: true,
             qr: false,
             masked: false,
+            launchable: false,
           },
         ],
       },

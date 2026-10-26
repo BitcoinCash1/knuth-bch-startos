@@ -33,9 +33,9 @@ Your credentials are created when Knuth is installed and never change on their o
 
 **Leave Database Mode on Full Indexed** if you want Fulcrum or a block explorer to work. The other modes do not build the transaction index those services need, and switching back means syncing the chain again from the start.
 
-### Routing outbound traffic through Tor
+### Tor integration
 
-Install the Tor package, then turn on **Tor Routing** in **Node Settings**. This is for outbound connections to other nodes; to accept inbound connections over Tor, add an onion address to the **Peer Interface** instead — that works whether or not the toggle is on.
+Install the Tor package, then turn on **Tor Routing** in **Node Settings** to activate the optional dependency and its health check. This setting does not configure an outbound SOCKS proxy in Knuth. To accept inbound connections over Tor, add an onion address to the **Peer Interface**; that is configured independently of the toggle.
 
 ## Maintenance
 
@@ -49,6 +49,6 @@ Knuth has to be stopped before any of these will run, and none of them can be un
 
 ## Limitations
 
-- **Only 64-bit x86 servers can realistically run this.** Knuth is compiled for x86 only; on ARM or RISC-V hardware StartOS runs it through emulation, which is far too slow to sync mainnet.
+- **Only 64-bit x86 has a native image.** ARM and RISC-V hardware use StartOS emulation of that image. Practical mainnet sync on those architectures has not been verified.
 - **Your backup does not include the chain.** It keeps your settings and your JSON-RPC credentials, so a restored Knuth is configured correctly — but it has to sync the chain again from the beginning before it is useful.
 - **Knuth does not support I2P.** The I2P row on the service page is always shown as unavailable.

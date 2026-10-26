@@ -2,7 +2,9 @@ import { FileHelper, IMPOSSIBLE, VersionInfo, z } from '@start9labs/start-sdk'
 import { sdk } from '../sdk'
 import { knuthConf } from '../fileModels/knuth.conf'
 
-const iniNumber = z.union([z.string().transform(Number), z.number()])
+const iniNumber = z
+  .union([z.string().transform(Number), z.number()])
+  .pipe(z.number().finite())
 
 // kth v1.3.0 (k-nuth/kth#515) renamed most config keys. kth calls
 // allow_config_extras(), so the old names are ignored rather than rejected —

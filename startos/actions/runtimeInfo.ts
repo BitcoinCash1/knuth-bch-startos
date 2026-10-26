@@ -63,6 +63,7 @@ export const runtimeInfo = sdk.Action.withoutInput(
             copyable: false,
             qr: false,
             masked: false,
+            launchable: false,
           },
         }
       },

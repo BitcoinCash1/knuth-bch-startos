@@ -2,7 +2,9 @@ import { FileHelper, z } from '@start9labs/start-sdk'
 import { i18n } from '../i18n'
 import { sdk } from '../sdk'
 
-const iniNumber = z.union([z.string().transform(Number), z.number()])
+const iniNumber = z
+  .union([z.string().transform(Number), z.number()])
+  .pipe(z.number().finite())
 
 // Key names follow kth v1.3.0 (k-nuth/kth#515 shortened them: network.* -> net.*,
 // database.* -> db.*, blockchain.* -> chain.*, and relay_transactions moved to
@@ -101,12 +103,8 @@ export const shape = z.object({
   'node.block_latency_seconds': iniNumber.catch(60),
   'node.notify_limit_hours': iniNumber.catch(24),
   // kth takes these as FLOAT (satoshis per byte / per sigop).
-  'node.byte_fee_satoshis': z
-    .union([z.string().transform(Number), z.number()])
-    .catch(1),
-  'node.sigop_fee_satoshis': z
-    .union([z.string().transform(Number), z.number()])
-    .catch(100),
+  'node.byte_fee_satoshis': iniNumber.catch(1),
+  'node.sigop_fee_satoshis': iniNumber.catch(100),
   'node.minimum_output_satoshis': iniNumber.catch(546),
   // Display mode: tui | log | daemon. Must stay "log" under StartOS — the TUI
   // expects a terminal and would break log capture.
