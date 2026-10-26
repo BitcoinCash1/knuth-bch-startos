@@ -10,10 +10,9 @@
 > JSON-RPC (v1.3.0+), Tor dependency, and test-network data isolation under
 > `/data/<network>/`.
 >
-> **Versioning:** the number before `:` is **kth upstream** (today `1.3.0`). The
-> number after `:` is the StartOS package revision, starting at `:0`
-> (`1.3.0:0`, `1.3.0:1`, …). Packaging-only fixes bump `:N` only — never invent
-> a fake kth version.
+> **Versioning:** the number before `:` is the upstream release; the number
+> after it is the StartOS package revision. The package manifest is the source
+> of truth for the installed version.
 
 ---
 
@@ -42,8 +41,8 @@
 | Field | Value |
 |---|---|
 | **Image ID** | `knuth` |
-| **Build** | `Dockerfile` copies `kth` + GCC 15 runtime from upstream `ghcr.io/k-nuth/kth` (or a local RPC-enabled build until upstream ships `rpc=True`) |
-| **Architectures** | `x86_64`, `aarch64`, `riscv64` (kth is compiled on amd64; other arches use StartOS qemu via `emulateMissingAs`) |
+| **Build** | `Dockerfile` builds the pinned Knuth release with RPC enabled and copies its matching GCC runtime |
+| **Architectures** | Native `x86_64`; `aarch64` and `riscv64` use StartOS emulation of that image (`emulateMissing`). They are not native ARM or RISC-V builds. |
 | **Command** | `kth -c /data/kth.cfg --init_run --network <name>` |
 
 ---
@@ -96,6 +95,11 @@
 |---|---|
 | **Network** | mainnet / testnet3 / testnet4 / scalenet / chipnet / regtest — rewrites peer port, RPC port, `db.directory`, `net.hosts_file` (the peer port, `db.directory` and `net.hosts_file` are also reasserted on every start, because kth tells chipnet from testnet4 only by peer port 48333) |
 | **Node Settings** | db mode (`full` / `blocks` / `pruned`), max size (pruned), connections, latency, verbose log, **JSON-RPC toggle**, IPC, UTXOZ, Tor |
+
+Interfaces are refreshed when the selected network, RPC toggle, or RPC username
+changes. New RPC passwords use the operating system's cryptographic random
+source. Existing credentials remain stable until the credential action rotates them.
+Malformed or non-finite numeric config values use their declared defaults.
 
 ---
 
@@ -151,7 +155,7 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 
 | Package | Optional | Purpose |
 |---|---|---|
-| `tor` | yes (optional) | Always listed on the Dependencies tab (`kind: exists` when Tor Routing is off, `kind: running` when on). Not required to be running unless **Node Settings → Tor Routing** is enabled. |
+| `tor` | yes (optional) | Declared in the package manifest and activated as a running dependency when **Node Settings → Tor Routing** is enabled. The toggle advertises the integration; it does not configure an outbound SOCKS proxy in Knuth. |
 
 ---
 
@@ -171,7 +175,7 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 
 ## 12. Limitations and Differences
 
-1. **Built from source.** The official `ghcr.io/k-nuth/kth` image is built without `rpc=True` (see `k-nuth/docker-images` PR #7), so the `Dockerfile` compiles kth with the JSON-RPC server enabled. `check-upstream.yml` checks the official image daily; once the image for the pinned version ships JSON-RPC, `scripts/use-upstream-image.sh` swaps the `Dockerfile` for `scripts/Dockerfile.upstream` (a thin wrapper around the official image), commits it to `master` and dispatches Tag and Release.
+1. **Built from source.** The `Dockerfile` compiles the pinned upstream release with RPC enabled. The upstream Docker build fix has merged, but adopting an official image also requires public pull access and package validation. The updater checks the image for the pinned release before switching to the wrapper in `scripts/Dockerfile.upstream`. Switching image sources does not remove the RPC compatibility proxy or establish native RPC compatibility with dependent applications.
 2. **No `initialblockdownload` / `verificationprogress`** — sync health uses Knuth's coordinator log (RPC `getblockchaininfo.blocks` is often 0 at the tip).
 3. **gRPC not exposed** in this package.
 4. Tor proxy passthrough to `kth` is opt-in; verify after enabling.

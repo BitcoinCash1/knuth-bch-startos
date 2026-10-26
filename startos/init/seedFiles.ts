@@ -2,24 +2,18 @@ import { sdk } from '../sdk'
 import { knuthConf } from '../fileModels/knuth.conf'
 import { storeJson } from '../fileModels/store.json'
 import {
+  generateRpcPassword,
   networkPorts,
   networkDbDir,
   networkHostsFile,
   Network,
 } from '../utils'
 
-const randomHex = (bytes: number) =>
-  Array.from({ length: bytes }, () =>
-    Math.floor(Math.random() * 256)
-      .toString(16)
-      .padStart(2, '0'),
-  ).join('')
-
 // BCHN/Flowee pattern: seed once on install; keep credentials stable forever.
 export const seedFiles = sdk.setupOnInit(async (effects, kind) => {
   if (kind !== 'install') return
 
-  const rpcPassword = randomHex(16)
+  const rpcPassword = generateRpcPassword()
 
   await storeJson.merge(effects, {
     network: 'mainnet',

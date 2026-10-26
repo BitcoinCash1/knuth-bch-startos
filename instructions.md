@@ -25,7 +25,9 @@ what is specific to running it on StartOS once it is installed.
 
 ## JSON-RPC
 
-Off by default. Credentials are generated at install and stay stable.
+Off by default. Credentials are generated from a cryptographic random source at
+install and stay stable until you rotate them. Enabling RPC or changing networks
+refreshes the corresponding StartOS interface automatically.
 
 | Network  | P2P   | RPC   |
 |----------|-------|-------|
@@ -47,7 +49,10 @@ Use the **Interfaces** tab for the RPC endpoint other services should call. gRPC
 
 ## Tor
 
-**Tor is optional** (same as the other BCH nodes). It always shows on the Knuth **Dependencies** tab. Knuth runs on clearnet without Tor running; install the Tor package and enable **Tor Routing** in Node Settings only if you want outbound peer traffic through Tor. For inbound onion: **Interfaces → Peer Interface → Add Onion Service**.
+**Tor is optional.** Its dependency becomes active when Tor Routing is enabled.
+The toggle currently advertises the dependency and its health status; it does not
+configure an outbound SOCKS proxy in Knuth. Outbound peer traffic uses clearnet.
+For inbound onion access, use **Interfaces → Peer Interface → Add Onion Service**.
 
 ## Maintenance
 
@@ -59,6 +64,11 @@ Use the **Interfaces** tab for the RPC endpoint other services should call. gRPC
 ## Limitations
 
 - Sync progress prefers the compatibility sidecar's tip. Knuth's own RPC `blocks` can lag `headers` by a few at the tip and used to show **Syncing 100%** forever; that is treated as **Synced**.
-- The official upstream container image must be built with `rpc=True` for the JSON-RPC server to exist at all; this package expects that.
+- Native execution is available on x86_64. ARM64 and RISC-V installations use
+  emulation of the x86_64 image, which can substantially slow initial sync and
+  signature validation.
+- The package still uses an RPC compatibility proxy for calls the pinned Knuth
+  release cannot serve natively. A working upstream Docker build does not by
+  itself remove that requirement or establish compatibility with every dependent.
 - Blockchain data is not included in StartOS backups — after restore the node re-syncs.
 - **RPC compatibility sidecar (1.3.0:6):** Knuth v1.3.0's `getblock`/`getrawtransaction` look in a store that was removed when blocks moved to `blk*.dat`. This package sits a small sidecar in front of JSON-RPC that serves those methods from the block files and adds `getnetworkinfo`, classic `getblocktemplate`/`submitblock`, and `validateaddress` so Fulcrum, BCH Explorer, ASICSeer, and EloPool can use Knuth. JSON-RPC bodies end with a newline so EloPool/ckpool can parse GBT.

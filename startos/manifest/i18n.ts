@@ -21,13 +21,13 @@ export const long = {
 
 export const torDescription = {
   en_US:
-    'Enables Tor onion routing for anonymous peer-to-peer connections. When Tor is installed and Tor Routing is enabled in Node Settings, Knuth can route outbound connections through the Tor network for enhanced privacy.',
+    'Optional Tor package integration. Inbound onion access is configured through StartOS Interfaces. This toggle does not configure an outbound SOCKS proxy in Knuth.',
   es_ES:
-    'Activa el enrutamiento onion de Tor para conexiones anónimas entre pares. Cuando Tor está instalado y el enrutamiento por Tor está activado en Ajustes del nodo, Knuth puede enrutar las conexiones salientes a través de la red Tor para una mayor privacidad.',
+    'Integración opcional con el paquete Tor. El acceso onion entrante se configura en Interfaces de StartOS. Esta opción no configura un proxy SOCKS saliente en Knuth.',
   de_DE:
-    'Ermöglicht Tor-Onion-Routing für anonyme Peer-to-Peer-Verbindungen. Wenn Tor installiert und Tor-Routing in den Knoteneinstellungen aktiviert ist, kann Knuth ausgehende Verbindungen über das Tor-Netzwerk leiten, um die Privatsphäre zu verbessern.',
+    'Optionale Integration des Tor-Pakets. Eingehender Onion-Zugriff wird über die StartOS-Schnittstellen eingerichtet. Diese Option richtet keinen ausgehenden SOCKS-Proxy in Knuth ein.',
   pl_PL:
-    'Włącza trasowanie cebulowe Tor dla anonimowych połączeń peer-to-peer. Gdy Tor jest zainstalowany, a trasowanie przez Tor jest włączone w Ustawieniach węzła, Knuth może kierować połączenia wychodzące przez sieć Tor, zapewniając większą prywatność.',
+    'Opcjonalna integracja z pakietem Tor. Dostęp przychodzący onion konfiguruje się przez Interfejsy StartOS. Ta opcja nie konfiguruje wychodzącego proxy SOCKS w Knuth.',
   fr_FR:
-    'Active le routage en oignon Tor pour des connexions pair à pair anonymes. Lorsque Tor est installé et que le routage Tor est activé dans Paramètres du nœud, Knuth peut faire passer les connexions sortantes par le réseau Tor pour une meilleure confidentialité.',
+    'Intégration facultative du paquet Tor. L’accès onion entrant se configure dans les Interfaces StartOS. Cette option ne configure pas de proxy SOCKS sortant dans Knuth.',
 }

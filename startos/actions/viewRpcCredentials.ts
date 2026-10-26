@@ -8,8 +8,9 @@ export const viewRpcCredentials = sdk.Action.withoutInput(
 
   async ({ effects: _effects }) => ({
     name: i18n('RPC Credentials'),
-    description:
-      i18n('View the JSON-RPC username, password and port for connecting mining pools and other services.'),
+    description: i18n(
+      'View the JSON-RPC username, password and port for connecting mining pools and other services.',
+    ),
     warning: null,
     allowedStatuses: 'any' as const,
     group: i18n('Credentials'),
@@ -25,8 +26,9 @@ export const viewRpcCredentials = sdk.Action.withoutInput(
       return {
         version: '1' as const,
         title: i18n('RPC Credentials'),
-        message:
-          i18n('The JSON-RPC server is currently disabled. Enable it under Node Settings → JSON-RPC Server.'),
+        message: i18n(
+          'The JSON-RPC server is currently disabled. Enable it under Node Settings → JSON-RPC Server.',
+        ),
         result: null,
       }
     }
@@ -34,11 +36,16 @@ export const viewRpcCredentials = sdk.Action.withoutInput(
     return {
       version: '1' as const,
       title: i18n('RPC Credentials'),
-      message: i18n('JSON-RPC is listening on port ${rpcPort} (${network}).', { rpcPort: String(rpcPort), network }),
+      message: i18n('JSON-RPC is listening on port ${rpcPort} (${network}).', {
+        rpcPort: String(rpcPort),
+        network,
+      }),
       result: {
         type: 'group' as const,
         name: i18n('JSON-RPC'),
-        description: i18n('Credentials for connecting mining pools and other services'),
+        description: i18n(
+          'Credentials for connecting mining pools and other services',
+        ),
         value: [
           {
             type: 'single' as const,
@@ -48,6 +55,7 @@ export const viewRpcCredentials = sdk.Action.withoutInput(
             copyable: true,
             qr: false,
             masked: false,
+            launchable: false,
           },
           {
             type: 'single' as const,
@@ -57,6 +65,7 @@ export const viewRpcCredentials = sdk.Action.withoutInput(
             copyable: true,
             qr: false,
             masked: true,
+            launchable: false,
           },
           {
             type: 'single' as const,
@@ -66,6 +75,7 @@ export const viewRpcCredentials = sdk.Action.withoutInput(
             copyable: true,
             qr: false,
             masked: false,
+            launchable: false,
           },
         ],
       },
