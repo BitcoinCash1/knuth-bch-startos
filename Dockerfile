@@ -1,10 +1,10 @@
 # ── Build ───────────────────────────────────────────────────────────
-# Self-contained: kth is compiled from upstream source here rather than pulled
-# from a prebuilt image. The official ghcr.io/k-nuth/kth is built without the
-# `rpc` conan option (no JSON-RPC server), and its release workflow has failed
-# on every tag since v1.1.0 — see k-nuth/docker-images#7. Building here also
-# satisfies the Start9 registry requirement that packages build from source
-# rather than pull external prebuilt binaries.
+# Build the released node with the recipe merged in k-nuth/docker-images#7
+# (54a66910d7acda68766899a75cbb0304d617cb0a, kth/Dockerfile). The official
+# GHCR image now includes RPC, but currently rejects pulls from this package.
+# Keep the upstream toolchain and Conan options here until that image is
+# accessible. Release checks prefer the official image and otherwise validate
+# this source build. No node patches are applied.
 #
 # Cross-compiled with pure Go-style static linkage is not applicable; kth is C++,
 # so this stage uses the project's own toolchain image to match the compile
@@ -16,7 +16,7 @@ ARG TOOLCHAIN=kthnode/gcc15-ubuntu24.04@sha256:4988fdeb3654c2b5ea591ffa4454f67e1
 FROM --platform=linux/amd64 ${TOOLCHAIN} AS kth-build
 
 # kth release version WITHOUT the leading "v" (conan wants 1.3.0, not v1.3.0).
-ARG KNUTH_VERSION=1.3.0
+ARG KNUTH_VERSION=1.4.0
 ARG CURRENCY=BCH
 
 # kthbuild is required to load the kth conan recipe.

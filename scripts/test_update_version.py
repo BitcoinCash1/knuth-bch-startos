@@ -78,6 +78,24 @@ class UpdateVersionTest(unittest.TestCase):
         self.assertIsNone(update_version(self.root, "v1.4.0"))
         self.assertEqual(self.snapshot(), before)
 
+    def test_check_only_validates_without_editing_pins(self):
+        before = self.snapshot()
+        self.assertEqual(update_version(self.root, "v1.4.0", check_only=True), "1.4.0:0")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_older_releases_cannot_downgrade_pins(self):
+        before = self.snapshot()
+        for tag in ["v1.2.9", "v1.3.0-rc.1", "v0.99.99"]:
+            with self.subTest(tag=tag):
+                self.assertIsNone(update_version(self.root, tag))
+                self.assertEqual(self.snapshot(), before)
+
+    def test_numeric_release_order(self):
+        self.assertEqual(update_version(self.root, "v1.10.0"), "1.10.0:0")
+        before = self.snapshot()
+        self.assertIsNone(update_version(self.root, "v1.9.9"))
+        self.assertEqual(self.snapshot(), before)
+
     def test_prerelease_pin_and_downgrade_reset(self):
         source = self.current_path.read_bytes().replace(b"ALLOW_DOWNGRADE = false", b"ALLOW_DOWNGRADE = true")
         self.current_path.write_bytes(source)
@@ -142,7 +160,7 @@ class UpdateVersionTest(unittest.TestCase):
         self.assertEqual(result.stdout, "")
         self.assertEqual(self.snapshot(), before)
 
-    def run_wrapper(self, tag):
+    def run_wrapper(self, tag, gate_status=0):
         git = shutil.which("git")
         bash = Path(git).parent.parent / "bin/bash.exe" if os.name == "nt" and git else Path("/bin/bash")
         if not bash.is_file():
@@ -151,6 +169,8 @@ class UpdateVersionTest(unittest.TestCase):
         scripts.mkdir()
         (scripts / "auto-bump.sh").write_text((REPO / "scripts/auto-bump.sh").read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
         shutil.copyfile(REPO / "scripts/update_version.py", scripts / "update_version.py")
+        (scripts / "check-upstream-image.sh").write_text(
+            f'#!/usr/bin/env bash\nexit {gate_status}\n', encoding="utf-8", newline="\n")
         stub_bin = self.root / "bin"
         stub_bin.mkdir()
         git_stub = stub_bin / "git"
@@ -197,6 +217,86 @@ class UpdateVersionTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(calls, [])
         self.assertEqual(self.snapshot(), before)
+
+    def test_failed_image_gate_cannot_edit_or_publish_pins(self):
+        before = self.snapshot()
+        result, calls = self.run_wrapper("v1.4.0", gate_status=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(calls, [])
+        self.assertEqual(self.snapshot(), before)
+
+
+class UpstreamImageGateTest(unittest.TestCase):
+    def run_gate(self, scenario):
+        git = shutil.which("git")
+        bash = Path(git).parent.parent / "bin/bash.exe" if os.name == "nt" and git else Path("/bin/bash")
+        if not bash.is_file():
+            self.skipTest("Bash is not installed")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            calls = root / "docker-calls.txt"
+            stub_bin = root / "bin"
+            stub_bin.mkdir()
+            (stub_bin / "docker").write_text('''#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$DOCKER_CALLS"
+case "$1" in
+  pull) [ "$SCENARIO" != fallback ] ;;
+  build) exit 0 ;;
+  run)
+    if [[ " $* " == *" --version "* ]]; then
+      if [ "$SCENARIO" = wrong_version ]; then echo 'Knuth v1.3.0'; else echo 'Knuth v1.4.0-master.12345'; fi
+    else echo readonly-test-container; fi ;;
+  exec)
+    if [ "$SCENARIO" = bad_rpc ]; then
+      printf 'HTTP/1.1 200 OK\\r\\n\\r\\n{"result":{"chain":"mainnet","blocks":0},"error":null}'
+    else
+      printf 'HTTP/1.1 200 OK\\r\\n\\r\\n{"result":{"chain":"Regtest","blocks":0},"error":null}'
+    fi ;;
+  inspect) echo false ;;
+  rm) exit 0 ;;
+  logs) echo 'test node exited' ;;
+  *) exit 1 ;;
+esac
+''', encoding="utf-8", newline="\n")
+            (stub_bin / "python3").write_text(
+                f'#!/usr/bin/env bash\nexec {shlex.quote(Path(sys.executable).as_posix())} "$@"\n',
+                encoding="utf-8", newline="\n")
+            for path in stub_bin.iterdir():
+                path.chmod(0o755)
+            def shell_path(path):
+                value = path.as_posix()
+                return f"/{value[0].lower()}{value[2:]}" if os.name == "nt" else value
+            environment = dict(os.environ, STUB_BIN=shell_path(stub_bin),
+                               DOCKER_CALLS=shell_path(calls), SCENARIO=scenario)
+            result = subprocess.run([
+                str(bash), "--noprofile", "--norc", "-c",
+                'PATH="$STUB_BIN:$PATH"; export PATH; exec bash "$1" v1.4.0',
+                "upstream-gate-test", shell_path(REPO / "scripts/check-upstream-image.sh"),
+            ], cwd=root, env=environment, capture_output=True, text=True, timeout=15)
+            return result, calls.read_text().splitlines()
+
+    def test_official_image_requires_real_rpc_and_removes_temporary_volume(self):
+        result, calls = self.run_gate("official")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(any(call.startswith("exec readonly-test-container") for call in calls))
+        self.assertIn("rm -fv readonly-test-container", calls)
+        self.assertFalse(any(call.startswith("build ") for call in calls))
+
+    def test_unavailable_registry_builds_requested_version(self):
+        result, calls = self.run_gate("fallback")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(any("build-arg KNUTH_VERSION=1.4.0" in call for call in calls))
+        self.assertTrue(any("local/knuth-upstream-check:1.4.0 --version" in call for call in calls))
+
+    def test_wrong_binary_version_cannot_pass_gate(self):
+        result, calls = self.run_gate("wrong_version")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any("--detach" in call for call in calls))
+
+    def test_successful_http_with_wrong_chain_cannot_pass_gate(self):
+        result, calls = self.run_gate("bad_rpc")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("rm -fv readonly-test-container", calls)
 
 
 if __name__ == "__main__":

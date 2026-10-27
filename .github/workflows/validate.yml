@@ -24,5 +24,5 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run check
       - run: node --test scripts/test_config_numbers.cjs
-      - run: python3 -m unittest discover -s scripts -p test_update_version.py
+      - run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - run: npm run build

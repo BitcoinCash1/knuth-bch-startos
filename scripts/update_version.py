@@ -62,7 +62,14 @@ def value_end(source: str, start: int) -> int:
     raise ValueError("releaseNotes has no terminating comma")
 
 
-def update_version(root: Path, tag: str) -> str | None:
+def version_key(version: str) -> tuple:
+    release, separator, prerelease = version.removeprefix("v").partition("-")
+    identifiers = tuple((0, int(part)) if part.isdecimal() else (1, part)
+                        for part in prerelease.split(".")) if separator else ()
+    return (*map(int, release.split(".")), not separator, identifiers)
+
+
+def update_version(root: Path, tag: str, *, check_only: bool = False) -> str | None:
     match = TAG.fullmatch(tag)
     if match is None:
         raise ValueError("Expected a Knuth version such as v1.4.0 or 1.4.0-rc.1")
@@ -78,13 +85,15 @@ def update_version(root: Path, tag: str) -> str | None:
         raise ValueError("Expected package version <upstream>:<revision>")
     if image_version[1] != old_upstream:
         raise ValueError("Package version and Dockerfile version pin disagree")
-    if old_upstream == upstream:
+    if version_key(upstream) <= version_key(old_upstream):
         return None
 
     notes = one_match(NOTES, current, "releaseNotes property")
     notes_end = value_end(current, notes.end())
     downgrade = one_match(DOWNGRADE, current, "ALLOW_DOWNGRADE declaration")
     new_version = f"{upstream}:0"
+    if check_only:
+        return new_version
     edits = [
         (version.start(2), version.end(2), new_version),
         (notes.start(), notes_end + 1,
@@ -103,11 +112,15 @@ def update_version(root: Path, tag: str) -> str | None:
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print(f"Usage: {sys.argv[0]} <tag>", file=sys.stderr)
+    arguments = sys.argv[1:]
+    check_only = bool(arguments and arguments[0] == "--check")
+    if check_only:
+        arguments = arguments[1:]
+    if len(arguments) != 1:
+        print(f"Usage: {sys.argv[0]} [--check] <tag>", file=sys.stderr)
         return 1
     try:
-        version = update_version(Path.cwd(), sys.argv[1])
+        version = update_version(Path.cwd(), arguments[0], check_only=check_only)
     except (OSError, ValueError) as error:
         print(f"Version update failed: {error}", file=sys.stderr)
         return 1

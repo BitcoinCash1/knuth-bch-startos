@@ -11,17 +11,36 @@ what is specific to running it on StartOS once it is installed.
 
 ## What you get on StartOS
 
-- A **Bitcoin Cash full node** that validates and relays blocks and transactions
+- The upstream **Knuth Bitcoin Cash node** with its original consensus and relay policy
 - **P2P** (port follows the selected network)
-- Optional **JSON-RPC** (Bitcoin-Cash-compatible) for mining pools, Fulcrum, and explorers
+- Optional **JSON-RPC** with a compatibility proxy for Bitcoin Cash applications
 - The same multi-network layout as BCHN / BCHD / Flowee: mainnet under `/data/blockchain`, testnets under `/data/<network>/`
-- Optional **Tor** routing when the Tor package is installed
+- Optional **Tor** package integration; outbound peer traffic currently uses clearnet
 
 ## Getting started
 
 1. Install and start Knuth — Initial Block Download begins immediately on mainnet.
 2. Watch the **Dashboard** health checks — the same rows as BCHN / BCHD / Flowee: **RPC**, **Blockchain Sync** (percent), **Peer Connections**, **Tor** (optional), **I2P**, **Clearnet**.
 3. When you need RPC (pools, Fulcrum, Explorer): **Config → Node Settings → JSON-RPC Server**, then **Actions → RPC Credentials**.
+
+## Moving to Knuth 1.4.0
+
+Knuth 1.4.0 uses a different UTXO-Z database format and needs a fresh blockchain
+database. For an existing installation:
+
+1. Stop Knuth.
+2. Run **Actions → Rebuild Blockchain Database** for the active network.
+3. Install or sideload the 1.4.0 package, then start Knuth and let it download and
+   validate the chain again.
+
+The rebuild deletes chain data for the selected network and preserves your
+network settings and RPC credentials. Repeat it before using another network
+that still has a database from an older release. A fresh installation already has
+an empty database. Keep the old chain database out of restores into 1.4.0.
+
+To use Chipnet, select **Config → Network → chipnet** and enable JSON-RPC so the
+dashboard can verify synchronization. Native x86_64 execution is available;
+ARM64 and RISC-V packages emulate the x86_64 node.
 
 ## JSON-RPC
 
@@ -58,12 +77,16 @@ For inbound onion access, use **Interfaces → Peer Interface → Add Onion Serv
 
 - **Delete Peer List** — stop the service first, then run this to reset peer discovery and unban seeds. Stop now kills the node within 45 seconds.
 - **Delete Test Network Data** — stop first, then wipe selected test-network chain data (including the network you are currently on). Mainnet is never touched.
+- **Rebuild Blockchain Database** — stop first, then delete all chain databases for the active network and download the chain again. Network settings and RPC credentials are kept.
 - **RPC Credentials** — username, password, port
 - **Node Info** — runtime summary
 
 ## Limitations
 
-- Sync progress prefers the compatibility sidecar's tip. Knuth's own RPC `blocks` can lag `headers` by a few at the tip and used to show **Syncing 100%** forever; that is treated as **Synced**.
+- Sync health uses Knuth's validated block height and hash. Any gap behind headers
+  stays loading. Public networks also require fresh peer status and a recent,
+  readable tip. With JSON-RPC disabled, the node may run, but the dashboard cannot
+  verify synchronization.
 - Native execution is available on x86_64. ARM64 and RISC-V installations use
   emulation of the x86_64 image, which can substantially slow initial sync and
   signature validation.
@@ -71,4 +94,20 @@ For inbound onion access, use **Interfaces → Peer Interface → Add Onion Serv
   release cannot serve natively. A working upstream Docker build does not by
   itself remove that requirement or establish compatibility with every dependent.
 - Blockchain data is not included in StartOS backups — after restore the node re-syncs.
-- **RPC compatibility sidecar (1.3.0:6):** Knuth v1.3.0's `getblock`/`getrawtransaction` look in a store that was removed when blocks moved to `blk*.dat`. This package sits a small sidecar in front of JSON-RPC that serves those methods from the block files and adds `getnetworkinfo`, classic `getblocktemplate`/`submitblock`, and `validateaddress` so Fulcrum, BCH Explorer, ASICSeer, and EloPool can use Knuth. JSON-RPC bodies end with a newline so EloPool/ckpool can parse GBT.
+- The compatibility proxy serves missing block/transaction methods and adapts
+  classic mining calls. It preserves Knuth's validated chain tip and uses current
+  peer status; unavailable status returns an error. Compatibility with each pool,
+  indexer, or explorer still needs a live integration check.
+
+## Package updates
+
+The BitcoinCash1 repository checks new stable upstream releases daily. A new
+version must pass a binary-version check and a running JSON-RPC check before its
+package version is updated and a release build is requested. The package keeps
+upstream node behavior and adds no transaction-size rule.
+
+Maintainers can build a sideload package from **Actions → Build → Run workflow**.
+Choose the branch and architecture target, then download its `.s9pk` and
+`SHA256SUMS` artifact. ARM64 and RISC-V targets remain emulated. Future automatic
+builds do not automatically erase an installed node's database or prove that a
+future database format can be reused.

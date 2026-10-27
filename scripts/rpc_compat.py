@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Bitcoin-RPC compatibility sidecar for Knuth v1.3.0.
+"""Bitcoin-RPC compatibility sidecar for Knuth v1.4.0.
 
-kth 1.3.0 documents getblock/getrawtransaction, but fetch_block() is a stub
+kth documents getblock/getrawtransaction, but fetch_block() is a stub
 after the LMDB→blk*.dat move (block_chain.cpp: "return not_found until we
 implement reading from flat files"). It also has no getnetworkinfo,
 getblocktemplate, or submitblock — which Fulcrum, BCH Explorer, ASICSeer and
@@ -18,13 +18,16 @@ import base64
 import hashlib
 import json
 import os
+import re
 import struct
+import subprocess
 import sys
 import threading
 import time
 import socket
 import socketserver
 from pathlib import Path
+from datetime import datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -479,6 +482,47 @@ def normalize_chain(value: Any) -> Any:
     return CHAIN_ALIAS.get(value.strip().lower(), value)
 
 
+def node_version(binary: str) -> str | None:
+    """Read the installed node's version, without inferring it from this proxy."""
+    try:
+        result = subprocess.run(
+            [binary, "--version"], capture_output=True, text=True, timeout=5, check=True
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = re.search(r"Knuth\s+v(\d+\.\d+\.\d+)", result.stdout)
+    return match[1] if match else None
+
+
+def current_peer_count(log_path: Path, now: float | None = None) -> int | None:
+    """Read a recent status record, never turn an absent/stale record into peers."""
+    now = time.time() if now is None else now
+    try:
+        with log_path.open("rb") as log:
+            log.seek(0, os.SEEK_END)
+            log.seek(max(0, log.tell() - 2_000_000))
+            lines = log.read().decode("utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        if "[node] Knuth v" in line or "[p2p_node] maintain_outbound_connections started" in line:
+            return None
+        peers = re.search(r"\[p2p_node:status\]\s+Peers:\s+(\d+)\s*/\s*\d+", line)
+        if not peers:
+            continue
+        stamp = re.search(r"\[(\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d(?:\.\d+)?)\]", line)
+        if not stamp:
+            return None
+        try:
+            age = now - datetime.fromisoformat(stamp[1]).timestamp()
+        except ValueError:
+            return None
+        # The node emits this status every ten seconds. Refuse old records
+        # from a stopped or previous process even if other log lines are fresh.
+        return int(peers[1]) if -5 <= age <= 120 else None
+    return None
+
+
 def parse_verbosity(raw: Any) -> int:
     if raw is None or raw is True:
         return 1
@@ -506,9 +550,14 @@ def decode_hash_param(value: Any) -> str | None:
 
 
 class Compat:
-    def __init__(self, backend: Knuth, index: BlockIndex):
+    def __init__(
+        self, backend: Knuth, index: BlockIndex,
+        debug_log: Path = Path("/data/debug.log"), version: str | None = None,
+    ):
         self.backend = backend
         self.index = index
+        self.debug_log = debug_log
+        self.version = version
         self.started = time.time()
         self.jobs: dict[str, str] = {}
         self._job_lock = threading.Lock()
@@ -534,32 +583,12 @@ class Compat:
         if isinstance(res, dict):
             if res.get("chain") is not None:
                 res["chain"] = normalize_chain(res["chain"])
-            # kth's RPC `blocks` lags the files / headers. Prefer the index tip
-            # so Fulcrum does not rewind a healthy indexer, and so health does
-            # not sit on "Syncing 100%" (blocks=N-5, headers=N).
-            tip_h = int(self.index.tip_height)
-            if tip_h > int(res.get("blocks") or 0):
-                res["blocks"] = tip_h
-                res["bestblockhash"] = self.index.tip_hash
-            hdr = int(res.get("headers") or 0)
-            if tip_h > hdr:
-                res["headers"] = tip_h
-            elif hdr < int(res.get("blocks") or 0):
-                res["headers"] = int(res["blocks"])
         return out
 
     def rpc_getblockcount(self, params: list[Any]) -> dict[str, Any]:
-        out = self.backend.call("getblockcount", params)
-        n = out.get("result")
-        if isinstance(n, int) and self.index.tip_height > n:
-            return self._ok(self.index.tip_height)
-        if self.index.tip_height >= 0 and (n is None or out.get("error")):
-            return self._ok(self.index.tip_height)
-        return out
+        return self.backend.call("getblockcount", params)
 
     def rpc_getbestblockhash(self, params: list[Any]) -> dict[str, Any]:
-        if self.index.tip_hash and self.index.tip_hash != ZERO_HASH:
-            return self._ok(self.index.tip_hash)
         return self.backend.call("getbestblockhash", params)
 
     def rpc_getmininginfo(self, params: list[Any]) -> dict[str, Any]:
@@ -570,29 +599,25 @@ class Compat:
         return out
 
     def rpc_getnetworkinfo(self, params: list[Any]) -> dict[str, Any]:
+        native = self.backend.call("getnetworkinfo", params)
+        if not native.get("error"):
+            return native
+        if native.get("error", {}).get("code") != -32601:
+            return native
+        peers = current_peer_count(self.debug_log)
+        if peers is None:
+            return self._err(-342, "Current peer count unavailable from Knuth RPC and status log")
+        if self.version is None:
+            return self._err(-342, "Installed Knuth version unavailable")
+        major, minor, patch = (int(part) for part in self.version.split("."))
         info = self.backend.call("getblockchaininfo").get("result") or {}
         return self._ok(
             {
-                "version": 130000,
-                "subversion": "/Knuth:1.3.0/",
+                "version": major * 100000 + minor * 10000 + patch * 100,
+                "subversion": f"/Knuth:{self.version}/",
                 "protocolversion": 70016,
-                "localservices": "0000000000000409",
-                "localservicesnames": ["NETWORK", "NETWORK_LIMITED"],
-                "localrelay": True,
-                "timeoffset": 0,
-                "networkactive": True,
-                "connections": 8,
-                "connections_in": 0,
-                "connections_out": 8,
-                "networks": [
-                    {
-                        "name": "ipv4",
-                        "limited": False,
-                        "reachable": True,
-                        "proxy": "",
-                        "proxy_randomize_credentials": False,
-                    }
-                ],
+                "connections": peers,
+                "networks": [],
                 "relayfee": 0.00001,
                 "incrementalfee": 0.00001,
                 "localaddresses": [],
@@ -602,7 +627,10 @@ class Compat:
         )
 
     def rpc_getpeerinfo(self, params: list[Any]) -> dict[str, Any]:
-        return self._ok([])
+        native = self.backend.call("getpeerinfo", params)
+        if (native.get("error") or {}).get("code") == -32601:
+            return self._err(-32601, "Knuth does not expose individual peer information")
+        return native
 
     def rpc_help(self, params: list[Any]) -> dict[str, Any]:
         catalog = (
@@ -704,10 +732,18 @@ class Compat:
             height = int(params[0])
         except (TypeError, ValueError):
             return self._err(-32602, "height must be an integer")
-        h = self.index.hash_at(height)
-        if h:
-            return self._ok(h)
         return self.backend.call("getblockhash", params)
+
+    def _confirmations(self, blockhash: str, height: Any) -> int | None:
+        if not isinstance(height, int):
+            return None
+        active = self.backend.call("getblockhash", [height])
+        if active.get("error") or not isinstance(active.get("result"), str):
+            return None
+        if active["result"].lower() != blockhash.lower():
+            return -1
+        tip = self.backend.call("getblockcount").get("result")
+        return tip - height + 1 if isinstance(tip, int) and tip >= height else None
 
     def rpc_getblock(self, params: list[Any]) -> dict[str, Any]:
         if not params:
@@ -747,13 +783,10 @@ class Compat:
         else:
             bits_int = struct.unpack_from("<I", raw, 72)[0]
             bits_hex = f"{bits_int:08x}"
-        tip = self.backend.call("getblockcount").get("result")
-        confirmations = None
-        if isinstance(tip, int) and isinstance(height, int):
-            confirmations = tip - height + 1
+        confirmations = self._confirmations(blockhash, height)
         nxt = None
-        if isinstance(height, int):
-            nxt = self.index.hash_at(height + 1)
+        if isinstance(confirmations, int) and confirmations > 1:
+            nxt = self.backend.call("getblockhash", [height + 1]).get("result")
         obj: dict[str, Any] = {
             "hash": blockhash,
             "confirmations": confirmations,
@@ -877,10 +910,7 @@ class Compat:
             return self._ok(raw.hex())
         header = self.backend.call("getblockheader", [blockhash]).get("result") or {}
         height = header.get("height")
-        tip = self.backend.call("getblockcount").get("result")
-        confirmations = None
-        if isinstance(tip, int) and isinstance(height, int):
-            confirmations = tip - height + 1
+        confirmations = self._confirmations(blockhash, height)
         obj = self._tx_verbose(raw, txid, blockhash, height, confirmations)
         obj["blocktime"] = header.get("time")
         obj["time"] = header.get("time")
@@ -893,9 +923,6 @@ class Compat:
         t = light["result"]
         job_id = t.get("job_id")
         prev = t.get("previousblockhash")
-        # Prefer the indexed tip when kth's RPC tip is stale.
-        if self.index.tip_hash != ZERO_HASH:
-            prev = self.index.tip_hash
         if isinstance(job_id, str) and isinstance(prev, str):
             with self._job_lock:
                 self.jobs[prev.lower()] = job_id
@@ -911,21 +938,6 @@ class Compat:
         bits = t.get("bits")
         target = t.get("target")
         height = t.get("height")
-        if isinstance(prev, str):
-            hdr = self.backend.call("getblockheader", [prev]).get("result") or {}
-            prev_bits = hdr.get("bits")
-            if (
-                isinstance(prev_bits, str)
-                and bits in (None, "1d00ffff", "1D00FFFF")
-                and prev_bits.lower() != "1d00ffff"
-            ):
-                bits = prev_bits
-                try:
-                    target = f"{bits_to_target(int(prev_bits, 16)):064x}"
-                except ValueError:
-                    pass
-            if self.index.tip_height >= 0:
-                height = self.index.tip_height + 1
         gbt = {
             "capabilities": ["proposal"],
             "version": t.get("version"),
@@ -1131,6 +1143,8 @@ def main() -> int:
     ap.add_argument("--store", default="/data/store.json")
     ap.add_argument("--user", default="")
     ap.add_argument("--password", default="")
+    ap.add_argument("--binary", default="/usr/local/bin/kth")
+    ap.add_argument("--debug-log", default="/data/debug.log")
     args = ap.parse_args()
 
     cfg = parse_ini(Path(args.config))
@@ -1162,7 +1176,7 @@ def main() -> int:
     index.rebuild()
     index.start_watcher()
     backend = Knuth(args.backend if args.backend.endswith("/") else args.backend + "/", user, password)
-    compat = Compat(backend, index)
+    compat = Compat(backend, index, Path(args.debug_log), node_version(args.binary))
 
     class Server(socketserver.ThreadingMixIn, socketserver.TCPServer):
         allow_reuse_address = True

@@ -45,6 +45,14 @@
 | **Architectures** | Native `x86_64`; `aarch64` and `riscv64` use StartOS emulation of that image (`emulateMissing`). They are not native ARM or RISC-V builds. |
 | **Command** | `kth -c /data/kth.cfg --init_run --network <name>` |
 
+The node build follows the RPC-enabled recipe merged in
+[k-nuth/docker-images#7](https://github.com/k-nuth/docker-images/pull/7), commit
+`54a66910d7acda68766899a75cbb0304d617cb0a`, with its pinned GCC toolchain and
+`rpc=True` / `tests=False` Conan options. The package adds runtime utilities and
+the compatibility proxy; it does not patch the Knuth node. Official GHCR pulls
+currently return an authorization error, so packaging retains the source build.
+The SDK is pinned to `@start9labs/start-sdk` 3.1.1.
+
 ---
 
 ## 2. Volume and Data Layout
@@ -74,8 +82,15 @@
 
 1. Seed `store.json` + `kth.cfg` (mainnet, RPC off, IPC/UTXOZ on, generated RPC creds).
 2. Launch `kth -c /data/kth.cfg --init_run --network mainnet`.
-3. Health: chaindir liveness when RPC is off; RPC + sync checks when RPC is on.
+3. Health: process liveness when RPC is off; native RPC + sync checks when RPC is on.
 4. Enable JSON-RPC in Node Settings for mining pools / Fulcrum / Explorer backends.
+
+**Upgrading from 1.3.x to 1.4.0 requires fresh chain data.** The UTXO-Z database
+format is incompatible. Stop Knuth and run **Rebuild Blockchain Database** for
+the active network before starting 1.4.0, then allow a full download and validation.
+The action preserves `kth.cfg`, network settings, and RPC credentials. Repeat the
+rebuild before using any other network that still has an older database. A fresh
+installation starts with an empty database and does not need this action.
 
 ---
 
@@ -142,12 +157,18 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 | Check | When | Method |
 |---|---|---|
 | **RPC** (daemon ready) | Always | `getblockchaininfo` when JSON-RPC is on; otherwise the `kth` process |
-| **Blockchain Sync** | Always | Sidecar `getblockchaininfo` (lifts stale kth `blocks` to the blk*.dat tip). A &lt;0.1% header gap at the tip is **Synced**, not `Syncing 100%`. With no peers, or a newest block more than 3 hours old (24 hours on scalenet, never on regtest), it stays loading instead of **Synced**, because a node cut off from the chain still finds its tip at the top of its own headers. |
-| **Peer Connections** | Always | Knuth `Peers: n/m` status log (no `getpeerinfo` in v1.3.0) |
+| **Blockchain Sync** | Always | Native `getblockchaininfo` validated height/hash; any gap behind headers stays loading. On public networks, a current positive peer count and readable recent tip are also required. A tip older than 3 hours (24 hours on scalenet) stays loading. Regtest has no peer or tip-age requirement. With RPC off or unreadable, sync is unverifiable and stays loading. |
+| **Peer Connections** | Always | Knuth `Peers: n/m` status log, accepted only when its timestamp is less than 2 minutes old; missing or stale status stays loading. |
 | **Tor** | Always | Optional — listed as a dependency; health is disabled until Tor routing is turned on |
 | **I2P** | Always | Disabled (same as BCHN/Flowee until implemented) |
 | **Clearnet** | Always | Outbound unless a public address is published |
 | **UTXO-Z Storage** / **IPC / C-API** | Always | Knuth-specific capability rows |
+
+The compatibility proxy preserves the native validated chain tip; block files
+cannot raise its reported height. Its network-info fallback uses the installed
+binary version and current peer log, and returns an error when those facts are
+unavailable. The stored `fullySynced` flag records a successful check and is not
+proof of current connectivity or synchronization.
 
 ---
 
@@ -167,7 +188,7 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 | `--network` | from store | v1.3.0 network select |
 | `db.db_mode` | `full` | indexed; required for Fulcrum/Explorer |
 | `rpc.enabled` | false | opt-in; credentials pre-generated |
-| `rpc.bind` | `0.0.0.0` | reachable from other containers |
+| `rpc.bind` | `127.0.0.1` | native RPC stays internal on 19332; the compatibility proxy exposes the public per-network RPC port |
 | `net.hosts_file` | under `/data` | kth defaults to CWD `/` |
 | IPC / UTXOZ | true | capability flags for dependents |
 
@@ -175,17 +196,19 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 
 ## 12. Limitations and Differences
 
-1. **Built from source.** The `Dockerfile` compiles the pinned upstream release with RPC enabled. The upstream Docker build fix has merged, but adopting an official image also requires public pull access and package validation. The updater checks the image for the pinned release before switching to the wrapper in `scripts/Dockerfile.upstream`. Switching image sources does not remove the RPC compatibility proxy or establish native RPC compatibility with dependent applications.
-2. **No `initialblockdownload` / `verificationprogress`** — sync health uses Knuth's coordinator log (RPC `getblockchaininfo.blocks` is often 0 at the tip).
+1. **Built from source.** The `Dockerfile` builds the pinned release using the merged upstream recipe. Release checks try the official image first and build the package image when it is unavailable. Packaging itself retains the source Dockerfile. `scripts/use-upstream-image.sh` and `scripts/Dockerfile.upstream` are legacy manual helpers, not part of the daily workflow; there is no automatic wrapper switch.
+2. **Synchronization requires JSON-RPC.** Native validated height/hash, fresh peer status, and tip time determine health. Raw block files and old log heights do not establish validation progress.
 3. **gRPC not exposed** in this package.
-4. Tor proxy passthrough to `kth` is opt-in; verify after enabling.
-5. **RPC compatibility sidecar** — kth 1.3.0 `fetch_block()` is a stub after the LMDB→`blk*.dat` move (`object does not exist` for every hash). The package runs `scripts/rpc_compat.py` on the public RPC port and leaves kth on `127.0.0.1:19332`. Ready probes kth on that internal port so the sidecar can start. The sidecar also implements `getnetworkinfo`, classic `getblocktemplate` (from `getblocktemplatelight`), `submitblock`→`submitblocklight`, and cashaddr `validateaddress`. JSON-RPC bodies end with a trailing LF so ckpool/EloPool (`read_socket_line`) does not hang 20s after `HTTP/1.1 200 OK`.
+4. The Tor toggle declares the optional dependency but does not configure outbound SOCKS routing; outbound peers use clearnet.
+5. **RPC compatibility sidecar** — the pinned release still has native RPC gaps. The package runs `scripts/rpc_compat.py` on the public RPC port and leaves kth on `127.0.0.1:19332`. It serves block/transaction data from block files and adapts classic mining methods to `getblocktemplatelight` / `submitblocklight`. JSON-RPC bodies end with a trailing LF for line-oriented pool clients. These adapters do not establish tested compatibility with every miner, Fulcrum, or explorer; dependent-service integration must be exercised on a running StartOS installation.
+6. **Database compatibility.** Knuth 1.4.0 cannot reuse the older UTXO-Z database. Rebuild before starting it; automatic version builds do not make future database formats compatible.
 
 ---
 
 ## 13. What Is Unchanged from Upstream
 
 - Consensus / P2P protocol from `k-nuth/kth`
+- Transaction relay and size policy from the pinned upstream release; this package adds no size cap or consensus rule
 - Config key names and `db_mode` values from v1.3.0
 - IPC/C-API and UTXOZ behavior
 
@@ -195,7 +218,26 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 
 See [CONTRIBUTING.md](CONTRIBUTING.md)
 
-`check-upstream.yml` looks for a new Knuth release on `k-nuth/kth` daily. When one appears, `scripts/auto-bump.sh` sets `ARG KNUTH_VERSION` in the `Dockerfile`, sets `startos/versions/current.ts` to `<upstream>:0`, resets `ALLOW_DOWNGRADE` to `false`, commits the bump straight to `master`, and dispatches Tag and Release, which builds and publishes the new version. Package-only fixes bump the revision after the colon by hand.
+`check-upstream.yml` checks the latest stable `k-nuth/kth` release daily on
+`master`. Before editing pins, `scripts/auto-bump.sh` checks the requested binary
+version and starts an isolated regtest JSON-RPC smoke test. It tries the official
+image first and builds from the package's upstream recipe if the image cannot be
+pulled. A failed check leaves the existing pins intact. Older releases never
+downgrade the package.
+
+After validation, the updater sets `ARG KNUTH_VERSION` and
+`startos/versions/current.ts` to the new upstream release at revision `:0`, resets
+`ALLOW_DOWNGRADE` to `false`, commits to `master`, and explicitly dispatches Tag
+and Release. A later daily run retries a missing package release. Tag and Release
+checks the binary/RPC again, builds the signed packages, and publishes the GitHub
+release without moving an existing tag to another commit. Package-only revisions
+remain a maintainer decision. The schedule uses the workflow on `master`; PR
+changes do not activate it before merge.
+
+For a sideload artifact from a branch, run **Actions → Build → Run workflow** and
+select the branch and target (`x86`, `arm`, `riscv`, or `all`). The manual job also
+runs for draft PR branches and uploads `.s9pk` files with `SHA256SUMS`; it does not
+publish a release. A successful package build is not live sync or mining proof.
 
 ---
 
