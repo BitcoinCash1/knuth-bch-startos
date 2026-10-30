@@ -12,13 +12,46 @@ permissions:
   attestations: write
   packages: read
 
+# A dispatch that arrives while a release is building waits for it instead of
+# cancelling it; the queued run then finds the release and stops early.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
-  release:
+  # Pushes that do not change the package version (docs, CI) and repeated
+  # dispatches from the daily upstream check must not rebuild or fail.
+  check:
     if: github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    outputs:
+      needed: ${{ steps.release.outputs.needed }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check for an existing release of this version
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PACKAGE_VERSION=$(sed -nE "s/^[[:space:]]*version: '([^']+)'.*/\1/p" startos/versions/current.ts)
+          [ -n "$PACKAGE_VERSION" ]
+          TAG="v${PACKAGE_VERSION/:/.}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::notice::Release $TAG already exists; nothing to build. Bump the package revision to publish a change."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+        shell: bash
+
+  release:
+    needs: check
+    if: needs.check.outputs.needed == 'true'
     runs-on: ubuntu-latest
     # A registry outage can require the pinned upstream source build.
     timeout-minutes: 180
@@ -30,8 +63,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Installs the newest start-cli. The SDK 3 manifest marks the x86_64-only
+      # image `emulateMissing`; start-cli 0.4.0-beta.9 (pinned by the older
+      # start9labs/shared-workflows action) cannot pack it for aarch64/riscv64.
       - name: Setup build environment
-        uses: start9labs/shared-workflows/.github/actions/setup-build-env@master
+        uses: Start9Labs/start-technologies/.github/actions/setup-build-env@master
 
       - name: Checkout repository
         uses: actions/checkout@v7

@@ -229,10 +229,14 @@ After validation, the updater sets `ARG KNUTH_VERSION` and
 `startos/versions/current.ts` to the new upstream release at revision `:0`, resets
 `ALLOW_DOWNGRADE` to `false`, commits to `master`, and explicitly dispatches Tag
 and Release. A later daily run retries a missing package release. Tag and Release
-checks the binary/RPC again, builds the signed packages, and publishes the GitHub
-release without moving an existing tag to another commit. Package-only revisions
-remain a maintainer decision. The schedule uses the workflow on `master`; PR
-changes do not activate it before merge.
+checks the binary/RPC again, builds the signed packages with the newest
+`start-cli` (installed by `Start9Labs/start-technologies`' build environment), and
+publishes the GitHub release without moving an existing tag to another commit. A
+push or dispatch whose version already has a release ends without building, so
+docs and CI changes on `master` do not fail it, and a dispatch that arrives during
+a build waits instead of cancelling it. Package-only revisions remain a maintainer
+decision. The schedule uses the workflow on `master`; PR changes do not activate
+it before merge.
 
 For a sideload artifact from a branch, run **Actions → Build → Run workflow** and
 select the branch and target (`x86`, `arm`, `riscv`, or `all`). The manual job also
