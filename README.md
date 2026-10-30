@@ -85,12 +85,13 @@ The SDK is pinned to `@start9labs/start-sdk` 3.1.1.
 3. Health: process liveness when RPC is off; native RPC + sync checks when RPC is on.
 4. Enable JSON-RPC in Node Settings for mining pools / Fulcrum / Explorer backends.
 
-**Upgrading from 1.3.x to 1.4.0 requires fresh chain data.** The UTXO-Z database
-format is incompatible. Stop Knuth and run **Rebuild Blockchain Database** for
-the active network before starting 1.4.0, then allow a full download and validation.
-The action preserves `kth.cfg`, network settings, and RPC credentials. Repeat the
-rebuild before using any other network that still has an older database. A fresh
-installation starts with an empty database and does not need this action.
+**Upgrading from 1.3.x to 1.4.0 or later requires fresh chain data.** The UTXO-Z
+database format changed in 1.4.0. Stop Knuth and run **Rebuild Blockchain
+Database** for the active network before starting the new version, then allow a
+full download and validation. The action preserves `kth.cfg`, network settings,
+and RPC credentials. Repeat the rebuild before using any other network that still
+has a 1.3.x database. A 1.4.0 database is reused by 1.5.0 without a rebuild. A
+fresh installation starts with an empty database and does not need this action.
 
 ---
 
@@ -201,7 +202,7 @@ proof of current connectivity or synchronization.
 3. **gRPC not exposed** in this package.
 4. The Tor toggle declares the optional dependency but does not configure outbound SOCKS routing; outbound peers use clearnet.
 5. **RPC compatibility sidecar** — the pinned release still has native RPC gaps. The package runs `scripts/rpc_compat.py` on the public RPC port and leaves kth on `127.0.0.1:19332`. It serves block/transaction data from block files and adapts classic mining methods to `getblocktemplatelight` / `submitblocklight`. JSON-RPC bodies end with a trailing LF for line-oriented pool clients. These adapters do not establish tested compatibility with every miner, Fulcrum, or explorer; dependent-service integration must be exercised on a running StartOS installation.
-6. **Database compatibility.** Knuth 1.4.0 cannot reuse the older UTXO-Z database. Rebuild before starting it; automatic version builds do not make future database formats compatible.
+6. **Database compatibility.** Knuth 1.4.0 and later cannot reuse a 1.3.x UTXO-Z database. Rebuild before starting them; automatic version builds do not make future database formats compatible.
 
 ---
 

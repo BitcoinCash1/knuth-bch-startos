@@ -12,11 +12,11 @@
 ARG TOOLCHAIN=kthnode/gcc15-ubuntu24.04@sha256:4988fdeb3654c2b5ea591ffa4454f67e1a631549449c62e35060ba69da79eb67
 
 # The official gcc15 toolchain image is linux/amd64 only. Packing aarch64 and
-# riscv64 s9pks reuses this image; StartOS runs it under qemu (emulateMissingAs).
+# riscv64 s9pks reuses this image; StartOS runs it under qemu (emulateMissing).
 FROM --platform=linux/amd64 ${TOOLCHAIN} AS kth-build
 
 # kth release version WITHOUT the leading "v" (conan wants 1.3.0, not v1.3.0).
-ARG KNUTH_VERSION=1.4.0
+ARG KNUTH_VERSION=1.5.0
 ARG CURRENCY=BCH
 
 # kthbuild is required to load the kth conan recipe.

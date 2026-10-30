@@ -23,20 +23,22 @@ what is specific to running it on StartOS once it is installed.
 2. Watch the **Dashboard** health checks — the same rows as BCHN / BCHD / Flowee: **RPC**, **Blockchain Sync** (percent), **Peer Connections**, **Tor** (optional), **I2P**, **Clearnet**.
 3. When you need RPC (pools, Fulcrum, Explorer): **Config → Node Settings → JSON-RPC Server**, then **Actions → RPC Credentials**.
 
-## Moving to Knuth 1.4.0
+## Moving from Knuth 1.3.x
 
-Knuth 1.4.0 uses a different UTXO-Z database format and needs a fresh blockchain
-database. For an existing installation:
+Knuth 1.4.0 changed the UTXO-Z database format, so 1.4.0 and later need a fresh
+blockchain database when you come from 1.3.x. For an existing installation:
 
 1. Stop Knuth.
 2. Run **Actions → Rebuild Blockchain Database** for the active network.
-3. Install or sideload the 1.4.0 package, then start Knuth and let it download and
+3. Install or sideload the new package, then start Knuth and let it download and
    validate the chain again.
 
 The rebuild deletes chain data for the selected network and preserves your
 network settings and RPC credentials. Repeat it before using another network
-that still has a database from an older release. A fresh installation already has
-an empty database. Keep the old chain database out of restores into 1.4.0.
+that still has a 1.3.x database. A fresh installation already has an empty
+database. Keep a 1.3.x chain database out of restores into 1.4.0 or later.
+
+Coming from 1.4.0, Knuth 1.5.0 reuses the existing database; no rebuild is needed.
 
 To use Chipnet, select **Config → Network → chipnet** and enable JSON-RPC so the
 dashboard can verify synchronization. Native x86_64 execution is available;
