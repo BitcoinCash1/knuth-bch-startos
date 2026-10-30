@@ -52,6 +52,11 @@ jobs:
           VERSION=$(sed -nE 's/^ARG KNUTH_VERSION=(.*)$/\1/p' Dockerfile)
           bash scripts/check-upstream-image.sh "$VERSION"
         shell: bash
+      - name: Mine through the RPC proxy on regtest, as P2Pool does
+        run: |
+          VERSION=$(sed -nE 's/^ARG KNUTH_VERSION=(.*)$/\1/p' Dockerfile)
+          bash scripts/check-p2pool-rpc.sh "$VERSION"
+        shell: bash
       - name: Build sideload package
         env:
           BUILD_TARGET: ${{ inputs.target }}
