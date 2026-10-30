@@ -12,12 +12,25 @@ leading `v` (conan wants `1.3.0`, not `v1.3.0`).
 ## Applying the bump
 
 `check-upstream.yml` does this daily: it commits the bump to `master` and dispatches
-Tag and Release. By hand, the steps are the same:
+Tag and Release. `scripts/auto-bump.sh <tag>` validates the tag and rewrites the
+Dockerfile pin and package version together before committing. A same-upstream
+tag preserves the current package revision. The parser handles concatenated
+release-note strings and escaped quotes; an unexpected file layout stops the
+update before either file is changed.
+
+Run its regression checks without creating commits or publishing:
+
+```bash
+python3 -B -m unittest discover -s scripts -p 'test_update_version.py'
+```
+
+For a reviewed manual bump, check the following:
 
 1. Set `ARG KNUTH_VERSION=<new version>` in the `Dockerfile`.
-2. Set `version` in `startos/versions/current.ts` to `<upstream>:0` and rewrite
-   `releaseNotes` for all five locales.
+2. Set `version` in `startos/versions/current.ts` to `<upstream>:0` and review
+   `releaseNotes`. Keep release notes a plain string, as the release workflow
+   reads them with `jq -r`.
 3. Check the upstream release notes for renamed config keys or values and update
    `startos/fileModels/knuth.conf.ts`; kth ignores unknown keys silently.
-4. Update version references in `README.md` and `instructions.md`.
+4. Review `README.md` and `instructions.md` for changed behavior.
 5. Rebuild (`make x86`) and install. kth compiles from source, so the build is long.

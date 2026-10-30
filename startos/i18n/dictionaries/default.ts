@@ -198,6 +198,9 @@ const dict = {
   // main.ts (sync health when cut off from the chain)
   'Behind the network — newest block ${blocks} is ${age} old (${netLabel})': 179,
   'No peers connected — block ${blocks} may not be the tip (${netLabel})': 180,
+  'Unable to verify synchronization — enable JSON-RPC (${netLabel})': 181,
+  'Waiting for current peer status (${netLabel})': 182,
+  'Waiting for a readable validated block tip (${netLabel})': 183,
 } as const
 
 /**

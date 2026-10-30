@@ -18,11 +18,9 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.ref == 'refs/heads/master' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
-    # kth is compiled from source in the package Dockerfile (see Dockerfile:
-    # the official image ships without the rpc conan option). That takes ~25 min
-    # on 16 cores, so a 2-core hosted runner needs well beyond the old 30.
+    # A registry outage can require the pinned upstream source build.
     timeout-minutes: 180
     steps:
       - name: Log in to GHCR
@@ -40,18 +38,21 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Find or create developer signing key
+      - name: Load the package signing key
+        env:
+          DEV_KEY: ${{ secrets.DEV_KEY }}
         run: |
-          if [ -n "${{ secrets.DEV_KEY }}" ]; then
-            mkdir -p ~/.startos
-            printf '%s' "${{ secrets.DEV_KEY }}" > ~/.startos/developer.key.pem
-          else
-            start-cli init-key
-          fi
+          test -n "$DEV_KEY" || { echo "DEV_KEY must contain the stable package signing key" >&2; exit 1; }
+          start-cli init-key
+          mkdir -p .startos
+          umask 077
+          printf '%s' "$DEV_KEY" > .startos/build.key.pem
         shell: bash
 
-      - name: Initialize packaging workspace
-        run: start-cli s9pk init-workspace 2>/dev/null || true
+      - name: Validate upstream binary and RPC
+        run: |
+          VERSION=$(sed -nE 's/^ARG KNUTH_VERSION=(.*)$/\1/p' Dockerfile)
+          bash scripts/check-upstream-image.sh "$VERSION"
         shell: bash
 
       - name: Install dependencies
@@ -91,10 +92,26 @@ jobs:
           echo "vtag=${VERSION_TAG}" >> "$GITHUB_OUTPUT"
         shell: bash
 
-      - name: Move release tags to current commit
+      - name: Create immutable release tag
         run: |
-          git tag -f "${{ steps.meta.outputs.vtag }}"
-          git push origin -f "${{ steps.meta.outputs.vtag }}"
+          TAG="${{ steps.meta.outputs.vtag }}"
+          EXISTING=$(git ls-remote origin "refs/tags/$TAG" | cut -f1)
+          if [ -n "$EXISTING" ]; then
+            if [ "$EXISTING" != "$(git rev-parse HEAD)" ]; then
+              echo "Release tag $TAG points at another commit; increase the packaging revision" >&2
+              exit 1
+            fi
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              echo "Release $TAG already exists; increase the packaging revision" >&2
+              exit 1
+            fi
+            echo "Completing the unpublished release for the existing tag"
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish versioned release
         uses: softprops/action-gh-release@v3

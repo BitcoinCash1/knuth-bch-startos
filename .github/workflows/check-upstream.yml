@@ -9,43 +9,44 @@ permissions:
   contents: write
   actions: write
 
+concurrency:
+  group: upstream-release-update
+  cancel-in-progress: false
+
 jobs:
   check:
+    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Until ghcr.io/k-nuth/kth ships with JSON-RPC (k-nuth/docker-images#7) the
-      # Dockerfile compiles kth itself. The moment it does, switch to it.
-      - name: Switch to the official image once it ships JSON-RPC
-        id: image
-        run: bash scripts/use-upstream-image.sh
-        shell: bash
-
-      - name: Release the switch
-        if: steps.image.outputs.switched == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # GITHUB_TOKEN pushes do not start Tag and Release.
-        run: gh workflow run tagAndRelease.yml
-        shell: bash
-
       - name: Check for new upstream Knuth release
+        id: upstream
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          LATEST=$(gh release view --repo k-nuth/kth --json tagName -q '.tagName' 2>/dev/null || echo "")
-          if [ -z "$LATEST" ]; then echo "Could not fetch upstream version"; exit 0; fi
-
-          CURRENT=$(grep -E '^ARG KNUTH_VERSION=' Dockerfile | cut -d= -f2)
-          if [ "${LATEST#v}" = "$CURRENT" ]; then echo "Already at $LATEST — no update"; exit 0; fi
-
-          echo "Updating $CURRENT -> $LATEST"
+          # GitHub's latest release endpoint excludes draft/prerelease tags.
+          LATEST=$(gh api repos/k-nuth/kth/releases/latest --jq '.tag_name')
           bash scripts/auto-bump.sh "$LATEST"
-          # GITHUB_TOKEN pushes do not start Tag and Release.
-          gh workflow run tagAndRelease.yml
+          # Retry a missed/failed release dispatch even if the pins were already
+          # committed by the preceding run.
+          PACKAGE_VERSION=$(sed -nE "s/^[[:space:]]*version: '([^']+)'.*/\1/p" startos/versions/current.ts)
+          [ -n "$PACKAGE_VERSION" ]
+          PACKAGE_TAG="v${PACKAGE_VERSION/:/.}"
+          if ! gh release view "$PACKAGE_TAG" >/dev/null 2>&1; then
+            echo "release_required=true" >> "$GITHUB_OUTPUT"
+          fi
+        shell: bash
+
+      # GITHUB_TOKEN pushes do not start another workflow automatically.
+      - name: Build and release the validated update
+        if: steps.upstream.outputs.updated == 'true' || steps.upstream.outputs.release_required == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run tagAndRelease.yml --ref master
         shell: bash

@@ -41,8 +41,8 @@ rm -rf "$WORK"
 echo "$IMAGE ships JSON-RPC — switching to the official image"
 sed "s|^ARG KNUTH_VERSION=.*|ARG KNUTH_VERSION=${VERSION}|" scripts/Dockerfile.upstream > Dockerfile
 
-git config user.name "github-actions[bot]"
-git config user.email "github-actions[bot]@users.noreply.github.com"
+git config user.name "CyberAshven"
+git config user.email "130158492+CyberAshven@users.noreply.github.com"
 git add Dockerfile
 git commit -m "feat: use the official Knuth image now that it ships JSON-RPC (${VERSION})"
 

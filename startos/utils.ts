@@ -1,3 +1,7 @@
+import { randomBytes } from 'node:crypto'
+
+export const generateRpcPassword = (): string => randomBytes(32).toString('hex')
+
 export const peerInterfaceId = 'peer'
 export const rpcInterfaceId = 'rpc'
 export const rootDir = '/data'
@@ -16,12 +20,12 @@ export type Network = (typeof NETWORKS)[number]
 
 // Field order matches BCHN utils (rpc, peer).
 export const networkPorts: Record<Network, { rpc: number; peer: number }> = {
-  mainnet:  { rpc: 8332,  peer: 8333  },
+  mainnet: { rpc: 8332, peer: 8333 },
   testnet3: { rpc: 18332, peer: 18333 },
   testnet4: { rpc: 28332, peer: 28333 },
   scalenet: { rpc: 38332, peer: 38333 },
-  chipnet:  { rpc: 48332, peer: 48333 },
-  regtest:  { rpc: 18443, peer: 18444 },
+  chipnet: { rpc: 48332, peer: 48333 },
+  regtest: { rpc: 18443, peer: 18444 },
 }
 
 // kth v1.3.0 selects the network with a valued option (`--network <name>` / `-n`),
@@ -30,12 +34,12 @@ export const networkPorts: Record<Network, { rpc: number; peer: number }> = {
 // `--network chipnet` logs "Network: Chipnet" and seeds chipnet.imaginary.cash:48333,
 // while `--chipnet` seeds mainnet on :8333.
 export const networkName: Record<Network, string> = {
-  mainnet:  'mainnet',
+  mainnet: 'mainnet',
   testnet3: 'testnet',
   testnet4: 'testnet4',
   scalenet: 'scalenet',
-  chipnet:  'chipnet',
-  regtest:  'regtest',
+  chipnet: 'chipnet',
+  regtest: 'regtest',
 }
 
 // Same layout as BCHN/BCHD/Flowee on StartOS:

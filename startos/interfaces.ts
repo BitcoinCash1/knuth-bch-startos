@@ -4,7 +4,13 @@ import { storeJson } from './fileModels/store.json'
 import { i18n } from './i18n'
 
 export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
-  const store = await storeJson.read().once()
+  const store = await storeJson
+    .read((s) => ({
+      network: s.network,
+      rpcEnabled: s.rpcEnabled,
+      rpcUser: s.rpcUser,
+    }))
+    .const(effects)
   const network: Network = store?.network ?? 'mainnet'
   const { peer: peerPort, rpc: rpcPort } = networkPorts[network]
   const rpcEnabled = store?.rpcEnabled ?? false
@@ -44,8 +50,9 @@ export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
     const rpc = sdk.createInterface(effects, {
       name: i18n('JSON-RPC Interface'),
       id: rpcInterfaceId,
-      description:
-        i18n('Bitcoin-Cash-compatible JSON-RPC for mining pools and other services'),
+      description: i18n(
+        'Bitcoin-Cash-compatible JSON-RPC for mining pools and other services',
+      ),
       type: 'api',
       masked: true,
       schemeOverride: { ssl: null, noSsl: null },

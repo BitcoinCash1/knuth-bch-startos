@@ -183,6 +183,9 @@ export default {
     178: 'Puerto JSON-RPC de esta red',
     179: 'Por detrás de la red: el bloque más reciente, ${blocks}, tiene ${age} de antigüedad (${netLabel})',
     180: 'Sin pares conectados: puede que el bloque ${blocks} no sea la punta de la cadena (${netLabel})',
+    181: 'No se puede verificar la sincronización: activa JSON-RPC (${netLabel})',
+    182: 'Esperando el estado actual de los pares (${netLabel})',
+    183: 'Esperando una punta de cadena validada que se pueda consultar (${netLabel})',
   },
   de_DE: {
     0: 'Knuth wird gestartet!',
@@ -366,6 +369,9 @@ export default {
     178: 'JSON-RPC-Port für dieses Netzwerk',
     179: 'Hinter dem Netzwerk – der neueste Block ${blocks} ist ${age} alt (${netLabel})',
     180: 'Keine Peers verbunden – Block ${blocks} ist möglicherweise nicht die Kettenspitze (${netLabel})',
+    181: 'Synchronisierung nicht prüfbar – JSON-RPC aktivieren (${netLabel})',
+    182: 'Warte auf den aktuellen Peer-Status (${netLabel})',
+    183: 'Warte auf eine lesbare validierte Kettenspitze (${netLabel})',
   },
   pl_PL: {
     0: 'Uruchamianie Knuth!',
@@ -549,6 +555,9 @@ export default {
     178: 'Port JSON-RPC dla tej sieci',
     179: 'Węzeł jest w tyle za siecią — najnowszy blok ${blocks} ma ${age} (${netLabel})',
     180: 'Brak połączonych węzłów — blok ${blocks} może nie być czubkiem łańcucha (${netLabel})',
+    181: 'Nie można sprawdzić synchronizacji — włącz JSON-RPC (${netLabel})',
+    182: 'Oczekiwanie na aktualny stan węzłów (${netLabel})',
+    183: 'Oczekiwanie na dostępny zweryfikowany szczyt łańcucha (${netLabel})',
   },
   fr_FR: {
     0: 'Démarrage de Knuth !',
@@ -732,5 +741,8 @@ export default {
     178: 'Port JSON-RPC pour ce réseau',
     179: 'En retard sur le réseau — le bloc le plus récent, ${blocks}, date de ${age} (${netLabel})',
     180: 'Aucun pair connecté — le bloc ${blocks} n’est peut-être pas le sommet de la chaîne (${netLabel})',
+    181: 'Synchronisation invérifiable — activez JSON-RPC (${netLabel})',
+    182: 'En attente de l’état actuel des pairs (${netLabel})',
+    183: 'En attente d’un sommet de chaîne validé et consultable (${netLabel})',
   },
 } satisfies Record<string, LangDict>

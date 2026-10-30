@@ -116,15 +116,13 @@ export const main = sdk.setupMain(async ({ effects }) => {
     throw lastErr
   }
 
-  // debug.log is huge and chatty. Pull only the sync/peer lines from the
-  // last 2 MiB — a raw `tail -n 400` is all handshake noise and misses
-  // "Fully synced" / "Peers:".
+  // Read a bounded tail because the debug log can be several gigabytes.
   async function debugLogSnippet(): Promise<string> {
     try {
       const res = await knuthSub.exec([
         'sh',
         '-c',
-        "tail -c 2000000 /data/debug.log 2>/dev/null | grep -E 'Fully synced at height|Stats: .* blocks at height|Peers:|Validation complete:|header_height=|block_height=' | tail -n 80 || true",
+        "tail -c 2000000 /data/debug.log 2>/dev/null | grep 'Peers:' | tail -n 10 || true",
       ])
       return String(res.stdout ?? '')
     } catch {
@@ -133,37 +131,20 @@ export const main = sdk.setupMain(async ({ effects }) => {
   }
 
   function parsePeerCount(log: string): number | null {
-    const matches = [...log.matchAll(/Peers:\s+(\d+)\s*\/\s*(\d+)/g)]
-    const last = matches.at(-1)
-    return last ? Number(last[1]) : null
-  }
-
-  function parseLogHeights(
-    log: string,
-  ): { blocks: number; headers: number } | null {
-    // Knuth's own coordinator is the source of truth. RPC getblockchaininfo
-    // often reports blocks=0 / genesis even after "Fully synced at height N".
-    const fully = [...log.matchAll(/Fully synced at height (\d+)/g)]
-    if (fully.length) {
-      const n = Number(fully.at(-1)![1])
-      return { blocks: n, headers: n }
+    const lines = log.trim().split('\n')
+    for (const line of lines.reverse()) {
+      const match = line.match(/Peers:\s+(\d+)\s*\/\s*\d+/)
+      if (!match) continue
+      const timestamp = line.match(
+        /^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d+)?)\]/,
+      )
+      if (!timestamp) return null
+      const age = Date.now() - Date.parse(timestamp[1].replace(' ', 'T') + 'Z')
+      return Number.isFinite(age) && age >= -60_000 && age < 120_000
+        ? Number(match[1])
+        : null
     }
-    const stats = [...log.matchAll(/Stats:\s+(\d+)\s+blocks at height (\d+)/g)]
-    if (stats.length) {
-      const m = stats.at(-1)!
-      return { blocks: Number(m[1]), headers: Number(m[2]) }
-    }
-    const totals = [...log.matchAll(/Validation complete:.*?total size (\d+)/g)]
-    const headerMs = [...log.matchAll(/header_height=(\d+)/g)]
-    const blockMs = [...log.matchAll(/block_height=(\d+)/g)]
-    const headers = totals.length
-      ? Number(totals.at(-1)![1])
-      : headerMs.length
-        ? Number(headerMs.at(-1)![1])
-        : 0
-    const blocks = blockMs.length ? Number(blockMs.at(-1)![1]) : 0
-    if (headers === 0 && blocks === 0) return null
-    return { headers, blocks }
+    return null
   }
 
   // A node cut off from the chain (no peers, every peer banned, or parked on a
@@ -196,23 +177,49 @@ export const main = sdk.setupMain(async ({ effects }) => {
     peers: number | null,
     tipHash?: unknown,
   ) {
+    if (network !== 'regtest' && peers === null) {
+      return {
+        message: i18n('Waiting for current peer status (${netLabel})', {
+          netLabel,
+        }),
+        result: 'loading' as const,
+      }
+    }
     if (network !== 'regtest' && peers === 0) {
       return {
-        message: i18n('No peers connected — block ${blocks} may not be the tip (${netLabel})', { blocks: String(blocks), netLabel }),
+        message: i18n(
+          'No peers connected — block ${blocks} may not be the tip (${netLabel})',
+          { blocks: String(blocks), netLabel },
+        ),
         result: 'loading' as const,
       }
     }
     if (staleTipSeconds !== null) {
       const age = await tipAgeSeconds(tipHash)
+      if (age === null) {
+        return {
+          message: i18n(
+            'Waiting for a readable validated block tip (${netLabel})',
+            { netLabel },
+          ),
+          result: 'loading' as const,
+        }
+      }
       if (age !== null && age > staleTipSeconds) {
         return {
-          message: i18n('Behind the network — newest block ${blocks} is ${age} old (${netLabel})', { blocks: String(blocks), age: formatAge(age), netLabel }),
+          message: i18n(
+            'Behind the network — newest block ${blocks} is ${age} old (${netLabel})',
+            { blocks: String(blocks), age: formatAge(age), netLabel },
+          ),
           result: 'loading' as const,
         }
       }
     }
     return {
-      message: i18n('Synced — block ${blocks} (${netLabel})', { blocks: String(blocks), netLabel }),
+      message: i18n('Synced — block ${blocks} (${netLabel})', {
+        blocks: String(blocks),
+        netLabel,
+      }),
       result: 'success' as const,
     }
   }
@@ -248,7 +255,10 @@ export const main = sdk.setupMain(async ({ effects }) => {
                   const body = JSON.parse(String(res.stdout))
                   if (body?.result) {
                     return {
-                      message: i18n('The Knuth RPC interface is ready (${netLabel})', { netLabel }),
+                      message: i18n(
+                        'The Knuth RPC interface is ready (${netLabel})',
+                        { netLabel },
+                      ),
                       result: 'success' as const,
                     }
                   }
@@ -270,7 +280,10 @@ export const main = sdk.setupMain(async ({ effects }) => {
 
             if (await nodeIsUp()) {
               return {
-                message: i18n('JSON-RPC is off — node is running (${netLabel})', { netLabel }),
+                message: i18n(
+                  'JSON-RPC is off — node is running (${netLabel})',
+                  { netLabel },
+                ),
                 result: 'success' as const,
               }
             }
@@ -328,7 +341,9 @@ export const main = sdk.setupMain(async ({ effects }) => {
               const code = String(res.stdout ?? '').trim()
               if (code === '401' || code === '200') {
                 return {
-                  message: i18n('Bitcoin-RPC compatibility sidecar is serving dependents'),
+                  message: i18n(
+                    'Bitcoin-RPC compatibility sidecar is serving dependents',
+                  ),
                   result: 'success' as const,
                 }
               }
@@ -348,85 +363,52 @@ export const main = sdk.setupMain(async ({ effects }) => {
           display: i18n('Blockchain Sync'),
           fn: async () => {
             const log = await debugLogSnippet()
-            const logHeights = parseLogHeights(log)
             const peers = parsePeerCount(log)
 
             if (rpcEnabled) {
               try {
-                // Sidecar first: kth's own `blocks` often lags `headers` by a
-                // few at the tip (e.g. 318811/318816 → "Syncing 100.00%").
-                let res = await rpcCall('getblockchaininfo', rpcPort)
-                if (res.exitCode !== 0 || !res.stdout) {
-                  res = await rpcCall('getblockchaininfo', internalRpcPort)
-                }
+                // In 1.4, blocks/hash describe the validated chain. Raw block
+                // files and header heights must never advance that result.
+                const res = await rpcCall('getblockchaininfo', internalRpcPort)
                 if (res.exitCode === 0 && res.stdout) {
                   const info = JSON.parse(String(res.stdout))?.result
                   if (info) {
-                    let blocks = Number(info.blocks ?? 0)
-                    let headers = Number(info.headers ?? 0)
-                    // Prefer the coordinator log when RPC is stuck at genesis.
-                    if (logHeights) {
-                      if (logHeights.blocks > blocks) blocks = logHeights.blocks
-                      if (logHeights.headers > headers)
-                        headers = logHeights.headers
-                    }
+                    const blocks = Number(info.blocks ?? 0)
+                    const headers = Number(info.headers ?? 0)
                     if (headers === 0) {
                       return {
-                        message: i18n('Connecting to ${netLabel} peers and fetching headers...', { netLabel }),
+                        message: i18n(
+                          'Connecting to ${netLabel} peers and fetching headers...',
+                          { netLabel },
+                        ),
                         result: 'loading' as const,
                       }
                     }
-                    const gap = headers - blocks
-                    // kth often sits 1–N blocks behind on the RPC `blocks`
-                    // field while fully caught up. A 0.1% gap at height
-                    // 300k is a handful of blocks, not IBD.
-                    const nearTip =
-                      blocks > 0 && gap >= 0 && gap / headers < 0.001
-                    if (blocks < headers && !nearTip) {
+                    if (blocks < headers) {
                       const pct = ((blocks / headers) * 100).toFixed(2)
                       return {
-                        message: i18n('Syncing blocks... ${pct}% (${netLabel})', { pct, netLabel }),
+                        message: i18n(
+                          'Syncing blocks... ${pct}% (${netLabel})',
+                          { pct, netLabel },
+                        ),
                         result: 'loading' as const,
                       }
                     }
-                    return syncedUnlessCutOff(
-                      Math.max(blocks, headers),
-                      peers,
-                      info.bestblockhash,
-                    )
+                    return syncedUnlessCutOff(blocks, peers, info.bestblockhash)
                   }
                 }
               } catch {
-                /* fall through to logs */
+                /* report that verification is unavailable */
               }
             }
 
-            const heights = logHeights
-            if (!heights || (heights.headers === 0 && heights.blocks === 0)) {
-              return {
-                message: i18n('Connecting to ${netLabel} peers and fetching headers...', { netLabel }),
-                result: 'loading' as const,
-              }
+            return {
+              message: i18n(
+                'Unable to verify synchronization — enable JSON-RPC (${netLabel})',
+                { netLabel },
+              ),
+              result: 'loading' as const,
             }
-            const gap = heights.headers - heights.blocks
-            const nearTip =
-              heights.blocks > 0 &&
-              gap >= 0 &&
-              gap / Math.max(heights.headers, 1) < 0.001
-            if (heights.blocks < heights.headers && !nearTip) {
-              const pct = (
-                (heights.blocks / Math.max(heights.headers, 1)) *
-                100
-              ).toFixed(2)
-              return {
-                message: i18n('Syncing blocks... ${pct}% (${netLabel})', { pct, netLabel }),
-                result: 'loading' as const,
-              }
-            }
-            return syncedUnlessCutOff(
-              Math.max(heights.blocks, heights.headers),
-              peers,
-            )
           },
         },
         requires: ['primary'],
@@ -451,21 +433,26 @@ export const main = sdk.setupMain(async ({ effects }) => {
             const count = parsePeerCount(await debugLogSnippet())
             if (count === null) {
               return {
-                message:
-                  i18n('No peers connected — node may be starting up or isolated'),
+                message: i18n(
+                  'No peers connected — node may be starting up or isolated',
+                ),
                 result: 'loading' as const,
               }
             }
             if (count === 0) {
               return {
-                message:
-                  i18n('No peers connected — node may be starting up or isolated'),
+                message: i18n(
+                  'No peers connected — node may be starting up or isolated',
+                ),
                 result: 'loading' as const,
               }
             }
             if (count < 3) {
               return {
-                message: i18n('Only ${count} peer(s) connected — network connectivity may be limited', { count: String(count) }),
+                message: i18n(
+                  'Only ${count} peer(s) connected — network connectivity may be limited',
+                  { count: String(count) },
+                ),
                 result: 'loading' as const,
               }
             }
@@ -501,7 +488,9 @@ export const main = sdk.setupMain(async ({ effects }) => {
             }
             return {
               result: 'success' as const,
-              message: i18n('Outbound only. Add an onion address to enable inbound.'),
+              message: i18n(
+                'Outbound only. Add an onion address to enable inbound.',
+              ),
             }
           },
         },
@@ -522,7 +511,9 @@ export const main = sdk.setupMain(async ({ effects }) => {
           display: i18n('Clearnet'),
           fn: () => ({
             result: 'success' as const,
-            message: i18n('Outbound only. Publish an IP address to enable inbound.'),
+            message: i18n(
+              'Outbound only. Publish an IP address to enable inbound.',
+            ),
           }),
         },
         requires: [],
@@ -549,16 +540,22 @@ export const main = sdk.setupMain(async ({ effects }) => {
               if (res.exitCode === 0)
                 return {
                   result: 'success' as const,
-                  message: i18n('UTXO-Z database active at ${dataDir}/utxoz', { dataDir }),
+                  message: i18n('UTXO-Z database active at ${dataDir}/utxoz', {
+                    dataDir,
+                  }),
                 }
               return {
                 result: 'loading' as const,
-                message: i18n('Waiting for the UTXO-Z database to be created...'),
+                message: i18n(
+                  'Waiting for the UTXO-Z database to be created...',
+                ),
               }
             } catch {
               return {
                 result: 'loading' as const,
-                message: i18n('Waiting for the UTXO-Z database to be created...'),
+                message: i18n(
+                  'Waiting for the UTXO-Z database to be created...',
+                ),
               }
             }
           },
@@ -572,13 +569,15 @@ export const main = sdk.setupMain(async ({ effects }) => {
             ipcEnabled
               ? {
                   result: 'success' as const,
-                  message:
-                    i18n('C-API capability advertised for dependent services (in-process binding, not a network port)'),
+                  message: i18n(
+                    'C-API capability advertised for dependent services (in-process binding, not a network port)',
+                  ),
                 }
               : {
                   result: 'disabled' as const,
-                  message:
-                    i18n('IPC / C-API capability is disabled in Node Settings'),
+                  message: i18n(
+                    'IPC / C-API capability is disabled in Node Settings',
+                  ),
                 },
         },
         requires: [],

@@ -1,29 +1,18 @@
 import { sdk } from './sdk'
 import { storeJson } from './fileModels/store.json'
+import { torDescription } from './manifest/i18n'
 
-// Tor is optional in the manifest (same as BCHN/BCHD/Flowee). StartOS only
-// lists dependencies that setupDependencies returns — returning {} hid the
-// Tor card on the VM even though the manifest marked it optional. Always
-// advertise it: exists (installed, not required to be running) until the
-// operator turns Tor Routing on, then require it running.
-export const setDependencies = sdk.setupDependencies(async ({ effects }) => {
-  const store = await storeJson.read().const(effects)
-  const torEnabled = store?.torEnabled ?? false
-
-  if (!torEnabled) {
-    return {
-      tor: {
-        kind: 'exists' as const,
-        versionRange: '>=0.4.9.5:0',
-      },
-    }
-  }
-
-  return {
-    tor: {
-      kind: 'running' as const,
-      versionRange: '>=0.4.9.5:0',
-      healthChecks: [] as string[],
-    },
-  }
+const tor = sdk.Dependency.optional('tor', {
+  description: torDescription,
+  metadata: {
+    title: 'Tor',
+    icon: 'https://raw.githubusercontent.com/Start9Labs/tor-startos/65faea17febc739d910e8c26ff4e61f6333487a8/icon.svg',
+  },
+  versionRange: '>=0.4.9.5:0',
+  kind: 'running',
+  healthChecks: [],
+  enabled: async ({ effects }) =>
+    (await storeJson.read((store) => store.torEnabled).const(effects)) ?? false,
 })
+
+export const dependencies = sdk.Dependencies.of().addDependency(tor)

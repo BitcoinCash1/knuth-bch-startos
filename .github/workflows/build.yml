@@ -2,6 +2,12 @@ name: Build
 
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: Package target for sideloading
+        type: choice
+        default: x86
+        options: [x86, arm, riscv, all]
   pull_request:
     paths-ignore: ['*.md']
     branches: ['master']
@@ -12,6 +18,55 @@ concurrency:
 
 jobs:
   build:
-    if: github.event.pull_request.draft == false
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
     uses: Start9Labs/start-technologies/.github/workflows/build.yml@master
     # No DEV_KEY — a PR build doesn't publish, so it doesn't need the signing key.
+
+  sideload:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Setup build environment
+        uses: Start9Labs/start-technologies/.github/actions/setup-build-env@master
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Provision signing and workspace keys
+        env:
+          DEV_KEY: ${{ secrets.DEV_KEY }}
+        run: |
+          test -n "$DEV_KEY" || { echo "DEV_KEY must contain the stable package signing key" >&2; exit 1; }
+          start-cli init-key
+          mkdir -p .startos
+          umask 077
+          printf '%s' "$DEV_KEY" > .startos/build.key.pem
+        shell: bash
+      - run: npm ci
+      - name: Validate upstream binary and RPC
+        run: |
+          VERSION=$(sed -nE 's/^ARG KNUTH_VERSION=(.*)$/\1/p' Dockerfile)
+          bash scripts/check-upstream-image.sh "$VERSION"
+        shell: bash
+      - name: Build sideload package
+        env:
+          BUILD_TARGET: ${{ inputs.target }}
+        run: |
+          case "$BUILD_TARGET" in x86|arm|riscv|all) ;; *) exit 1 ;; esac
+          make "$BUILD_TARGET"
+          sha256sum *.s9pk > SHA256SUMS
+        shell: bash
+      - name: Upload sideload package
+        uses: actions/upload-artifact@v7
+        with:
+          name: knuth-bch-sideload-${{ inputs.target }}
+          path: |
+            *.s9pk
+            SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

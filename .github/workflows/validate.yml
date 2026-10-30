@@ -1,0 +1,28 @@
+name: Validate package
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - run: node --test scripts/test_config_numbers.cjs
+      - run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - run: npm run build
