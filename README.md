@@ -48,9 +48,12 @@
 The node build follows the RPC-enabled recipe merged in
 [k-nuth/docker-images#7](https://github.com/k-nuth/docker-images/pull/7), commit
 `54a66910d7acda68766899a75cbb0304d617cb0a`, with its pinned GCC toolchain and
-`rpc=True` / `tests=False` Conan options. The package adds runtime utilities and
-the compatibility proxy; it does not patch the Knuth node. Official GHCR pulls
-currently return an authorization error, so packaging retains the source build.
+`rpc=True` / `tests=False` Conan options. The build stage upgrades Conan to the
+newest 2.x release, as kth's own CI does: the pinned toolchain ships Conan
+2.24.0, and kth 1.5.0 pulls `openssl/4.1.0`, whose recipe requires Conan 2.25 or
+later. The package adds runtime utilities and the compatibility proxy; it does
+not patch the Knuth node. Official GHCR pulls currently return an authorization
+error, so packaging retains the source build.
 The SDK is pinned to `@start9labs/start-sdk` 3.1.1.
 
 ---
@@ -85,12 +88,13 @@ The SDK is pinned to `@start9labs/start-sdk` 3.1.1.
 3. Health: process liveness when RPC is off; native RPC + sync checks when RPC is on.
 4. Enable JSON-RPC in Node Settings for mining pools / Fulcrum / Explorer backends.
 
-**Upgrading from 1.3.x to 1.4.0 requires fresh chain data.** The UTXO-Z database
-format is incompatible. Stop Knuth and run **Rebuild Blockchain Database** for
-the active network before starting 1.4.0, then allow a full download and validation.
-The action preserves `kth.cfg`, network settings, and RPC credentials. Repeat the
-rebuild before using any other network that still has an older database. A fresh
-installation starts with an empty database and does not need this action.
+**Upgrading from 1.3.x to 1.4.0 or later requires fresh chain data.** The UTXO-Z
+database format changed in 1.4.0. Stop Knuth and run **Rebuild Blockchain
+Database** for the active network before starting the new version, then allow a
+full download and validation. The action preserves `kth.cfg`, network settings,
+and RPC credentials. Repeat the rebuild before using any other network that still
+has a 1.3.x database. A 1.4.0 database is reused by 1.5.0 without a rebuild. A
+fresh installation starts with an empty database and does not need this action.
 
 ---
 
@@ -201,7 +205,7 @@ proof of current connectivity or synchronization.
 3. **gRPC not exposed** in this package.
 4. The Tor toggle declares the optional dependency but does not configure outbound SOCKS routing; outbound peers use clearnet.
 5. **RPC compatibility sidecar** — the pinned release still has native RPC gaps. The package runs `scripts/rpc_compat.py` on the public RPC port and leaves kth on `127.0.0.1:19332`. It serves block/transaction data from block files and adapts classic mining methods to `getblocktemplatelight` / `submitblocklight`. JSON-RPC bodies end with a trailing LF for line-oriented pool clients. These adapters do not establish tested compatibility with every miner, Fulcrum, or explorer; dependent-service integration must be exercised on a running StartOS installation.
-6. **Database compatibility.** Knuth 1.4.0 cannot reuse the older UTXO-Z database. Rebuild before starting it; automatic version builds do not make future database formats compatible.
+6. **Database compatibility.** Knuth 1.4.0 and later cannot reuse a 1.3.x UTXO-Z database. Rebuild before starting them; automatic version builds do not make future database formats compatible.
 
 ---
 
@@ -229,10 +233,14 @@ After validation, the updater sets `ARG KNUTH_VERSION` and
 `startos/versions/current.ts` to the new upstream release at revision `:0`, resets
 `ALLOW_DOWNGRADE` to `false`, commits to `master`, and explicitly dispatches Tag
 and Release. A later daily run retries a missing package release. Tag and Release
-checks the binary/RPC again, builds the signed packages, and publishes the GitHub
-release without moving an existing tag to another commit. Package-only revisions
-remain a maintainer decision. The schedule uses the workflow on `master`; PR
-changes do not activate it before merge.
+checks the binary/RPC again, builds the signed packages with the newest
+`start-cli` (installed by `Start9Labs/start-technologies`' build environment), and
+publishes the GitHub release without moving an existing tag to another commit. A
+push or dispatch whose version already has a release ends without building, so
+docs and CI changes on `master` do not fail it, and a dispatch that arrives during
+a build waits instead of cancelling it. Package-only revisions remain a maintainer
+decision. The schedule uses the workflow on `master`; PR changes do not activate
+it before merge.
 
 For a sideload artifact from a branch, run **Actions → Build → Run workflow** and
 select the branch and target (`x86`, `arm`, `riscv`, or `all`). The manual job also

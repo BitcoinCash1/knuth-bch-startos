@@ -4,7 +4,8 @@
 # GHCR image now includes RPC, but currently rejects pulls from this package.
 # Keep the upstream toolchain and Conan options here until that image is
 # accessible. Release checks prefer the official image and otherwise validate
-# this source build. No node patches are applied.
+# this source build. No node patches are applied. The one difference from that
+# recipe is the Conan upgrade below, without which it cannot build kth 1.5.0.
 #
 # Cross-compiled with pure Go-style static linkage is not applicable; kth is C++,
 # so this stage uses the project's own toolchain image to match the compile
@@ -12,15 +13,18 @@
 ARG TOOLCHAIN=kthnode/gcc15-ubuntu24.04@sha256:4988fdeb3654c2b5ea591ffa4454f67e1a631549449c62e35060ba69da79eb67
 
 # The official gcc15 toolchain image is linux/amd64 only. Packing aarch64 and
-# riscv64 s9pks reuses this image; StartOS runs it under qemu (emulateMissingAs).
+# riscv64 s9pks reuses this image; StartOS runs it under qemu (emulateMissing).
 FROM --platform=linux/amd64 ${TOOLCHAIN} AS kth-build
 
 # kth release version WITHOUT the leading "v" (conan wants 1.3.0, not v1.3.0).
-ARG KNUTH_VERSION=1.4.0
+ARG KNUTH_VERSION=1.5.0
 ARG CURRENCY=BCH
 
-# kthbuild is required to load the kth conan recipe.
-RUN pip install --no-cache-dir --upgrade "kthbuild>=4,<5"
+# kthbuild is required to load the kth conan recipe. Conan is upgraded the same
+# way kth's own CI does (ci_utils setup-conan: newest Conan 2): the pinned
+# toolchain ships Conan 2.24.0, and kth 1.5.0 needs openssl/4.1.0, whose
+# ConanCenter recipe requires Conan >= 2.25.
+RUN pip install --no-cache-dir --upgrade "conan>=2.25,<3" "kthbuild>=4,<5"
 
 # `console=True` is deliberately NOT passed: it builds the per-module demo
 # programs, and src/domain/console/main.cpp does not compile in v1.3.0. The node

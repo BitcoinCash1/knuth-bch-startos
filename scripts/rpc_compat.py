@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Bitcoin-RPC compatibility sidecar for Knuth v1.4.0.
+"""Bitcoin-RPC compatibility sidecar for Knuth v1.4.0 and v1.5.0.
 
 kth documents getblock/getrawtransaction, but fetch_block() is a stub
-after the LMDB→blk*.dat move (block_chain.cpp: "return not_found until we
-implement reading from flat files"). It also has no getnetworkinfo,
+after the LMDB→blk*.dat move (block_chain.cpp: "LMDB block storage removed -
+blocks now in flat files"; still so in v1.5.0, whose JSON-RPC sources are
+unchanged from v1.4.0). It also has no getnetworkinfo,
 getblocktemplate, or submitblock — which Fulcrum, BCH Explorer, ASICSeer and
 EloPool all need.
 
