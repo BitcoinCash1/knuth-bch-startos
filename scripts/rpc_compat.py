@@ -1606,7 +1606,7 @@ class Compat:
         template's time; one is kth's selection only when its hash is the
         job_id, so a wrong candidate is never served.
         """
-        job_id = template["job_id"]
+        job_id = template["job_id"].lower()
         if job_id == EMPTY_SELECTION_JOB_ID:
             return []
         height, cutoff = template["height"], template["mintime"] - 1
@@ -1678,7 +1678,7 @@ class Compat:
             if not isinstance(template.get(key), int):
                 raise TemplateUnavailable(-32603, f"Knuth's light template has no {key}")
         entries: dict[str, MempoolEntry] = {}
-        if template["job_id"] != EMPTY_SELECTION_JOB_ID:
+        if template["job_id"].lower() != EMPTY_SELECTION_JOB_ID:
             pool = self.backend.call("getrawmempool")
             mempool = pool.get("result")
             if pool.get("error") or not isinstance(mempool, list):
@@ -1801,7 +1801,10 @@ class Compat:
         template = light.get("result")
         if light.get("error") or not isinstance(template, dict):
             return light
-        if hex_rev(header[4:36]) != str(template.get("previousblockhash", "")).lower():
+        for key, kind in PROPOSAL_TEMPLATE_FIELDS.items():
+            if not isinstance(template.get(key), kind):
+                return self._err(-32603, f"Knuth's light template has no {key}")
+        if hex_rev(header[4:36]) != template["previousblockhash"].lower():
             return self._ok("inconclusive-not-best-prevblk")
         return self._ok(proposal_reject_reason(header, slices, txs, template))
 
@@ -1820,9 +1823,10 @@ class Compat:
         if not txs or not txs[0].is_coinbase():
             return self._err(-22, "Block does not start with a coinbase")
         block_hash = txid_of(header)
-        known = self._known_block(block_hash)
-        if known is not None:
-            return self._ok(known)
+        # Only a block on kth's active chain is answered without submitting
+        # it; one whose header kth merely knows is still sent.
+        if self._known_block(block_hash) == "duplicate":
+            return self._ok("duplicate")
         # kth takes a block as its header and coinbase plus the job holding
         # the other transactions, and names jobs by their txids, so the job
         # of this block's transactions is known without having served it.
@@ -1833,7 +1837,7 @@ class Compat:
             # kth keeps ten jobs for an hour; asking for its template again
             # registers the job anew while its selection is still this one.
             light = self.backend.call("getblocktemplatelight", [{}]).get("result")
-            if isinstance(light, dict) and light.get("job_id") == job_id:
+            if isinstance(light, dict) and str(light.get("job_id", "")).lower() == job_id:
                 out = self.backend.call("submitblocklight", [light_block, job_id])
         if _job_missing(out):
             return self._err(
@@ -1853,6 +1857,13 @@ def _job_missing(out: dict[str, Any]) -> bool:
         and error.get("code") == -32602
         and "job_id" in str(error.get("message", ""))
     )
+
+
+# Fields of kth's light template a proposal is checked against.
+PROPOSAL_TEMPLATE_FIELDS = {
+    "previousblockhash": str, "job_id": str, "bits": str,
+    "height": int, "mintime": int, "sizelimit": int, "coinbasevalue": int,
+}
 
 
 def transaction_reject_reason(tx: Tx, size: int) -> str | None:
@@ -1886,10 +1897,8 @@ def proposal_reject_reason(
     now = time.time() if now is None else now
     version = struct.unpack_from("<i", header, 0)[0]
     timestamp, bits = struct.unpack_from("<II", header, 68)
-    height, mintime = template.get("height"), template.get("mintime")
-    if not isinstance(height, int) or not isinstance(mintime, int):
-        return "inconclusive-not-best-prevblk"
-    if f"{bits:08x}" != str(template.get("bits", "")).lower():
+    height, mintime = template["height"], template["mintime"]
+    if f"{bits:08x}" != template["bits"].lower():
         return "bad-diffbits"
     if timestamp < mintime:
         return "time-too-old"
@@ -1903,7 +1912,7 @@ def proposal_reject_reason(
     if not txs:
         return "bad-cb-missing"
     size = len(header) + len(write_compact_size(len(slices))) + sum(map(len, slices))
-    if not isinstance(template.get("sizelimit"), int) or size > template["sizelimit"]:
+    if size > template["sizelimit"]:
         return "bad-blk-length"
     coinbase = txs[0]
     if not coinbase.is_coinbase():
@@ -1915,7 +1924,7 @@ def proposal_reject_reason(
         return "bad-cb-length"
     if any(tx.is_coinbase() for tx in txs[1:]):
         return "bad-tx-coinbase"
-    if selection_job_id(hex_rev(txid) for txid in txids[1:]) != template.get("job_id"):
+    if selection_job_id(hex_rev(txid) for txid in txids[1:]) != template["job_id"].lower():
         return "inconclusive-txs-not-in-template"
     if not is_final(coinbase, height, mintime - 1):
         return "bad-txns-nonfinal"
@@ -1925,8 +1934,7 @@ def proposal_reject_reason(
         return "bad-txns-version"
     if not coinbase.inputs[0].script_sig.startswith(coinbase_height_prefix(height)):
         return "bad-cb-height"
-    coinbase_value = template.get("coinbasevalue")
-    if not isinstance(coinbase_value, int) or sum(o.value for o in coinbase.outputs) > coinbase_value:
+    if sum(out.value for out in coinbase.outputs) > template["coinbasevalue"]:
         return "bad-cb-amount"
     return None
 

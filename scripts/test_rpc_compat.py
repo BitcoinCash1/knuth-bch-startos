@@ -650,6 +650,23 @@ class MiningTest(unittest.TestCase):
         self.assertEqual(compat.handle("submitblock", [block.hex()])["result"], "duplicate")
         self.assertEqual(self.submissions(), [])
 
+    def test_block_whose_header_kth_knows_off_its_chain_is_still_submitted(self):
+        _, block = self.block([])
+        compat = self.compat({}, self.template([]), {
+            "getblockheader": {"height": HEIGHT}, "getblockhash": ACTIVE,
+            "submitblocklight": lambda _: ok(None),
+        })
+        self.assertIsNone(compat.handle("submitblock", [block.hex()])["result"])
+        self.assertEqual(len(self.submissions()), 1)
+
+    def test_proposal_against_an_incomplete_kth_template_is_an_error(self):
+        _, block = self.block([])
+        template = self.template([])
+        del template["sizelimit"]
+        out = self.propose(block, template)
+        self.assertIsNone(out["result"])
+        self.assertIsNotNone(out["error"])
+
     def test_kth_verdicts_keep_bchn_shape(self):
         _, block = self.block([])
         compat = self.compat({}, self.template([]), {"submitblocklight": lambda _: ok("duplicate block")})
