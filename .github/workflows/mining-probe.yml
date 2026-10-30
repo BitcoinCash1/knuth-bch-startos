@@ -1,0 +1,40 @@
+name: Knuth mining probe
+
+# Builds kth from the package Dockerfile and mines on regtest through kth's own
+# JSON-RPC (scripts/kth_mining_probe.py), printing what each mining call
+# answers. Runs only when this probe branch is pushed.
+on:
+  push:
+    branches: [knuth-mining-probe]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build kth from the package Dockerfile
+        run: |
+          VERSION=$(sed -nE 's/^ARG KNUTH_VERSION=(.*)$/\1/p' Dockerfile)
+          echo "kth $VERSION"
+          docker build --platform linux/amd64 --build-arg "KNUTH_VERSION=$VERSION" --tag knuth-probe .
+        shell: bash
+      - name: Mine on regtest through kth's own RPC
+        run: |
+          docker run --rm --network none --platform linux/amd64 \
+            -v "$PWD/scripts:/checks:ro" --entrypoint /bin/bash knuth-probe -c '
+          mkdir -p /data/probe
+          /usr/local/bin/kth --init_run --network regtest --node.display daemon \
+            --db.directory /data/probe --net.outbound_connections 0 --net.inbound_connections 0 \
+            --rpc.enabled true --rpc.bind 127.0.0.1 --rpc.port 19332 \
+            --rpc.user probe --rpc.password probe > /tmp/kth.log 2>&1 &
+          python3 /checks/kth_mining_probe.py
+          status=$?
+          echo; echo "--- last kth log lines"; tail -25 /tmp/kth.log
+          exit $status'
+        shell: bash
