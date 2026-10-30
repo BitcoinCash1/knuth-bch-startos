@@ -100,6 +100,12 @@ For inbound onion access, use **Interfaces → Peer Interface → Add Onion Serv
   classic mining calls. It preserves Knuth's validated chain tip and uses current
   peer status; unavailable status returns an error. Compatibility with each pool,
   indexer, or explorer still needs a live integration check.
+- Knuth does not take transactions from other nodes or pass them on, so blocks
+  mined on it carry only transactions sent to this node's RPC port. A pool's
+  block template lists them only when the proxy can describe each one exactly.
+  Otherwise the pool gets an error instead of a template while that transaction
+  stays in Knuth's mempool; one Knuth held before the proxy saw it is supplied by
+  sending it again through the RPC port.
 
 ## Package updates
 

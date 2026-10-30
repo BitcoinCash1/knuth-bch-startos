@@ -78,6 +78,7 @@ The SDK is pinned to `@start9labs/start-sdk` 3.1.1.
 | `/data/blockchain` | mainnet chain DB |
 | `/data/peers.dat` | mainnet hosts pool |
 | `/data/testnet3`, `/data/testnet4`, `/data/scalenet`, `/data/chipnet`, `/data/regtest` | per-testnet chain + peers |
+| `<network dir>/rpc-compat-mempool.txt` | transactions the RPC proxy relayed to Knuth with `sendrawtransaction`, one hex transaction per line, kept until they have been out of Knuth's mempool for an hour |
 
 ---
 
@@ -205,6 +206,8 @@ proof of current connectivity or synchronization.
 3. **gRPC not exposed** in this package.
 4. The Tor toggle declares the optional dependency but does not configure outbound SOCKS routing; outbound peers use clearnet.
 5. **RPC compatibility sidecar** — the pinned release still has native RPC gaps. The package runs `scripts/rpc_compat.py` on the public RPC port and leaves kth on `127.0.0.1:19332`. It serves block/transaction data from block files and adapts classic mining methods to `getblocktemplatelight` / `submitblocklight`. JSON-RPC bodies end with a trailing LF for line-oriented pool clients. These adapters do not establish tested compatibility with every miner, Fulcrum, or explorer; dependent-service integration must be exercised on a running StartOS installation.
+   - **Mining.** kth names a light template's transactions only by `job_id`, the double SHA-256 of the selected txids. `getblocktemplate` lists that exact selection (found among the mempool by matching `job_id`) with BCHN's `data`, `txid`, `hash`, `fee` and `sigops` (SigChecks) fields, in CTOR order, with kth's `coinbasevalue`; `submitblock` sends a full block's header and coinbase to `submitblocklight` with the `job_id` of its own transactions. kth 1.5.0 returns no transaction bytes (`getrawtransaction` is a stub) and takes no transactions from peers, so its mempool holds only what was sent to it, and the proxy knows the bytes of what it relayed with `sendrawtransaction` (see `rpc-compat-mempool.txt`) and of confirmed transactions. When a selected transaction's bytes are unknown, or its SigChecks cannot be read without running its scripts (branches, loops with signature checks, non-final `CHECKSIG`), `getblocktemplate` answers an error instead of a template whose blocks kth could not take; sending such a transaction again through the proxy supplies its bytes. `{"mode": "proposal"}` checks the header and coinbase and requires the other transactions to be kth's current selection. kth's own reject reasons pass through `submitblock` unchanged; they are not BCHN's strings.
+   - **Other P2Pool calls.** `getblockchaininfo` carries `initialblockdownload` from `getmininginfo` (`caughtup` and `fresh`); `getblockheader <hash> false` returns the 80-byte header, checked against the hash; the verbose form adds `confirmations`; unknown blocks answer `-5`, heights past the tip `-8`. `validateaddress` accepts only the node network's CashAddr prefix or legacy version bytes and answers BCHN's fields, P2SH32 as `OP_HASH256 <hash> OP_EQUAL`. There is no `gettxout`.
 6. **Database compatibility.** Knuth 1.4.0 and later cannot reuse a 1.3.x UTXO-Z database. Rebuild before starting them; automatic version builds do not make future database formats compatible.
 
 ---
