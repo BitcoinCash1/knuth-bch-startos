@@ -48,9 +48,12 @@
 The node build follows the RPC-enabled recipe merged in
 [k-nuth/docker-images#7](https://github.com/k-nuth/docker-images/pull/7), commit
 `54a66910d7acda68766899a75cbb0304d617cb0a`, with its pinned GCC toolchain and
-`rpc=True` / `tests=False` Conan options. The package adds runtime utilities and
-the compatibility proxy; it does not patch the Knuth node. Official GHCR pulls
-currently return an authorization error, so packaging retains the source build.
+`rpc=True` / `tests=False` Conan options. The build stage upgrades Conan to the
+newest 2.x release, as kth's own CI does: the pinned toolchain ships Conan
+2.24.0, and kth 1.5.0 pulls `openssl/4.1.0`, whose recipe requires Conan 2.25 or
+later. The package adds runtime utilities and the compatibility proxy; it does
+not patch the Knuth node. Official GHCR pulls currently return an authorization
+error, so packaging retains the source build.
 The SDK is pinned to `@start9labs/start-sdk` 3.1.1.
 
 ---
