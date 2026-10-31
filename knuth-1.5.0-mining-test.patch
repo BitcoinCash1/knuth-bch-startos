@@ -1,0 +1,325 @@
+From 773b3f7d53a46803df228753e895ea8ae145a800 Mon Sep 17 00:00:00 2001
+From: CyberAshven <130158492+CyberAshven@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 03:10:42 +0300
+Subject: [PATCH] TEST ONLY: relay mined blocks to peers, merkle branch,
+ chipnet bits
+
+Not for upstream. submitblocklight checks the solved block (tip, bits at
+its own time, median time, block.check, BIP34 height) and relays it to
+the connected peers instead of the unimplemented organize(block) (#563).
+getblocktemplatelight gains the coinbase merkle branch, and its bits
+follow the template's own time (chipnet 20-minute rule).
+---
+ src/blockchain/src/interface/block_chain.cpp  |  4 +-
+ .../include/kth/node/mining/block_submit.hpp  |  5 ++
+ src/node/include/kth/node/rpc/dispatch.hpp    |  6 +++
+ src/node/include/kth/node/rpc/mining.hpp      |  3 +-
+ src/node/include/kth/node/rpc/server.hpp      |  3 +-
+ src/node/src/full_node.cpp                    |  2 +-
+ src/node/src/mining/block_submit.cpp          | 28 ++++++++++
+ src/node/src/rpc/methods.cpp                  | 54 +++++++++++++++----
+ src/node/src/rpc/mining.cpp                   |  8 ++-
+ src/node/src/rpc/server.cpp                   |  5 +-
+ src/node/test/rpc_mining.cpp                  |  2 +-
+ 11 files changed, 103 insertions(+), 17 deletions(-)
+
+diff --git a/src/blockchain/src/interface/block_chain.cpp b/src/blockchain/src/interface/block_chain.cpp
+index ccb081c..4ab3302 100644
+--- a/src/blockchain/src/interface/block_chain.cpp
++++ b/src/blockchain/src/interface/block_chain.cpp
+@@ -3068,7 +3068,9 @@ block_chain::fetch_mining_template(uint64_t coinbase_reserve_size) const {
+         0x20000000U,
+         previous,
+         height,
+-        state->work_required(),
++        // Test build: the bits for this template's own time, so a test network
++        // block dated more than 20 minutes after its parent gets the limit.
++        state->get_next_work_required(std::max(state->median_time_past() + 1, now)),
+         state->median_time_past(),
+         now,
+         state->dynamic_max_block_size(),
+diff --git a/src/node/include/kth/node/mining/block_submit.hpp b/src/node/include/kth/node/mining/block_submit.hpp
+index 998a00a..bfa863a 100644
+--- a/src/node/include/kth/node/mining/block_submit.hpp
++++ b/src/node/include/kth/node/mining/block_submit.hpp
+@@ -20,6 +20,11 @@ namespace kth::node::mining {
+ 
+ // Reassemble the full block a light submission refers to: the miner's coinbase
+ // first, then the job's cached selection (CTOR order preserved).
++// The merkle branch of the coinbase in a block whose other transactions are
++// `job_txs`, in order: the hashes a miner combines with its coinbase txid to
++// reach the merkle root. Empty when there are none.
++hash_list coinbase_merkle_branch(std::vector<transaction_const_ptr> const& job_txs);
++
+ domain::message::block assemble_block(
+     domain::chain::header const& header,
+     domain::chain::transaction const& coinbase,
+diff --git a/src/node/include/kth/node/rpc/dispatch.hpp b/src/node/include/kth/node/rpc/dispatch.hpp
+index ae2a370..2e2cc4e 100644
+--- a/src/node/include/kth/node/rpc/dispatch.hpp
++++ b/src/node/include/kth/node/rpc/dispatch.hpp
+@@ -24,6 +24,10 @@ namespace kth::node::mining {
+ struct job_store;
+ } // namespace kth::node::mining
+ 
++namespace kth::node {
++class p2p_node;
++} // namespace kth::node
++
+ namespace kth::node::rpc {
+ 
+ // Shared state a handler may reach: the chain and the getblocktemplatelight job
+@@ -31,6 +35,8 @@ namespace kth::node::rpc {
+ struct method_context {
+     blockchain::block_chain& chain;
+     mining::job_store& jobs;
++    // Test build: the peers submitblocklight relays a mined block to.
++    p2p_node* network = nullptr;
+ };
+ 
+ // A method handler serializes the JSON-RPC "result" fragment for `req`, or
+diff --git a/src/node/include/kth/node/rpc/mining.hpp b/src/node/include/kth/node/rpc/mining.hpp
+index 26417e4..f555337 100644
+--- a/src/node/include/kth/node/rpc/mining.hpp
++++ b/src/node/include/kth/node/rpc/mining.hpp
+@@ -21,7 +21,8 @@ namespace kth::node::rpc {
+ // (compact bits expanded to the 256-bit target, hashes in display order),
+ // tagged with `job_id`.
+ std::string render_mining_template(
+-    blockchain::mining_template const& tmpl, std::string_view job_id);
++    blockchain::mining_template const& tmpl, std::string_view job_id,
++    hash_list const& merkle = {});
+ 
+ // Serialize a mining_info as the getmininginfo "result" object.
+ std::string render_mining_info(blockchain::mining_info const& info);
+diff --git a/src/node/include/kth/node/rpc/server.hpp b/src/node/include/kth/node/rpc/server.hpp
+index add67e6..1de8ee9 100644
+--- a/src/node/include/kth/node/rpc/server.hpp
++++ b/src/node/include/kth/node/rpc/server.hpp
+@@ -30,7 +30,7 @@ namespace kth::node::rpc {
+ // and the build defines KTH_WITH_RPC.
+ struct server {
+     server(rpc_settings const& settings, blockchain::block_chain& chain,
+-        ::asio::any_io_executor executor);
++        ::asio::any_io_executor executor, p2p_node* network = nullptr);
+ 
+     // Bind the listener and accept connections until the executor is stopped.
+     // Intended to be co_spawned. Returns on a fatal bind error or shutdown.
+@@ -47,6 +47,7 @@ private:
+ 
+     rpc_settings const& settings_;
+     blockchain::block_chain& chain_;
++    p2p_node* network_;
+     dispatcher dispatcher_;
+     mining::job_store jobs_;
+     // Plaintext "user:password" (or "__cookie__:token") the Authorization header
+diff --git a/src/node/src/full_node.cpp b/src/node/src/full_node.cpp
+index 4d588b0..9854c58 100644
+--- a/src/node/src/full_node.cpp
++++ b/src/node/src/full_node.cpp
+@@ -134,7 +134,7 @@ full_node::~full_node() {
+ #if defined(KTH_WITH_RPC) && ! defined(__EMSCRIPTEN__)
+     if (rpc_settings_.enabled) {
+         auto rpc_executor = network_.thread_pool().get_executor();
+-        rpc_server_ = std::make_unique<rpc::server>(rpc_settings_, chain_, rpc_executor);
++        rpc_server_ = std::make_unique<rpc::server>(rpc_settings_, chain_, rpc_executor, &network_);
+     } else {
+         spdlog::info("[node] JSON-RPC server disabled (rpc.enabled=false).");
+     }
+diff --git a/src/node/src/mining/block_submit.cpp b/src/node/src/mining/block_submit.cpp
+index 1cd24bc..9c00c64 100644
+--- a/src/node/src/mining/block_submit.cpp
++++ b/src/node/src/mining/block_submit.cpp
+@@ -4,6 +4,8 @@
+ 
+ #include <kth/node/mining/block_submit.hpp>
+ 
++#include <algorithm>
++#include <array>
+ #include <memory>
+ #include <utility>
+ 
+@@ -11,6 +13,32 @@
+ 
+ namespace kth::node::mining {
+ 
++hash_list coinbase_merkle_branch(std::vector<transaction_const_ptr> const& job_txs) {
++    hash_list branch;
++    hash_list level;
++    level.reserve(job_txs.size() + 1);
++    level.push_back(null_hash); // the coinbase's slot; its sibling is what matters
++    for (auto const& tx : job_txs) {
++        level.push_back(tx->hash());
++    }
++    while (level.size() > 1) {
++        branch.push_back(level[1]);
++        if (level.size() % 2 != 0) {
++            level.push_back(level.back());
++        }
++        hash_list next;
++        next.reserve(level.size() / 2);
++        for (size_t i = 0; i < level.size(); i += 2) {
++            std::array<uint8_t, 2 * hash_size> pair;
++            std::copy(level[i].begin(), level[i].end(), pair.begin());
++            std::copy(level[i + 1].begin(), level[i + 1].end(), pair.begin() + hash_size);
++            next.push_back(bitcoin_hash(byte_span{pair.data(), pair.size()}));
++        }
++        level = std::move(next);
++    }
++    return branch;
++}
++
+ domain::message::block assemble_block(
+     domain::chain::header const& header,
+     domain::chain::transaction const& coinbase,
+diff --git a/src/node/src/rpc/methods.cpp b/src/node/src/rpc/methods.cpp
+index 3c00cf8..b197fa7 100644
+--- a/src/node/src/rpc/methods.cpp
++++ b/src/node/src/rpc/methods.cpp
+@@ -21,6 +21,9 @@
+ #include <kth/node/rpc/error.hpp>
+ #include <kth/node/mining/block_submit.hpp>
+ #include <kth/node/mining/job_store.hpp>
++#include <kth/node/p2p_node.hpp>
++
++#include <spdlog/spdlog.h>
+ #include <kth/node/rpc/json.hpp>
+ #include <kth/node/rpc/mining.hpp>
+ #include <kth/node/rpc/query.hpp>
+@@ -55,7 +58,8 @@ get_block_template_light(method_context& ctx, request const& /*req*/) {
+     }
+ 
+     auto const job_id = ctx.jobs.add(tmpl->selection.txs);
+-    co_return render_mining_template(*tmpl, job_id);
++    co_return render_mining_template(*tmpl, job_id,
++        mining::coinbase_merkle_branch(tmpl->selection.txs));
+ }
+ 
+ // getmininginfo -> height, difficulty, mempool size, and network.
+@@ -101,19 +105,51 @@ submit_block_light(method_context& ctx, request const& req) {
+             "job_id not found or expired"));
+     }
+ 
+-    // Reassemble (coinbase followed by the cached selection) and submit.
+-    auto const ec = co_await mining::submit_block_light(
+-        ctx.chain,
++    // Test build: block_chain::organize(block) is not implemented in 1.5.0
++    // (k-nuth/kth#563), so a solved block is checked here and relayed to the
++    // connected peers, which accept it into the network; this node then syncs
++    // it back like any other block. Nothing is written locally. The checks
++    // keep peers from ever receiving an invalid block from us.
++    auto const block = mining::assemble_block(
+         header_and_coinbase->header(),
+         header_and_coinbase->transactions().front(),
+         *job);
++    auto const reject = [](std::string_view reason) {
++        writer w;
++        w.value(reason);
++        return w.str();
++    };
+ 
+-    writer w;
+-    if (ec) {
+-        w.value(ec.message()); // BIP22-style reject reason
+-    } else {
+-        w.value_null();        // accepted
++    auto const view = ctx.chain.chain_view();
++    if ( ! view || ! view->state || ctx.network == nullptr) {
++        co_return reject("inconclusive-not-ready");
++    }
++    auto const& header = block.header();
++    if (header.previous_block_hash() != view->tip_hash) {
++        co_return reject("inconclusive-not-best-prevblk");
++    }
++    auto const height = view->connected_tip_height + 1;
++    if (header.bits() != view->state->get_next_work_required(header.timestamp())) {
++        co_return reject("bad-diffbits");
++    }
++    if (header.timestamp() <= view->state->median_time_past()) {
++        co_return reject("time-too-old");
+     }
++    if (auto const ec = block.check(); ec) {
++        co_return reject(ec.message());
++    }
++    if ( ! block.is_valid_coinbase_script(height)) {
++        co_return reject("bad-cb-height");
++    }
++
++    auto const peers = co_await ctx.network->broadcast(block);
++    spdlog::info("[rpc] submitblocklight relayed block {} at height {} to {} peer(s)",
++        encode_hash(domain::chain::hash(header)), height, peers);
++    if (peers == 0) {
++        co_return reject("inconclusive-no-peers");
++    }
++    writer w;
++    w.value_null(); // relayed
+     co_return w.str();
+ }
+ 
+diff --git a/src/node/src/rpc/mining.cpp b/src/node/src/rpc/mining.cpp
+index ae2aab1..9e3bcb3 100644
+--- a/src/node/src/rpc/mining.cpp
++++ b/src/node/src/rpc/mining.cpp
+@@ -36,7 +36,8 @@ std::string bits_to_hex(std::uint32_t bits) {
+ } // namespace
+ 
+ std::string render_mining_template(
+-    blockchain::mining_template const& tmpl, std::string_view job_id) {
++    blockchain::mining_template const& tmpl, std::string_view job_id,
++    hash_list const& merkle) {
+ 
+     // Expand compact bits to the 256-bit target. from_compact only fails on an
+     // overflowing encoding, which a chain-produced nBits never is.
+@@ -62,6 +63,11 @@ std::string render_mining_template(
+         .value("time").value("transactions").value("prevblock")
+         .end_array();
+     w.field("job_id", job_id);
++    w.key("merkle").begin_array();
++    for (auto const& hash : merkle) {
++        w.value(encode_hash(hash));
++    }
++    w.end_array();
+     w.end_object();
+     return w.str();
+ }
+diff --git a/src/node/src/rpc/server.cpp b/src/node/src/rpc/server.cpp
+index 613da70..8871420 100644
+--- a/src/node/src/rpc/server.cpp
++++ b/src/node/src/rpc/server.cpp
+@@ -169,9 +169,10 @@ std::string random_token() {
+ } // namespace
+ 
+ server::server(rpc_settings const& settings, blockchain::block_chain& chain,
+-    ::asio::any_io_executor executor)
++    ::asio::any_io_executor executor, p2p_node* network)
+     : settings_(settings)
+     , chain_(chain)
++    , network_(network)
+     , jobs_(settings.gbt_cache_size, settings.gbt_store_time)
+     , owner_(::asio::make_strand(std::move(executor)))
+     , stop_requests_(owner_, 1) {
+@@ -238,7 +239,7 @@ bool server::authorized(std::string_view authorization_header) const {
+             co_return;
+         }
+ 
+-        method_context mctx{chain_, jobs_};
++        method_context mctx{chain_, jobs_, network_};
+         std::string const response = co_await dispatcher_.handle(mctx, ctx.body);
+         co_await write_response(socket, 200, "OK", response, ctx.keep_alive);
+         if ( ! ctx.keep_alive) {
+diff --git a/src/node/test/rpc_mining.cpp b/src/node/test/rpc_mining.cpp
+index d429fa7..0450695 100644
+--- a/src/node/test/rpc_mining.cpp
++++ b/src/node/test/rpc_mining.cpp
+@@ -34,7 +34,7 @@ TEST_CASE("render_mining_template serializes the GBT-light fields", "[rpc mining
+         R"("sizelimit":32000000,"sigchecklimit":226950,)"
+         R"("noncerange":"00000000ffffffff",)"
+         R"("mutable":["time","transactions","prevblock"],)"
+-        R"("job_id":"testjob"})");
++        R"("job_id":"testjob","merkle":[]})");
+ }
+ 
+ TEST_CASE("render_mining_info serializes the getmininginfo fields", "[rpc mining]") {
+-- 
+2.53.0.windows.2
+

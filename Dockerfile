@@ -31,17 +31,11 @@ RUN pip install --no-cache-dir --upgrade "conan>=2.25,<3" "kthbuild>=4,<5"
 # binary comes from src/node-exe under BUILD_NODE_EXE, which defaults ON.
 # `tests=False` keeps the VMB test suite out of a source build.
 # `rpc=True` compiles in the JSON-RPC server added in v1.3.0.
-RUN conan profile detect --force \
- && conan remote add kth https://packages.kth.cash/api/ --force \
- && conan install --requires=kth/${KNUTH_VERSION} \
-      --deployer=direct_deploy --output-folder=/deploy --build=missing \
-      -o "kth/*:currency=${CURRENCY}" \
-      -o "kth/*:rpc=True" \
-      -o "kth/*:tests=False" \
-      -o "utxoz/*:with_tests=False" \
-      -o "utxoz/*:with_benchmarks=False" \
-      -o "utxoz/*:with_large_benchmarks=False" \
-      -s compiler.cppstd=23
+# TEST BUILD ONLY: kth {KNUTH_VERSION} from source with the local mining patch
+# (relay mined blocks to peers, merkle branch, chipnet bits). Not for release.
+COPY knuth-1.5.0-mining-test.patch /tmp/mining-test.patch
+RUN git clone --depth 1 --branch v${KNUTH_VERSION} https://github.com/k-nuth/kth.git /src/kth  && cd /src/kth && git apply /tmp/mining-test.patch
+RUN conan profile detect --force  && conan remote add kth https://packages.kth.cash/api/ --force  && cd /src/kth && conan create . --version=${KNUTH_VERSION} --build=missing       -o "kth/*:currency=${CURRENCY}"       -o "kth/*:rpc=True"       -o "kth/*:tests=False"       -o "utxoz/*:with_tests=False"       -o "utxoz/*:with_benchmarks=False"       -o "utxoz/*:with_large_benchmarks=False"       -s compiler.cppstd=23  && conan install --requires=kth/${KNUTH_VERSION}       --deployer=direct_deploy --output-folder=/deploy --build=missing       -o "kth/*:currency=${CURRENCY}"       -o "kth/*:rpc=True"       -o "kth/*:tests=False"       -o "utxoz/*:with_tests=False"       -o "utxoz/*:with_benchmarks=False"       -o "utxoz/*:with_large_benchmarks=False"       -s compiler.cppstd=23
 
 # ── Runtime ─────────────────────────────────────────────────────────
 FROM --platform=linux/amd64 ubuntu:24.04
