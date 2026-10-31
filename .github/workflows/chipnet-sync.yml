@@ -7,6 +7,7 @@ name: Knuth chipnet sync crash check
 on:
   push:
     branches: [knuth-rpc-e2e]
+    paths: [.github/workflows/chipnet-sync.yml]
 
 permissions:
   contents: read

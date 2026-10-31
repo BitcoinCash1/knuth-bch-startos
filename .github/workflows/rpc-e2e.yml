@@ -6,6 +6,7 @@ name: Knuth RPC end-to-end
 on:
   push:
     branches: [knuth-rpc-e2e]
+    paths: [Dockerfile, scripts/knuth_rpc_e2e.py, .github/workflows/rpc-e2e.yml]
 
 permissions:
   contents: read

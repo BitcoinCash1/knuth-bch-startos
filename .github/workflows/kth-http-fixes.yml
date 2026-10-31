@@ -1,0 +1,101 @@
+name: kth HTTP fixes build and test
+
+# TEST ONLY branch, never merged. Builds kth with its tests from two branches
+# of CyberAshven/kth: the three JSON-RPC HTTP fixes (test/rpc-http-combined),
+# and the same new tests on unfixed upstream master
+# (test/rpc-server-tests-on-master), so the tests are shown to fail before the
+# fixes and pass after. The fixed build then reruns the client transport checks
+# of scripts/knuth_rpc_e2e.py against kth with the fixes.
+on:
+  push:
+    branches: [knuth-rpc-e2e]
+    paths: [.github/workflows/kth-http-fixes.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: fixed
+            branch: test/rpc-http-combined
+          - name: master
+            branch: test/rpc-server-tests-on-master
+    name: kth ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Fetch kth ${{ matrix.branch }}
+        run: |
+          git clone --depth 1 --branch "${{ matrix.branch }}" https://github.com/CyberAshven/kth.git kth-src
+          git -C kth-src log -1 --format='%h %s'
+        shell: bash
+      - name: Build kth and its node tests in the kth toolchain
+        run: |
+          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w /src \
+            kthnode/gcc15-ubuntu24.04@sha256:4988fdeb3654c2b5ea591ffa4454f67e1a631549449c62e35060ba69da79eb67 \
+            bash -euo pipefail -c '
+              pip install --no-cache-dir --upgrade "conan>=2.25,<3" "kthbuild>=4,<5"
+              conan profile detect --force
+              conan remote add kth https://packages.kth.cash/api/ --force
+              conan install conanfile.py --version 1.5.2 -of build --build=missing \
+                -o currency=BCH -o rpc=True -o tests=True \
+                -o "utxoz/*:with_tests=False" -o "utxoz/*:with_benchmarks=False" \
+                -o "utxoz/*:with_large_benchmarks=False" \
+                -s compiler.cppstd=23 -s build_type=Release
+              cmake --preset conan-release -DGLOBAL_BUILD=ON -DENABLE_TEST=ON -DCMAKE_BUILD_TYPE=Release
+              cmake --build --preset conan-release -j"$(nproc)" --target kth_node_test node-exe
+            '
+        shell: bash
+      - name: Run the RPC tests
+        run: |
+          TEST=$(find kth-src/build -name kth_node_test -type f -perm -u+x | head -1)
+          echo "test binary: $TEST"
+          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w /src \
+            kthnode/gcc15-ubuntu24.04@sha256:4988fdeb3654c2b5ea591ffa4454f67e1a631549449c62e35060ba69da79eb67 \
+            bash -c "/src/${TEST#kth-src/} '[rpc server],[rpc dispatch],[rpc json],[rpc mining],[rpc query]' --reporter compact" \
+            | tee rpc-tests.log || true
+        shell: bash
+      - name: Restore the package image
+        if: matrix.name == 'fixed'
+        uses: actions/cache/restore@v6
+        with:
+          path: /tmp/knuth-e2e.tar
+          key: knuth-e2e-${{ hashFiles('Dockerfile') }}
+      - name: Put the patched kth into the package image
+        if: matrix.name == 'fixed'
+        run: |
+          docker load -i /tmp/knuth-e2e.tar
+          KTH=$(find kth-src/build -name kth -type f -perm -u+x -path '*node-exe*' | head -1)
+          echo "node binary: $KTH"
+          cp "$KTH" kth-patched
+          printf 'FROM knuth-e2e\nCOPY kth-patched /usr/local/bin/kth\n' > Dockerfile.patched
+          docker build --platform linux/amd64 -f Dockerfile.patched -t knuth-e2e .
+        shell: bash
+      - name: Fetch BCHN 29.2.0
+        if: matrix.name == 'fixed'
+        run: |
+          TARBALL=bitcoin-cash-node-29.2.0-x86_64-linux-gnu.tar.gz
+          curl -fsSLO "https://github.com/bitcoin-cash-node/bitcoin-cash-node/releases/download/v29.2.0/$TARBALL"
+          echo "23bbe9ff749136a9b832a2a59023ce76a5391322c1ea2f4f24b5b91f035081bc  $TARBALL" | sha256sum -c
+          tar xzf "$TARBALL"
+          echo "$PWD/bitcoin-cash-node-29.2.0/bin" >> "$GITHUB_PATH"
+        shell: bash
+      - name: Rerun the end-to-end checks against the patched kth
+        if: matrix.name == 'fixed'
+        run: python3 scripts/knuth_rpc_e2e.py e2e-out
+        shell: bash
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: kth-http-${{ matrix.name }}
+          path: |
+            rpc-tests.log
+            e2e-out
+          if-no-files-found: ignore
