@@ -18,11 +18,29 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - name: Restore the kth image built from this Dockerfile
+        id: image
+        uses: actions/cache/restore@v6
+        with:
+          path: /tmp/knuth-e2e.tar
+          key: knuth-e2e-${{ hashFiles('Dockerfile') }}
       - name: Build kth from the package Dockerfile
+        if: steps.image.outputs.cache-hit != 'true'
         run: |
           VERSION=$(sed -nE 's/^ARG KNUTH_VERSION=(.*)$/\1/p' Dockerfile)
           echo "kth $VERSION"
           docker build --platform linux/amd64 --build-arg "KNUTH_VERSION=$VERSION" --tag knuth-e2e .
+          docker save knuth-e2e -o /tmp/knuth-e2e.tar
+        shell: bash
+      - name: Keep the kth image for the next run
+        if: steps.image.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: /tmp/knuth-e2e.tar
+          key: knuth-e2e-${{ hashFiles('Dockerfile') }}
+      - name: Load the kept kth image
+        if: steps.image.outputs.cache-hit == 'true'
+        run: docker load -i /tmp/knuth-e2e.tar
         shell: bash
       - name: Fetch BCHN 29.2.0
         run: |

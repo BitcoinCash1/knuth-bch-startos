@@ -93,7 +93,7 @@ def start_bchn() -> None:
     BCHN_DIR.mkdir(parents=True, exist_ok=True)
     subprocess.run(["bitcoind", "-regtest", f"-datadir={BCHN_DIR}", "-daemon", "-server",
                     "-rpcuser=e2e", "-rpcpassword=e2e", "-rpcport=18443", "-port=18444",
-                    "-listen=1", "-txindex=1", "-fallbackfee=0.0001",
+                    "-listen=1", "-txindex=1", "-fallbackfee=0.0001", "-allowunconnectedmining",
                     "-zmqpubhashblock=tcp://127.0.0.1:28332"], check=True)
     wait_for(BCHN, "BCHN")
 
@@ -174,47 +174,61 @@ def solve_coinbase_only(template: dict, tag: bytes) -> tuple[str, str, str]:
 
 # ---- chain setup ------------------------------------------------------------
 
-def setup() -> dict:
-    start_bchn()
-    cli("createwallet", "e2e")
-    addr = cli("getnewaddress")
+def wallet_address() -> str:
+    try:
+        return cli("getnewaddress")
+    except subprocess.CalledProcessError:
+        cli("createwallet", "e2e")  # no wallet loaded yet; BCHN may load a default one
+        return cli("getnewaddress")
+
+
+def make_chain() -> dict:
+    """BCHN only: a mined chain with a block of wallet transactions."""
+    addr = wallet_address()
     cli("generatetoaddress", "110", addr)
     others = [cli("getnewaddress") for _ in range(3)]
     confirmed = [cli("sendtoaddress", a, "1.5") for a in others]
     tx_block = json.loads(cli("generatetoaddress", "1", addr))[0]
     cli("generatetoaddress", "2", addr)
-    height = int(cli("getblockcount"))
+    block = json.loads(cli("getblock", tx_block, "1"))
+    return {"addr": addr, "others": others, "height": int(cli("getblockcount")),
+            "tx_block": tx_block, "tx_block_height": block["height"],
+            "coinbase_txid": block["tx"][0], "confirmed_txid": confirmed[0], "confirmed": confirmed}
 
-    start_kth()
-    synced = wait_kth_height(height, 900)
-    RESULTS["setup"]["kth_synced_bchn_chain"] = synced
-    RESULTS["setup"]["bchn_height"] = height
-    if not synced:
-        RESULTS["setup"]["kth_log"] = kth_log(60)
 
-    # Transactions for the mempool calls: two through BCHN's own relay, then
-    # time for kth to hear about them.
-    pending = [cli("sendtoaddress", a, "0.25") for a in others[:2]]
-    time.sleep(15)
+def make_mempool(s: dict) -> dict:
+    """BCHN only: two relayed mempool transactions and two signed, unsent ones.
+    One output of the confirmed transaction is locked first so gettxout has an
+    unspent output to look up."""
+    s["unspent_n"] = next(n for n in range(4)
+                          if cli("gettxout", s["confirmed_txid"], str(n)) not in ("", "null"))
+    cli("lockunspent", "false", json.dumps([{"txid": s["confirmed_txid"], "vout": s["unspent_n"]}]))
+    s["mempool_txids"] = [cli("sendtoaddress", a, "0.25") for a in s["others"][:2]]
 
     def fresh_tx() -> str:
         utxo = next(u for u in json.loads(cli("listunspent", "1"))
-                    if u["amount"] >= 1 and u["txid"] not in confirmed)
+                    if u["amount"] >= 1 and u["txid"] not in s["confirmed"])
         cli("lockunspent", "false", json.dumps([{"txid": utxo["txid"], "vout": utxo["vout"]}]))
         raw = cli("createrawtransaction",
                   json.dumps([{"txid": utxo["txid"], "vout": utxo["vout"]}]),
                   json.dumps({cli("getnewaddress"): round(utxo["amount"] - 0.001, 8)}))
         return json.loads(cli("signrawtransactionwithwallet", raw))["hex"]
 
-    block = json.loads(cli("getblock", tx_block, "1"))
-    unspent_n = next(n for n in range(4)
-                     if cli("gettxout", confirmed[0], str(n)) not in ("", "null"))
-    return {
-        "addr": addr, "height": height, "tip": cli("getbestblockhash"),
-        "tx_block": tx_block, "tx_block_height": block["height"],
-        "coinbase_txid": block["tx"][0], "confirmed_txid": confirmed[0], "unspent_n": unspent_n,
-        "mempool_txids": pending, "fresh_tx_send": fresh_tx(), "fresh_tx_test": fresh_tx(),
-    }
+    s["fresh_tx_send"], s["fresh_tx_test"] = fresh_tx(), fresh_tx()
+    s["tip"] = cli("getbestblockhash")
+    return s
+
+
+def setup() -> dict:
+    start_bchn()
+    s = make_chain()
+    start_kth()
+    synced = wait_kth_height(s["height"], 900)
+    RESULTS["setup"]["kth_synced_bchn_chain"] = synced
+    RESULTS["setup"]["bchn_height"] = s["height"]
+    s = make_mempool(s)
+    time.sleep(15)  # time for kth to hear about the relayed transactions
+    return s
 
 
 # ---- method matrix ------------------------------------------------------------
@@ -670,7 +684,8 @@ def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     try:
         s = setup()
-        RESULTS["setup"]["data"] = {k: v for k, v in s.items() if not k.startswith("fresh")}
+        RESULTS["setup"]["data"] = {k: v for k, v in s.items()
+                                    if not k.startswith("fresh") and k not in ("others", "confirmed")}
         for name, phase in (("methods", lambda: methods(s)), ("transport", transport),
                             ("mining", lambda: mining(s))):
             try:
