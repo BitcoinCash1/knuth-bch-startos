@@ -13,7 +13,7 @@ what is specific to running it on StartOS once it is installed.
 
 - The upstream **Knuth Bitcoin Cash node** with its original consensus and relay policy
 - **P2P** (port follows the selected network)
-- Optional **JSON-RPC** with a compatibility proxy for Bitcoin Cash applications
+- Optional **JSON-RPC**, served by Knuth itself
 - The same multi-network layout as BCHN / BCHD / Flowee: mainnet under `/data/blockchain`, testnets under `/data/<network>/`
 - Optional **Tor** package integration; outbound peer traffic currently uses clearnet
 
@@ -92,14 +92,9 @@ For inbound onion access, use **Interfaces → Peer Interface → Add Onion Serv
 - Native execution is available on x86_64. ARM64 and RISC-V installations use
   emulation of the x86_64 image, which can substantially slow initial sync and
   signature validation.
-- The package still uses an RPC compatibility proxy for calls the pinned Knuth
-  release cannot serve natively. A working upstream Docker build does not by
-  itself remove that requirement or establish compatibility with every dependent.
+- JSON-RPC is served by Knuth itself, with no proxy. A method the Knuth release
+  does not implement returns Knuth's own error.
 - Blockchain data is not included in StartOS backups — after restore the node re-syncs.
-- The compatibility proxy serves missing block/transaction methods and adapts
-  classic mining calls. It preserves Knuth's validated chain tip and uses current
-  peer status; unavailable status returns an error. Compatibility with each pool,
-  indexer, or explorer still needs a live integration check.
 
 ## Package updates
 

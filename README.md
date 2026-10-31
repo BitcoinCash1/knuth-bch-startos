@@ -51,9 +51,9 @@ The node build follows the RPC-enabled recipe merged in
 `rpc=True` / `tests=False` Conan options. The build stage upgrades Conan to the
 newest 2.x release, as kth's own CI does: the pinned toolchain ships Conan
 2.24.0, and kth 1.5.0 pulls `openssl/4.1.0`, whose recipe requires Conan 2.25 or
-later. The package adds runtime utilities and the compatibility proxy; it does
-not patch the Knuth node. Official GHCR pulls currently return an authorization
-error, so packaging retains the source build.
+later. The package adds runtime utilities; it does not patch the Knuth node or
+put anything between it and its RPC clients. Official GHCR pulls currently
+return an authorization error, so packaging retains the source build.
 The SDK is pinned to `@start9labs/start-sdk` 3.1.1.
 
 ---
@@ -168,11 +168,8 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 | **Clearnet** | Always | Outbound unless a public address is published |
 | **UTXO-Z Storage** / **IPC / C-API** | Always | Knuth-specific capability rows |
 
-The compatibility proxy preserves the native validated chain tip; block files
-cannot raise its reported height. Its network-info fallback uses the installed
-binary version and current peer log, and returns an error when those facts are
-unavailable. The stored `fullySynced` flag records a successful check and is not
-proof of current connectivity or synchronization.
+The stored `fullySynced` flag records a successful check and is not proof of
+current connectivity or synchronization.
 
 ---
 
@@ -192,7 +189,7 @@ proof of current connectivity or synchronization.
 | `--network` | from store | v1.3.0 network select |
 | `db.db_mode` | `full` | indexed; required for Fulcrum/Explorer |
 | `rpc.enabled` | false | opt-in; credentials pre-generated |
-| `rpc.bind` | `127.0.0.1` | native RPC stays internal on 19332; the compatibility proxy exposes the public per-network RPC port |
+| `rpc.bind` | `0.0.0.0` | kth serves the per-network RPC port to dependent containers itself |
 | `net.hosts_file` | under `/data` | kth defaults to CWD `/` |
 | IPC / UTXOZ | true | capability flags for dependents |
 
@@ -204,7 +201,7 @@ proof of current connectivity or synchronization.
 2. **Synchronization requires JSON-RPC.** Native validated height/hash, fresh peer status, and tip time determine health. Raw block files and old log heights do not establish validation progress.
 3. **gRPC not exposed** in this package.
 4. The Tor toggle declares the optional dependency but does not configure outbound SOCKS routing; outbound peers use clearnet.
-5. **RPC compatibility sidecar** — the pinned release still has native RPC gaps. The package runs `scripts/rpc_compat.py` on the public RPC port and leaves kth on `127.0.0.1:19332`. It serves block/transaction data from block files and adapts classic mining methods to `getblocktemplatelight` / `submitblocklight`. JSON-RPC bodies end with a trailing LF for line-oriented pool clients. These adapters do not establish tested compatibility with every miner, Fulcrum, or explorer; dependent-service integration must be exercised on a running StartOS installation.
+5. **JSON-RPC is kth's own.** Dependents talk to kth directly on the per-network RPC port; the package adds no proxy or adapters. A method the pinned release does not implement returns kth's own error.
 6. **Database compatibility.** Knuth 1.4.0 and later cannot reuse a 1.3.x UTXO-Z database. Rebuild before starting them; automatic version builds do not make future database formats compatible.
 
 ---

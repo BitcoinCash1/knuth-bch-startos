@@ -5,7 +5,6 @@ import {
   networkName,
   networkDbDir,
   networkHostsFile,
-  internalRpcPort,
   Network,
 } from './utils'
 import { storeJson } from './fileModels/store.json'
@@ -64,12 +63,12 @@ export const main = sdk.setupMain(async ({ effects }) => {
     'db.directory': dataDir,
   })
 
-  // Public RPC is the compatibility sidecar. kth itself only binds localhost
-  // so dependents never hit the stub getblock / missing getnetworkinfo.
+  // kth serves the public per-network RPC port itself. It must bind every
+  // interface so dependents can reach it from their own containers.
   if (rpcEnabled) {
     await knuthConf.merge(effects, {
-      'rpc.bind': '127.0.0.1',
-      'rpc.port': internalRpcPort,
+      'rpc.bind': '0.0.0.0',
+      'rpc.port': rpcPort,
       'rpc.enabled': true,
     })
   }
@@ -83,11 +82,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
 
   // Helper: JSON-RPC via curl (no knuth-cli). Retry transient attach failures
   // the way BCHN retries bitcoin-cli under mount-namespace pressure.
-  async function rpcCall(
-    method: string,
-    port: number = internalRpcPort,
-    params: unknown[] = [],
-  ) {
+  async function rpcCall(method: string, params: unknown[] = []) {
     const args = [
       'curl',
       '-s',
@@ -99,10 +94,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
       'content-type: application/json',
       '-d',
       JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-      // Primary ready must probe kth on the internal port (sidecar needs
-      // primary up). Sync health prefers the sidecar, which lifts stale
-      // kth `blocks` to the blk*.dat tip.
-      `http://127.0.0.1:${port}/`,
+      `http://127.0.0.1:${rpcPort}/`,
     ]
     let lastErr: unknown
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -163,7 +155,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
   async function tipAgeSeconds(hash: unknown): Promise<number | null> {
     if (typeof hash !== 'string' || !hash) return null
     try {
-      const res = await rpcCall('getblockheader', internalRpcPort, [hash, true])
+      const res = await rpcCall('getblockheader', [hash, true])
       const time = Number(JSON.parse(String(res.stdout ?? ''))?.result?.time)
       if (!Number.isFinite(time) || time <= 0) return null
       return Math.floor(Date.now() / 1000) - time
@@ -295,69 +287,6 @@ export const main = sdk.setupMain(async ({ effects }) => {
         },
         requires: [],
       })
-      .addDaemon('rpc-compat', {
-        subcontainer: knuthSub,
-        exec: {
-          command: rpcEnabled
-            ? [
-                'python3',
-                '/usr/local/bin/rpc_compat.py',
-                '--bind',
-                '0.0.0.0',
-                '--port',
-                String(rpcPort),
-                '--backend',
-                `http://127.0.0.1:${internalRpcPort}/`,
-                '--blocks',
-                `${dataDir}/blocks`,
-                '--config',
-                `${rootDir}/kth.cfg`,
-                '--store',
-                `${rootDir}/store.json`,
-              ]
-            : ['sh', '-c', 'exec tail -f /dev/null'],
-        },
-        ready: {
-          display: i18n('RPC Compat'),
-          fn: async () => {
-            if (!rpcEnabled) {
-              return {
-                message: i18n('JSON-RPC is off — compatibility sidecar idle'),
-                result: 'disabled' as const,
-              }
-            }
-            try {
-              const res = await knuthSub.exec([
-                'curl',
-                '-s',
-                '-o',
-                '/dev/null',
-                '-w',
-                '%{http_code}',
-                '--max-time',
-                '3',
-                `http://127.0.0.1:${rpcPort}/`,
-              ])
-              const code = String(res.stdout ?? '').trim()
-              if (code === '401' || code === '200') {
-                return {
-                  message: i18n(
-                    'Bitcoin-RPC compatibility sidecar is serving dependents',
-                  ),
-                  result: 'success' as const,
-                }
-              }
-            } catch {
-              /* fall through */
-            }
-            return {
-              message: i18n('Bitcoin-RPC compatibility sidecar is starting'),
-              result: 'starting' as const,
-            }
-          },
-        },
-        requires: ['primary'],
-      })
       .addHealthCheck('sync-progress', {
         ready: {
           display: i18n('Blockchain Sync'),
@@ -369,7 +298,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
               try {
                 // In 1.4, blocks/hash describe the validated chain. Raw block
                 // files and header heights must never advance that result.
-                const res = await rpcCall('getblockchaininfo', internalRpcPort)
+                const res = await rpcCall('getblockchaininfo')
                 if (res.exitCode === 0 && res.stdout) {
                   const info = JSON.parse(String(res.stdout))?.result
                   if (info) {
