@@ -1,9 +1,10 @@
 name: Knuth chipnet sync crash check
 
 # TEST ONLY branch, never merged. Fast-syncs chipnet with the same kth image
-# the end-to-end run builds (cached from that run), under gdb, to see whether
-# the crashes seen on StartOS (SIGSEGV, glibc heap-corruption aborts) happen on
-# other hardware, and to get a backtrace when they do.
+# the end-to-end run builds (cached from that run), to see whether the crashes
+# seen on StartOS (SIGSEGV, glibc heap-corruption aborts) happen on other
+# hardware. "native" runs kth as StartOS does and restarts it after a crash;
+# "gdb" runs it under gdb for a backtrace. kth logs to the console in both.
 on:
   push:
     branches: [knuth-rpc-e2e]
@@ -14,6 +15,11 @@ permissions:
 
 jobs:
   sync:
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [native, gdb]
+    name: chipnet ${{ matrix.mode }}
     runs-on: ubuntu-latest
     timeout-minutes: 100
     steps:
@@ -21,44 +27,53 @@ jobs:
         with:
           persist-credentials: false
       - name: Restore the kth image built from this Dockerfile
-        id: image
         uses: actions/cache/restore@v6
         with:
           path: /tmp/knuth-e2e.tar
           key: knuth-e2e-${{ hashFiles('Dockerfile') }}
-          fail-on-cache-miss: false
-      - name: Load the kth image, or build it
+          fail-on-cache-miss: true
+      - name: Load the kth image
         run: |
-          if [ -f /tmp/knuth-e2e.tar ]; then
-            docker load -i /tmp/knuth-e2e.tar
-          else
-            VERSION=$(sed -nE 's/^ARG KNUTH_VERSION=(.*)$/\1/p' Dockerfile)
-            docker build --platform linux/amd64 --build-arg "KNUTH_VERSION=$VERSION" --tag knuth-e2e .
-          fi
+          docker load -i /tmp/knuth-e2e.tar
           printf 'FROM knuth-e2e\nRUN apt-get update && apt-get install -y --no-install-recommends gdb && rm -rf /var/lib/apt/lists/*\n' \
             | docker build --platform linux/amd64 --tag knuth-gdb -
         shell: bash
-      - name: Sync chipnet under gdb for up to 75 minutes
+      - name: Sync chipnet for up to 75 minutes
         run: |
           mkdir -p out
+          docker volume create kthdata >/dev/null
           # The package's chipnet settings: kth tells chipnet from testnet4 by
           # the inbound port, and Fulcrum and the Explorer need db_mode full.
-          timeout 75m docker run --name kth --platform linux/amd64 --entrypoint gdb knuth-gdb \
-            -batch -ex 'set pagination off' -ex 'handle SIGPIPE nostop noprint' -ex run \
-            -ex 'echo \n=== crashing thread\n' -ex bt \
-            -ex 'echo \n=== all threads\n' -ex 'thread apply all bt 12' \
-            --args /usr/local/bin/kth --init_run --network chipnet --node.display daemon \
-            --db.directory /data/chipnet --db.db_mode full \
-            --net.inbound_port 48333 --net.inbound_connections 0 --net.outbound_connections 8 \
-            > out/kth-gdb.log 2>&1 || echo "exit $?"
-          grep -nE "SIGSEGV|SIGABRT|malloc|corrupt|double free|=== crashing" out/kth-gdb.log | head -20 || true
-          echo "--- last sync progress"
-          grep -E "UTXO built|contiguous" out/kth-gdb.log | tail -3 || true
-          echo "--- tail"
-          tail -80 out/kth-gdb.log
+          ARGS="--init_run --network chipnet --db.directory /data/chipnet --db.db_mode full
+                --net.inbound_port 48333 --net.inbound_connections 0 --net.outbound_connections 8"
+          deadline=$(( $(date +%s) + 75*60 ))
+          run=0
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            run=$((run + 1))
+            left=$(( deadline - $(date +%s) ))
+            if [ "${{ matrix.mode }}" = gdb ]; then
+              timeout "$left" docker run --rm --platform linux/amd64 -v kthdata:/data --entrypoint gdb knuth-gdb \
+                -batch -ex 'set pagination off' -ex 'handle SIGPIPE nostop noprint' -ex run \
+                -ex 'echo \n=== crashing thread\n' -ex bt -ex 'echo \n=== all threads\n' -ex 'thread apply all bt 12' \
+                --args /usr/local/bin/kth $ARGS > "out/run-$run.log" 2>&1
+            else
+              timeout "$left" docker run --rm --platform linux/amd64 -v kthdata:/data --entrypoint /usr/local/bin/kth \
+                knuth-e2e $ARGS > "out/run-$run.log" 2>&1
+            fi
+            code=$?
+            last=$(grep -oE "UTXO built to height [0-9]+" "out/run-$run.log" | tail -1)
+            echo "run $run: exit $code, $last"
+            grep -m3 -nE "SIGSEGV|SIGABRT|malloc|corrupt|double free|never recorded as finished" "out/run-$run.log" || true
+            [ "$code" = 124 ] && break                       # reached the time limit
+            grep -q "never recorded as finished" "out/run-$run.log" && break   # needs a rebuild
+            [ "${{ matrix.mode }}" = gdb ] && grep -q "=== crashing thread" "out/run-$run.log" && \
+              sed -n '/=== crashing thread/,/=== all threads/p' "out/run-$run.log" | head -40
+          done
+          echo "--- last progress"
+          grep -hE "UTXO built|contiguous" out/run-*.log | tail -2
         shell: bash
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: kth-chipnet-sync
+          name: kth-chipnet-${{ matrix.mode }}
           path: out
