@@ -23,10 +23,12 @@ what is specific to running it on StartOS once it is installed.
 2. Watch the **Dashboard** health checks — the same rows as BCHN / BCHD / Flowee: **RPC**, **Blockchain Sync** (percent), **Peer Connections**, **Tor** (optional), **I2P**, **Clearnet**.
 3. When you need RPC (pools, Fulcrum, Explorer): **Config → Node Settings → JSON-RPC Server**, then **Actions → RPC Credentials**.
 
-## Moving from Knuth 1.3.x
+## Moving from Knuth 1.4.x or older
 
-Knuth 1.4.0 changed the UTXO-Z database format, so 1.4.0 and later need a fresh
-blockchain database when you come from 1.3.x. For an existing installation:
+Knuth 1.4.0 changed the UTXO-Z database format, and Knuth 1.5.0 moved to LMDB
+1.0, which cannot open an older database. So 1.5.0 and later need a fresh
+blockchain database when you come from 1.4.x or older. For an existing
+installation:
 
 1. Stop Knuth.
 2. Run **Actions → Rebuild Blockchain Database** for the active network.
@@ -35,10 +37,12 @@ blockchain database when you come from 1.3.x. For an existing installation:
 
 The rebuild deletes chain data for the selected network and preserves your
 network settings and RPC credentials. Repeat it before using another network
-that still has a 1.3.x database. A fresh installation already has an empty
-database. Keep a 1.3.x chain database out of restores into 1.4.0 or later.
+that still has an older database. A fresh installation already has an empty
+database. Keep a 1.4.x or older chain database out of restores into 1.5.0 or
+later.
 
-Coming from 1.4.0, Knuth 1.5.0 reuses the existing database; no rebuild is needed.
+If Knuth stops right after starting with "Error opening LMDB environment:
+-30793", its database is older than 1.5.0: stop it and rebuild as above.
 
 To use Chipnet, select **Config → Network → chipnet** and enable JSON-RPC so the
 dashboard can verify synchronization. Native x86_64 execution is available;
