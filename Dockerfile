@@ -49,7 +49,7 @@ FROM --platform=linux/amd64 ubuntu:24.04
 # curl is used by the package health checks to reach the JSON-RPC interface;
 # kth ships no RPC client CLI of its own.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates curl python3 && \
+    apt-get install -y --no-install-recommends ca-certificates curl && \
     rm -rf /var/lib/apt/lists/* && \
     mkdir -p /data
 
@@ -60,8 +60,6 @@ COPY --from=kth-build /usr/local/lib64/libgcc_s.so.1*  /opt/kth/lib/
 RUN echo /opt/kth/lib > /etc/ld.so.conf.d/kth.conf && ldconfig
 
 COPY --from=kth-build /deploy/direct_deploy/kth/bin/kth /usr/local/bin/kth
-COPY scripts/rpc_compat.py /usr/local/bin/rpc_compat.py
-RUN chmod 755 /usr/local/bin/rpc_compat.py
 
 WORKDIR /data
 VOLUME /data

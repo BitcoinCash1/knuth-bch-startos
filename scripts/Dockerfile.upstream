@@ -10,9 +10,9 @@ FROM --platform=linux/amd64 ghcr.io/k-nuth/kth:${KNUTH_VERSION} AS upstream
 FROM --platform=linux/amd64 ubuntu:24.04
 
 # curl is used by the package health checks to reach the JSON-RPC interface;
-# kth ships no RPC client CLI of its own. python3 runs the RPC sidecar.
+# kth ships no RPC client CLI of its own.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates curl python3 && \
+    apt-get install -y --no-install-recommends ca-certificates curl && \
     rm -rf /var/lib/apt/lists/* && \
     mkdir -p /data
 
@@ -21,9 +21,6 @@ COPY --from=upstream /usr/local/bin/kth /usr/local/bin/kth
 COPY --from=upstream /opt/kth/lib/ /opt/kth/lib/
 COPY --from=upstream /etc/ld.so.conf.d/kth.conf /etc/ld.so.conf.d/kth.conf
 RUN ldconfig
-
-COPY scripts/rpc_compat.py /usr/local/bin/rpc_compat.py
-RUN chmod 755 /usr/local/bin/rpc_compat.py
 
 WORKDIR /data
 VOLUME /data
