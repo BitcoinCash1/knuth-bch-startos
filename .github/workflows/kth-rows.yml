@@ -21,9 +21,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: row20-chaintips
-            branch: rpc/getchaintips
+          - name: row10-relay-in
+            branch: relay/receive-transactions
             domain: false
+            network: true
+          - name: row11-relay-out
+            branch: relay/announce-transactions
+            domain: false
+            network: true
+          - name: row12b-verbose
+            branch: rpc/verbose-block-and-transaction
+            domain: false
+            blockchain: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -46,6 +55,7 @@ jobs:
           TARGETS="kth_node_test node-exe"
           if [ "${{ matrix.domain }}" = "true" ]; then TARGETS="$TARGETS kth_domain_test"; fi
           if [ "${{ matrix.blockchain }}" = "true" ]; then TARGETS="$TARGETS kth_blockchain_test"; fi
+          if [ "${{ matrix.network }}" = "true" ]; then TARGETS="$TARGETS kth_network_test"; fi
           docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w /src -e TARGETS="$TARGETS" "$IMAGE" \
             bash -euo pipefail -c '
               pip install --no-cache-dir --upgrade "conan>=2.25,<3" "kthbuild>=4,<5"
@@ -95,6 +105,18 @@ jobs:
           tail -n 40 blockchain-tests.log
           echo "kth_blockchain_test exit $rc" | tee -a test-status.txt
         shell: bash
+      - name: Run kth's network test suite
+        if: matrix.network
+        run: |
+          TEST=$(find kth-src/build -name kth_network_test -type f -perm -u+x | head -1)
+          echo "test binary: $TEST"
+          set +e
+          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w "/src/$(dirname "${TEST#kth-src/}")" "$IMAGE" \
+            bash -c "timeout --kill-after=30 1200 ./kth_network_test --reporter compact" > network-tests.log 2>&1
+          rc=$?
+          tail -n 40 network-tests.log
+          echo "kth_network_test exit $rc" | tee -a test-status.txt
+        shell: bash
       - name: Restore the package image
         uses: actions/cache/restore@v6
         with:
@@ -130,6 +152,7 @@ jobs:
             node-tests.log
             domain-tests.log
             blockchain-tests.log
+            network-tests.log
             e2e-out
           if-no-files-found: ignore
       - name: Fail when a kth test suite failed

@@ -1070,6 +1070,8 @@ def row12_block_reads(s: dict) -> None:
     for verbosity in (1, 2):
         kth, error = call(KTH, "getblock", blk, verbosity)
         bchn = call(BCHN, "getblock", blk, verbosity)[0]
+        if error is None and not isinstance(kth, dict):
+            error = {"not an object": str(kth)[:40]}
         missing = keys_missing(kth, bchn, skip=("asm", "fee", "ablastate")) if error is None else ["<error>"]
         same = error is None and all(kth.get(k) == bchn.get(k) for k in (
             "hash", "confirmations", "size", "height", "version", "merkleroot", "time", "mediantime", "nonce",
@@ -1081,10 +1083,14 @@ def row12_block_reads(s: dict) -> None:
                                                           "size") if error is None and kth.get(k) != bchn.get(k)]})
     kth, error = call(KTH, "getrawtransaction", s["confirmed_txid"], True, blk)
     bchn = call(BCHN, "getrawtransaction", s["confirmed_txid"], True, blk)[0]
+    if error is None and not isinstance(kth, dict):
+        error = {"not an object": str(kth)[:40]}
     same = error is None and all(kth.get(k) == bchn.get(k) for k in ("txid", "hex", "blockhash", "confirmations",
-                                                                      "time", "blocktime"))
-    row(12, "BCH Explorer", "getrawtransaction [txid, true, blockhash]", same and not keys_missing(kth, bchn, skip=("asm",)),
-        {"kth": {k: kth.get(k) for k in ("blockhash", "confirmations", "time")} if error is None else error})
+                                                                      "time", "blocktime", "in_active_chain"))
+    missing = keys_missing(kth, bchn, skip=("asm",)) if error is None else ["<error>"]
+    row(12, "BCH Explorer", "getrawtransaction [txid, true, blockhash]", same and not missing,
+        {"kth": {k: kth.get(k) for k in ("blockhash", "confirmations", "time", "in_active_chain")}
+         if error is None else error, "missing": missing})
 
 
 def row10_relay_in(s: dict) -> None:
