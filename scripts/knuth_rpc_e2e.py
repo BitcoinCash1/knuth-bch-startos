@@ -106,7 +106,9 @@ def start_kth() -> None:
                     "--net.inbound_port", "18555", "--net.inbound_connections", "0",
                     "--net.outbound_connections", "1", "--net.peer", "127.0.0.1:18444",
                     "--rpc.enabled", "true", "--rpc.bind", "127.0.0.1", "--rpc.port", "19332",
-                    "--rpc.user", "e2e", "--rpc.password", "e2e"], check=True)
+                    "--rpc.user", "e2e", "--rpc.password", "e2e",
+                    "--log.debug_file", "/data/e2e/debug.log", "--log.error_file", "/data/e2e/error.log"],
+                   check=True)
     wait_for(KTH, "kth")
 
 
@@ -1103,11 +1105,22 @@ def row12_block_reads(s: dict) -> None:
 
 def row10_relay_in(s: dict) -> None:
     """Transactions relayed by a peer reach kth's mempool: the wallet
-    transactions BCHN holds in its mempool are in kth's too."""
+    transactions BCHN made right after kth synced, and one it makes now, long
+    after, are in kth's mempool too."""
+    client = "Fulcrum, BCH Explorer, miners"
     kth = set(call(KTH, "getrawmempool")[0] or [])
     missing = [t for t in s["mempool_txids"] if t not in kth]
-    row(10, "Fulcrum, BCH Explorer, miners", "BCHN's relayed mempool transactions are in kth's mempool",
+    row(10, client, "BCHN's wallet transactions from right after the sync are in kth's mempool",
         not missing, {"kth mempool": sorted(kth), "missing": missing})
+    late = cli("sendtoaddress", s["others"][2], "0.1")
+    reached = False
+    for _ in range(30):
+        if late in (call(KTH, "getrawmempool")[0] or []):
+            reached = True
+            break
+        time.sleep(1)
+    row(10, client, "a wallet transaction BCHN makes later reaches kth's mempool", reached,
+        {"txid": late, "in kth's mempool": reached})
 
 
 def row11_relay_out(s: dict) -> None:
@@ -1208,6 +1221,10 @@ def main() -> None:
                 RESULTS["setup"][f"{name}_crashed"] = f"{type(error).__name__}: {error}"
     finally:
         RESULTS["setup"].setdefault("kth_log", kth_log(80))
+        # kth logs to a file as a daemon; stopped first so what it buffered is written.
+        subprocess.run(["docker", "stop", "-t", "15", "kth"], capture_output=True)
+        subprocess.run(["docker", "cp", "kth:/data/e2e/debug.log", str(OUT / "kth-debug.log")],
+                       capture_output=True)
         (OUT / "results.json").write_text(json.dumps(RESULTS, indent=1, default=str))
         text = report()
         (OUT / "results.md").write_text(text)

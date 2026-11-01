@@ -21,10 +21,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: row1-accept-found-block
-            branch: mining/accept-found-block
+          - name: row10-relay-in
+            branch: relay/receive-transactions
             domain: false
-            blockchain: true
+            network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
