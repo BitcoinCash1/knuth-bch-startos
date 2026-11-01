@@ -21,12 +21,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: pr778-help-live-list
-            branch: test/help-live-list
+          - name: row22-noise-crypto
+            branch: sv2/noise-crypto
             domain: false
-          - name: pr780-estimatefee-args
-            branch: test/estimatefee-args
-            domain: false
+            infrastructure: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -58,6 +56,7 @@ jobs:
           if [ "${{ matrix.domain }}" = "true" ]; then TARGETS="$TARGETS kth_domain_test"; fi
           if [ "${{ matrix.blockchain }}" = "true" ]; then TARGETS="$TARGETS kth_blockchain_test"; fi
           if [ "${{ matrix.network }}" = "true" ]; then TARGETS="$TARGETS kth_network_test"; fi
+          if [ "${{ matrix.infrastructure }}" = "true" ]; then TARGETS="$TARGETS kth_infrastructure_test"; fi
           mkdir -p ccache
           docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -v "$PWD/ccache:/ccache" -w /src \
             -e TARGETS="$TARGETS" -e CCACHE_DIR=/ccache -e CCACHE_MAXSIZE=1200M -e CCACHE_BASEDIR=/src "$IMAGE" \
@@ -122,6 +121,17 @@ jobs:
           tail -n 40 blockchain-tests.log
           echo "kth_blockchain_test exit $rc" | tee -a test-status.txt
         shell: bash
+      - name: Run kth's infrastructure test suite
+        if: matrix.infrastructure
+        run: |
+          TEST=$(find kth-src/build -name kth_infrastructure_test -type f -perm -u+x | head -1)
+          echo "test binary: $TEST"
+          set +e
+          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w "/src/$(dirname "${TEST#kth-src/}")" "$IMAGE"             bash -c "timeout --kill-after=30 1200 ./kth_infrastructure_test --reporter compact" > infrastructure-tests.log 2>&1
+          rc=$?
+          tail -n 40 infrastructure-tests.log
+          echo "kth_infrastructure_test exit $rc" | tee -a test-status.txt
+        shell: bash
       - name: Run kth's network test suite
         if: matrix.network
         run: |
@@ -173,6 +183,7 @@ jobs:
             domain-tests.log
             blockchain-tests.log
             network-tests.log
+            infrastructure-tests.log
             e2e-out
           if-no-files-found: ignore
       - name: Fail when a kth test suite failed
