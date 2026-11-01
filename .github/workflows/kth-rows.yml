@@ -24,30 +24,39 @@ jobs:
           - name: master
             branch: master
             domain: false
-          - name: row5-merkle
-            branch: rpc/getblocktemplatelight-merkle
-            domain: false
-          - name: cashaddr-decode
-            branch: domain/token-aware-cashaddr
-            domain: true
           - name: row6-validateaddress
             branch: rpc/validateaddress
             domain: false
           - name: row8-blockchaininfo
             branch: rpc/getblockchaininfo-fields
             domain: false
-          - name: row15-help
-            branch: rpc/help
+          - name: row9-chain-names
+            branch: rpc/chain-names
             domain: false
-          - name: row16-confirmations
-            branch: rpc/getblockheader-confirmations
+          - name: row7-decoderawtransaction
+            branch: rpc/decoderawtransaction
             domain: false
-          - name: row18-estimatefee
-            branch: rpc/estimatefee
+          - name: row13-gettxout
+            branch: rpc/gettxout
             domain: false
-          - name: row19-networkhashps
-            branch: rpc/getnetworkhashps
+            blockchain: true
+          - name: row14-getnetworkinfo
+            branch: rpc/getnetworkinfo
             domain: false
+          - name: row20-getchaintips
+            branch: rpc/getchaintips
+            domain: false
+          - name: row4-getblocktemplate
+            branch: rpc/getblocktemplate
+            domain: false
+          - name: row12a-block-file-reads
+            branch: rpc/block-file-reads
+            domain: false
+            blockchain: true
+          - name: row12b-verbose
+            branch: rpc/verbose-block-and-transaction
+            domain: false
+            blockchain: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -69,6 +78,7 @@ jobs:
         run: |
           TARGETS="kth_node_test node-exe"
           if [ "${{ matrix.domain }}" = "true" ]; then TARGETS="$TARGETS kth_domain_test"; fi
+          if [ "${{ matrix.blockchain }}" = "true" ]; then TARGETS="$TARGETS kth_blockchain_test"; fi
           docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w /src -e TARGETS="$TARGETS" "$IMAGE" \
             bash -euo pipefail -c '
               pip install --no-cache-dir --upgrade "conan>=2.25,<3" "kthbuild>=4,<5"
@@ -106,6 +116,18 @@ jobs:
           tail -n 40 domain-tests.log
           echo "kth_domain_test exit $rc" | tee -a test-status.txt
         shell: bash
+      - name: Run kth's blockchain test suite
+        if: matrix.blockchain
+        run: |
+          TEST=$(find kth-src/build -name kth_blockchain_test -type f -perm -u+x | head -1)
+          echo "test binary: $TEST"
+          set +e
+          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w "/src/$(dirname "${TEST#kth-src/}")" "$IMAGE" \
+            bash -c "timeout --kill-after=30 1200 ./kth_blockchain_test --reporter compact" > blockchain-tests.log 2>&1
+          rc=$?
+          tail -n 40 blockchain-tests.log
+          echo "kth_blockchain_test exit $rc" | tee -a test-status.txt
+        shell: bash
       - name: Restore the package image
         uses: actions/cache/restore@v6
         with:
@@ -140,6 +162,7 @@ jobs:
             test-status.txt
             node-tests.log
             domain-tests.log
+            blockchain-tests.log
             e2e-out
           if-no-files-found: ignore
       - name: Fail when a kth test suite failed

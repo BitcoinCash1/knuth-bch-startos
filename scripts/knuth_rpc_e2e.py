@@ -215,6 +215,7 @@ def make_mempool(s: dict) -> dict:
         return json.loads(cli("signrawtransactionwithwallet", raw))["hex"]
 
     s["fresh_tx_send"], s["fresh_tx_test"], s["fresh_tx_row5"] = fresh_tx(), fresh_tx(), fresh_tx()
+    s["fresh_tx_row4"] = fresh_tx()
     s["tip"] = cli("getbestblockhash")
     return s
 
@@ -988,10 +989,107 @@ def row20_getchaintips(s: dict) -> None:
         {"kth": tips if error is None else error, "bchn": bchn})
 
 
+def compact_size(n: int) -> bytes:
+    if n < 0xfd:
+        return bytes([n])
+    if n <= 0xffff:
+        return b"\xfd" + struct.pack("<H", n)
+    return b"\xfe" + struct.pack("<I", n)
+
+
+def row4_getblocktemplate(s: dict) -> None:
+    """ASICseer's and EloPool's getblocktemplate requests; then a block built
+    the way they build it (their coinbase, the template's transactions in its
+    order) must be accepted by BCHN."""
+    for client, request in (
+            ("ASICseer pool", {"capabilities": ["coinbasetxn", "workid", "coinbase/append"], "rules": []}),
+            ("EloPool", {"capabilities": ["coinbasetxn", "workid", "coinbase/append"]})):
+        template, error = call(KTH, "getblocktemplate", request)
+        fields = ("previousblockhash", "target", "version", "curtime", "bits", "height", "coinbasevalue",
+                  "transactions")
+        ok = error is None and isinstance(template, dict) and all(f in template for f in fields) and \
+            template["version"] != 0 and all({"data", "txid", "hash"} <= set(t) for t in template["transactions"])
+        row(4, client, "getblocktemplate has the fields the pool reads", ok,
+            {"kth": {k: v for k, v in (template or {}).items() if k != "transactions"} if error is None else error,
+             "transactions": len((template or {}).get("transactions", []))})
+    # A transaction for the template to carry: kth's mempool only has what it
+    # is sent (relay from peers is #371).
+    call(KTH, "sendrawtransaction", s["fresh_tx_row4"])
+    call(BCHN, "sendrawtransaction", s["fresh_tx_row4"])
+    time.sleep(7)  # past kth's template refresh window under mempool change
+    template, error = call(KTH, "getblocktemplate", {"capabilities": ["coinbasetxn", "workid", "coinbase/append"]})
+    if error is not None or not template:
+        return row(4, "ASICseer pool, EloPool", "block from kth's template accepted by BCHN", False, error)
+    txs = [bytes.fromhex(t["data"]) for t in template["transactions"]]
+    fees = sum(t.get("fee", 0) for t in template["transactions"])
+    subsidy = (50 * 100_000_000) >> (template["height"] // 150)
+    base = coinbase(template["height"], subsidy + fees, b"knuth-rpc-e2e row 4")
+    level = [sha256d(base)] + [sha256d(t) for t in txs]
+    while len(level) > 1:
+        if len(level) % 2:
+            level.append(level[-1])
+        level = [sha256d(level[i] + level[i + 1]) for i in range(0, len(level), 2)]
+    prev = bytes.fromhex(template["previousblockhash"])[::-1]
+    bits = int(template["bits"], 16)
+    target = (bits & 0xFFFFFF) << (8 * ((bits >> 24) - 3))
+    when = max(template["curtime"], template["mintime"])
+    for nonce in range(1 << 32):
+        header = struct.pack("<I", template["version"]) + prev + level[0] + struct.pack("<III", when, bits, nonce)
+        if int.from_bytes(sha256d(header)[::-1], "big") <= target:
+            break
+    block = header + compact_size(1 + len(txs)) + base + b"".join(txs)
+    accepted, error = call(BCHN, "submitblock", block.hex())
+    tip = call(BCHN, "getbestblockhash")[0]
+    row(4, "ASICseer pool, EloPool", "block built from kth's getblocktemplate accepted by BCHN",
+        error is None and accepted is None and tip == sha256d(header)[::-1].hex(),
+        {"transactions": len(txs), "fees": fees, "bchn submitblock": accepted if error is None else error,
+         "bchn tip is the block": tip == sha256d(header)[::-1].hex()})
+    wait_kth_height(template["height"], 120)
+
+
+def row12_block_reads(s: dict) -> None:
+    """Fulcrum's raw block and mempool transaction reads, and the Explorer's
+    verbose block and transaction reads."""
+    blk = s["tx_block"]
+    raw, error = call(KTH, "getblock", blk, False)
+    bchn_raw = call(BCHN, "getblock", blk, False)[0]
+    ok = error is None and isinstance(raw, str) and sha256d(bytes.fromhex(raw[:160]))[::-1].hex() == blk \
+        and raw == bchn_raw
+    row(12, "Fulcrum", "getblock [hash, false]: the block, its header hashing to the hash", ok,
+        {"kth": (raw[:64] + "...") if isinstance(raw, str) else error})
+    pool = call(KTH, "getrawmempool", False)[0] or []
+    for txid in pool[:2]:
+        kth, error = call(KTH, "getrawtransaction", txid, False)
+        bchn = call(BCHN, "getrawtransaction", txid, False)[0]
+        row(12, "Fulcrum", f"getrawtransaction [{txid[:12]}..., false] for a mempool tx", error is None and kth == bchn,
+            {"kth": (kth[:40] + "...") if isinstance(kth, str) else error})
+    kth, error = call(KTH, "getrawtransaction", s["coinbase_txid"], False)
+    row(12, "Fulcrum", "a confirmed tx without its block hash is error -5, which Fulcrum tolerates",
+        error is not None and error.get("code") == -5, {"kth": error})
+    for verbosity in (1, 2):
+        kth, error = call(KTH, "getblock", blk, verbosity)
+        bchn = call(BCHN, "getblock", blk, verbosity)[0]
+        missing = keys_missing(kth, bchn, skip=("asm", "fee", "ablastate")) if error is None else ["<error>"]
+        same = error is None and all(kth.get(k) == bchn.get(k) for k in (
+            "hash", "confirmations", "size", "height", "version", "merkleroot", "time", "mediantime", "nonce",
+            "bits", "chainwork", "nTx", "previousblockhash", "nextblockhash"))
+        txs = error is None and (kth["tx"] == bchn["tx"] if verbosity == 1 else
+                                 [t["txid"] for t in kth["tx"]] == [t["txid"] for t in bchn["tx"]])
+        row(12, "BCH Explorer", f"getblock [hash, {verbosity}] fields and values", same and txs and not missing,
+            {"missing": missing, "differs": [k for k in ("confirmations", "mediantime", "chainwork", "nextblockhash",
+                                                          "size") if error is None and kth.get(k) != bchn.get(k)]})
+    kth, error = call(KTH, "getrawtransaction", s["confirmed_txid"], True, blk)
+    bchn = call(BCHN, "getrawtransaction", s["confirmed_txid"], True, blk)[0]
+    same = error is None and all(kth.get(k) == bchn.get(k) for k in ("txid", "hex", "blockhash", "confirmations",
+                                                                      "time", "blocktime"))
+    row(12, "BCH Explorer", "getrawtransaction [txid, true, blockhash]", same and not keys_missing(kth, bchn, skip=("asm",)),
+        {"kth": {k: kth.get(k) for k in ("blockhash", "confirmations", "time")} if error is None else error})
+
+
 def rows(s: dict) -> None:
     for check in (row6_validateaddress, row7_decoderawtransaction, row8_blockchaininfo, row9_chain,
-                  row13_gettxout, row14_getnetworkinfo, row15_help, row16_confirmations,
-                  row18_estimatefee, row19_networkhashps, row20_getchaintips, row5_merkle):
+                  row12_block_reads, row13_gettxout, row14_getnetworkinfo, row15_help, row16_confirmations,
+                  row18_estimatefee, row19_networkhashps, row20_getchaintips, row5_merkle, row4_getblocktemplate):
         try:
             check(s)
         except Exception as error:  # one broken check must not hide the others
