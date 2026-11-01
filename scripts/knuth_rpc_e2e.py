@@ -635,7 +635,10 @@ def mining(s: dict) -> None:
          "decoderawtransaction", coinbase_hex)
     step("decoderawtransaction on the coinbase", BCHN, "decoderawtransaction", coinbase_hex)
     start = call(KTH, "getblockcount")[0]
-    step("submitblocklight the block", KTH, "submitblocklight", block, template["job_id"])
+    accepted, error = step("submitblocklight the block", KTH, "submitblocklight", block, template["job_id"])
+    s["row1"] = {"submitblocklight": accepted if error is None else error, "accepted": error is None and
+                 accepted is None, "kth tip": call(KTH, "getbestblockhash")[0], "block": block_hash,
+                 "kth height": call(KTH, "getblockcount")[0], "template height": template["height"]}
     time.sleep(3)
     step("submitblock (classic) the same block", KTH, "submitblock", block)
     time.sleep(3)
@@ -1131,11 +1134,22 @@ def row17_rawmempool_verbose(s: dict) -> None:
         {"kth": kth if error is None else error, "shared with BCHN": len(shared)})
 
 
+def row1_accept_found_block(s: dict) -> None:
+    """The mining section's submitblocklight of a block built on kth's own light
+    template, read right after the call: null, and kth's tip is that block
+    before the same block is given to BCHN."""
+    seen = s.get("row1")
+    ok = bool(seen) and seen["accepted"] and seen["kth tip"] == seen["block"] \
+        and seen["kth height"] == seen["template height"]
+    row(1, "light-template miner", "submitblocklight answers null and kth's tip is the block", ok, seen)
+
+
 def rows(s: dict) -> None:
     for check in (row10_relay_in, row17_rawmempool_verbose, row11_relay_out,
                   row6_validateaddress, row7_decoderawtransaction, row8_blockchaininfo, row9_chain,
                   row12_block_reads, row13_gettxout, row14_getnetworkinfo, row15_help, row16_confirmations,
-                  row18_estimatefee, row19_networkhashps, row20_getchaintips, row5_merkle, row4_getblocktemplate):
+                  row18_estimatefee, row19_networkhashps, row20_getchaintips, row5_merkle, row4_getblocktemplate,
+                  row1_accept_found_block):
         try:
             check(s)
         except Exception as error:  # one broken check must not hide the others

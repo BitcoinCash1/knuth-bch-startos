@@ -21,16 +21,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: row10-relay-in
-            branch: relay/receive-transactions
-            domain: false
-            network: true
-          - name: row11-relay-out
-            branch: relay/announce-transactions
-            domain: false
-            network: true
-          - name: row12b-verbose
-            branch: rpc/verbose-block-and-transaction
+          - name: row1-accept-found-block
+            branch: mining/accept-found-block
             domain: false
             blockchain: true
     name: kth ${{ matrix.name }}
@@ -50,26 +42,49 @@ jobs:
           git clone --depth 1 --branch "${{ matrix.branch }}" https://github.com/CyberAshven/kth.git kth-src
           git -C kth-src log -1 --format='%H %s' | tee kth-commit.txt
         shell: bash
+      - name: Restore the compiler cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ccache
+          key: kth-ccache-${{ matrix.name }}-${{ github.run_id }}
+          restore-keys: |
+            kth-ccache-${{ matrix.name }}-
+            kth-ccache-
       - name: Build kth and its tests in the kth toolchain
         run: |
           TARGETS="kth_node_test node-exe"
           if [ "${{ matrix.domain }}" = "true" ]; then TARGETS="$TARGETS kth_domain_test"; fi
           if [ "${{ matrix.blockchain }}" = "true" ]; then TARGETS="$TARGETS kth_blockchain_test"; fi
           if [ "${{ matrix.network }}" = "true" ]; then TARGETS="$TARGETS kth_network_test"; fi
-          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w /src -e TARGETS="$TARGETS" "$IMAGE" \
+          mkdir -p ccache
+          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -v "$PWD/ccache:/ccache" -w /src \
+            -e TARGETS="$TARGETS" -e CCACHE_DIR=/ccache -e CCACHE_MAXSIZE=1200M -e CCACHE_BASEDIR=/src "$IMAGE" \
             bash -euo pipefail -c '
+              LAUNCH=""
+              if command -v ccache >/dev/null || (apt-get update -qq && apt-get install -y -qq ccache >/dev/null); then
+                LAUNCH="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+                ccache -z
+              fi
               pip install --no-cache-dir --upgrade "conan>=2.25,<3" "kthbuild>=4,<5"
               conan profile detect --force
               conan remote add kth https://packages.kth.cash/api/ --force
-              conan install conanfile.py --version 1.5.2 -of build --build=missing \
+              time conan install conanfile.py --version 1.5.2 -of build --build=missing \
                 -o currency=BCH -o rpc=True -o tests=True \
                 -o "utxoz/*:with_tests=False" -o "utxoz/*:with_benchmarks=False" \
                 -o "utxoz/*:with_large_benchmarks=False" \
                 -s compiler.cppstd=23 -s build_type=Release
-              cmake --preset conan-release -DGLOBAL_BUILD=ON -DENABLE_TEST=ON -DCMAKE_BUILD_TYPE=Release
-              cmake --build --preset conan-release -j"$(nproc)" --target $TARGETS
+              cmake --preset conan-release -DGLOBAL_BUILD=ON -DENABLE_TEST=ON -DCMAKE_BUILD_TYPE=Release $LAUNCH
+              time cmake --build --preset conan-release -j"$(nproc)" --target $TARGETS
+              if [ -n "$LAUNCH" ]; then ccache -s; fi
+              chmod -R a+rwX /ccache
             '
         shell: bash
+      - name: Save the compiler cache
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: ccache
+          key: kth-ccache-${{ matrix.name }}-${{ github.run_id }}
       - name: Run kth's node test suite
         run: |
           TEST=$(find kth-src/build -name kth_node_test -type f -perm -u+x | head -1)
