@@ -21,9 +21,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: shv-mmr-core
-            branch: shv/mmr-core
-            domain: true
+          - name: row23-sv2-template-flow
+            branch: sv2/template-flow
+            domain: false
+            blockchain: true
+            sv2: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
