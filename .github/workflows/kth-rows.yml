@@ -21,14 +21,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: row10-relay-in
-            branch: relay/receive-transactions
-            domain: false
-          - name: row11-relay-out
-            branch: relay/announce-transactions
-            domain: false
-          - name: row17-rawmempool-verbose
-            branch: rpc/getrawmempool-verbose
+          - name: row20-chaintips
+            branch: rpc/getchaintips
             domain: false
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
