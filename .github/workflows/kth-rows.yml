@@ -21,10 +21,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: row22-noise-crypto
-            branch: sv2/noise-crypto
+          - name: row23-sv2-mines-a-block-2
+            branch: sv2/template-flow
             domain: false
-            infrastructure: true
+            blockchain: true
+            sv2: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
