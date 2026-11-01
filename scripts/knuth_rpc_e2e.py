@@ -641,6 +641,16 @@ def mining(s: dict) -> None:
     s["row1"] = {"submitblocklight": accepted if error is None else error, "accepted": error is None and
                  accepted is None, "kth tip": call(KTH, "getbestblockhash")[0], "block": block_hash,
                  "kth height": call(KTH, "getblockcount")[0], "template height": template["height"]}
+    # Row 2: BCHN hears of the block from kth alone, before it is given it below.
+    reached = False
+    if s["row1"]["accepted"]:
+        for _ in range(20):
+            if call(BCHN, "getbestblockhash")[0] == block_hash:
+                reached = True
+                break
+            time.sleep(1)
+    s["row2"] = {"kth accepted it": s["row1"]["accepted"], "BCHN tip is the block": reached,
+                 "BCHN tip": call(BCHN, "getbestblockhash")[0], "block": block_hash}
     time.sleep(3)
     step("submitblock (classic) the same block", KTH, "submitblock", block)
     time.sleep(3)
@@ -1162,12 +1172,39 @@ def row1_accept_found_block(s: dict) -> None:
     row(1, "light-template miner", "submitblocklight answers null and kth's tip is the block", ok, seen)
 
 
+def row2_found_block_reaches_peers(s: dict) -> None:
+    """The block kth accepted through submitblocklight reaches BCHN from kth
+    alone, before the harness gives it to BCHN itself."""
+    seen = s.get("row2")
+    row(2, "light-template miner (the network learns of its block)",
+        "BCHN's tip becomes the block kth accepted", bool(seen) and seen["kth accepted it"]
+        and seen["BCHN tip is the block"], seen)
+
+
+def row3_submitblock(s: dict) -> None:
+    """A pool on full templates submits a whole block with submitblock: null,
+    and kth's tip is that block. A coinbase-only block on the current tip, so it
+    does not depend on what kth's mempool holds. BCHN is then given it too, so
+    the two stay on one chain."""
+    client = "ASICseer pool, EloPool (submitblock)"
+    template, error = call(KTH, "getblocktemplatelight")
+    if error is not None or not template:
+        return row(3, client, "getblocktemplatelight answers", False, error)
+    block, block_hash, _ = solve_coinbase_only(template, b"knuth-rpc-e2e row 3")
+    accepted, error = call(KTH, "submitblock", block)
+    tip = call(KTH, "getbestblockhash")[0]
+    row(3, client, "submitblock answers null and kth's tip is the block",
+        error is None and accepted is None and tip == block_hash,
+        {"submitblock": accepted if error is None else error, "kth tip": tip, "block": block_hash})
+    call(BCHN, "submitblock", block)
+
+
 def rows(s: dict) -> None:
     for check in (row10_relay_in, row17_rawmempool_verbose, row11_relay_out,
                   row6_validateaddress, row7_decoderawtransaction, row8_blockchaininfo, row9_chain,
                   row12_block_reads, row13_gettxout, row14_getnetworkinfo, row15_help, row16_confirmations,
                   row18_estimatefee, row19_networkhashps, row20_getchaintips, row5_merkle, row4_getblocktemplate,
-                  row1_accept_found_block):
+                  row1_accept_found_block, row2_found_block_reaches_peers, row3_submitblock):
         try:
             check(s)
         except Exception as error:  # one broken check must not hide the others
