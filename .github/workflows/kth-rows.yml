@@ -21,14 +21,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: row12a-block-file-reads
-            branch: rpc/block-file-reads
+          - name: pr769-review
+            branch: test/pr769-review
             domain: false
-            blockchain: true
-          - name: row12b-verbose
-            branch: rpc/verbose-block-and-transaction
+          - name: pr770-review
+            branch: test/pr770-review
             domain: false
-            blockchain: true
+          - name: pr771-review
+            branch: test/pr771-review
+            domain: false
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
