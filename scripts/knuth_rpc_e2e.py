@@ -882,9 +882,116 @@ def row19_networkhashps(s: dict) -> None:
             {"kth": rate if error is None else error, "bchn": bchn})
 
 
+def keys_missing(kth, bchn, skip=()) -> list:
+    """Keys BCHN's reply has that kth's lacks, recursively, ignoring `skip`."""
+    missing = []
+    if isinstance(bchn, dict):
+        if not isinstance(kth, dict):
+            return ["<object>"]
+        for key, value in bchn.items():
+            if key in skip:
+                continue
+            if key not in kth:
+                missing.append(key)
+            else:
+                missing += [f"{key}.{m}" for m in keys_missing(kth[key], value, skip)]
+    elif isinstance(bchn, list) and bchn and isinstance(kth, list) and kth:
+        missing += [f"[0].{m}" for m in keys_missing(kth[0], bchn[0], skip)]
+    return missing
+
+
+def row7_decoderawtransaction(s: dict) -> None:
+    """EloPool's startup call: decoderawtransaction on its coinbase must answer
+    HTTP 200 with JSON, or EloPool exits. The shape is set against BCHN's for
+    the same transaction (#370 asks for that comparison)."""
+    template = call(KTH, "getblocktemplatelight")[0] or {"height": 1}
+    coinbase_hex = coinbase(template["height"], 50 * 100_000_000, b"knuth-rpc-e2e row 7").hex()
+    body = json.dumps({"method": "decoderawtransaction", "params": [coinbase_hex]}).encode()
+    ok, note = elopool_exchange(KTH, body + b"\n")
+    reply = post(KTH, body)["json"] or {}
+    if not ok:
+        note = f"over CRLF; EloPool's own transport: {note}"
+    result = reply.get("result")
+    row(7, "EloPool", "decoderawtransaction on its coinbase answers JSON", isinstance(result, dict),
+        {"note": note, "kth": result if result is not None else reply.get("error")})
+    for label, txid in (("coinbase", s["coinbase_txid"]), ("spend", s["confirmed_txid"])):
+        raw = call(BCHN, "getrawtransaction", txid, False)[0]
+        kth, error = call(KTH, "decoderawtransaction", raw)
+        bchn = call(BCHN, "decoderawtransaction", raw)[0]
+        missing = keys_missing(kth, bchn, skip=("asm",)) if error is None else ["<error>"]
+        same = error is None and all(kth.get(k) == bchn.get(k) for k in ("txid", "size", "locktime", "version"))
+        outs = error is None and [(o["value"], o["scriptPubKey"]["hex"], o["scriptPubKey"].get("addresses"))
+                                  for o in kth["vout"]] == [(o["value"], o["scriptPubKey"]["hex"],
+                                                            o["scriptPubKey"].get("addresses")) for o in bchn["vout"]]
+        row(7, "shape vs bitcoind (#370)", f"decoderawtransaction {label}: same fields and values",
+            same and outs and not missing, {"missing": missing, "kth": kth if error is None else error})
+
+
+def row9_chain(s: dict) -> None:
+    """EloPool and ASICseer map `chain` to the payout address prefix."""
+    known = ("main", "test", "test4", "scale", "chip", "regtest")
+    for method in ("getblockchaininfo", "getmininginfo"):
+        kth = (call(KTH, method)[0] or {}).get("chain")
+        bchn = (call(BCHN, method)[0] or {}).get("chain")
+        row(9, "EloPool, ASICseer pool", f"{method} chain is a name the pools map", kth in known and kth == bchn,
+            {"kth": kth, "bchn": bchn})
+
+
+def row13_gettxout(s: dict) -> None:
+    """The Explorer's gettxout [txid, n] and [txid, n, false]: an unspent output
+    is described, a spent one is null."""
+    txid, n = s["confirmed_txid"], s["unspent_n"]
+    for params in ([txid, n], [txid, n, False]):
+        kth, error = call(KTH, "gettxout", *params)
+        bchn = call(BCHN, "gettxout", *params)[0]
+        same = error is None and isinstance(kth, dict) and isinstance(bchn, dict) and all(
+            kth.get(k) == bchn.get(k) for k in ("bestblock", "confirmations", "value", "coinbase")) and \
+            kth["scriptPubKey"]["hex"] == bchn["scriptPubKey"]["hex"]
+        row(13, "BCH Explorer", f"gettxout {json.dumps(params)[:24]}... unspent", same,
+            {"kth": kth if error is None else error, "bchn": bchn,
+             "missing": keys_missing(kth, bchn, skip=("asm",)) if error is None else None})
+    # An output spent in a block: the confirmed transaction's own input.
+    spent = (call(BCHN, "getrawtransaction", txid, True)[0] or {}).get("vin", [{}])[0]
+    kth, error = call(KTH, "gettxout", spent.get("txid"), spent.get("vout"))
+    bchn = call(BCHN, "gettxout", spent.get("txid"), spent.get("vout"))[0]
+    row(13, "BCH Explorer", "gettxout on an output spent in a block is null",
+        error is None and kth is None and bchn is None, {"kth": kth if error is None else error, "bchn": bchn})
+
+
+def row14_getnetworkinfo(s: dict) -> None:
+    """Fulcrum's node detection (subversion, version, relayfee, warnings), the
+    Explorer's subversion, and pool status pages' connections."""
+    info, error = call(KTH, "getnetworkinfo")
+    bchn = call(BCHN, "getnetworkinfo")[0] or {}
+    if error is not None or not isinstance(info, dict):
+        return row(14, "Fulcrum", "getnetworkinfo answers", False, error)
+    fulcrum = (isinstance(info.get("subversion"), str) and info["subversion"].startswith("/")
+               and isinstance(info.get("version"), int) and info["version"] > 0
+               and isinstance(info.get("relayfee"), (int, float)) and isinstance(info.get("warnings"), str))
+    row(14, "Fulcrum", "subversion, version, relayfee, warnings", fulcrum,
+        {f: info.get(f) for f in ("subversion", "version", "relayfee", "warnings")})
+    row(14, "pool status pages", "connections counts the BCHN peer",
+        isinstance(info.get("connections"), int) and info["connections"] >= 1,
+        {"connections": info.get("connections"), "missing vs bitcoind": keys_missing(
+            info, bchn, skip=("networks", "localaddresses", "timeoffset", "excessutxocharge",
+                              "connections_in", "connections_out"))})
+
+
+def row20_getchaintips(s: dict) -> None:
+    """The Explorer's getchaintips at startup: the active tip is BCHN's."""
+    tips, error = call(KTH, "getchaintips")
+    bchn = call(BCHN, "getchaintips")[0] or []
+    active = [t for t in (tips or []) if isinstance(t, dict) and t.get("status") == "active"]
+    bchn_active = [t for t in bchn if t.get("status") == "active"]
+    row(20, "BCH Explorer", "getchaintips lists the active tip", error is None and len(active) == 1
+        and active[0].get("hash") == bchn_active[0]["hash"] and active[0].get("height") == bchn_active[0]["height"],
+        {"kth": tips if error is None else error, "bchn": bchn})
+
+
 def rows(s: dict) -> None:
-    for check in (row6_validateaddress, row8_blockchaininfo, row15_help, row16_confirmations,
-                  row18_estimatefee, row19_networkhashps, row5_merkle):
+    for check in (row6_validateaddress, row7_decoderawtransaction, row8_blockchaininfo, row9_chain,
+                  row13_gettxout, row14_getnetworkinfo, row15_help, row16_confirmations,
+                  row18_estimatefee, row19_networkhashps, row20_getchaintips, row5_merkle):
         try:
             check(s)
         except Exception as error:  # one broken check must not hide the others
