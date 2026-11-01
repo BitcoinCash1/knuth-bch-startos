@@ -21,7 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: pr795-fee-mempool-policy
+          - name: pr795-fee-mempool-policy-rerun
             branch: test/fee-mempool-policy
             domain: false
             blockchain: true
