@@ -1,0 +1,149 @@
+name: kth rows from #773, build, tests and client checks
+
+# TEST ONLY branch, never merged. For each fork branch of CyberAshven/kth that
+# carries a row of k-nuth/kth#773, and for upstream master as the baseline:
+# build kth with its tests from kth's own recipe and toolchain image, run kth's
+# node test suite (and the domain suite where the branch changes the domain
+# library), then put that kth into the package image and run
+# scripts/knuth_rpc_e2e.py, whose "#773 rows" section is each client's own
+# check of its row.
+on:
+  push:
+    branches: [knuth-rpc-e2e]
+    paths: [.github/workflows/kth-rows.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  row:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: master
+            branch: master
+            domain: false
+          - name: row5-merkle
+            branch: rpc/getblocktemplatelight-merkle
+            domain: false
+          - name: cashaddr-decode
+            branch: domain/token-aware-cashaddr
+            domain: true
+          - name: row6-validateaddress
+            branch: rpc/validateaddress
+            domain: false
+          - name: row8-blockchaininfo
+            branch: rpc/getblockchaininfo-fields
+            domain: false
+          - name: row15-help
+            branch: rpc/help
+            domain: false
+          - name: row16-confirmations
+            branch: rpc/getblockheader-confirmations
+            domain: false
+          - name: row18-estimatefee
+            branch: rpc/estimatefee
+            domain: false
+          - name: row19-networkhashps
+            branch: rpc/getnetworkhashps
+            domain: false
+    name: kth ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      IMAGE: kthnode/gcc15-ubuntu24.04@sha256:4988fdeb3654c2b5ea591ffa4454f67e1a631549449c62e35060ba69da79eb67
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Make room for the build
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        shell: bash
+      - name: Fetch kth ${{ matrix.branch }}
+        run: |
+          git clone --depth 1 --branch "${{ matrix.branch }}" https://github.com/CyberAshven/kth.git kth-src
+          git -C kth-src log -1 --format='%H %s' | tee kth-commit.txt
+        shell: bash
+      - name: Build kth and its tests in the kth toolchain
+        run: |
+          TARGETS="kth_node_test node-exe"
+          if [ "${{ matrix.domain }}" = "true" ]; then TARGETS="$TARGETS kth_domain_test"; fi
+          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w /src -e TARGETS="$TARGETS" "$IMAGE" \
+            bash -euo pipefail -c '
+              pip install --no-cache-dir --upgrade "conan>=2.25,<3" "kthbuild>=4,<5"
+              conan profile detect --force
+              conan remote add kth https://packages.kth.cash/api/ --force
+              conan install conanfile.py --version 1.5.2 -of build --build=missing \
+                -o currency=BCH -o rpc=True -o tests=True \
+                -o "utxoz/*:with_tests=False" -o "utxoz/*:with_benchmarks=False" \
+                -o "utxoz/*:with_large_benchmarks=False" \
+                -s compiler.cppstd=23 -s build_type=Release
+              cmake --preset conan-release -DGLOBAL_BUILD=ON -DENABLE_TEST=ON -DCMAKE_BUILD_TYPE=Release
+              cmake --build --preset conan-release -j"$(nproc)" --target $TARGETS
+            '
+        shell: bash
+      - name: Run kth's node test suite
+        run: |
+          TEST=$(find kth-src/build -name kth_node_test -type f -perm -u+x | head -1)
+          echo "test binary: $TEST"
+          set +e
+          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w "/src/$(dirname "${TEST#kth-src/}")" "$IMAGE" \
+            bash -c "timeout --kill-after=30 1200 ./kth_node_test --reporter compact" > node-tests.log 2>&1
+          rc=$?
+          tail -n 40 node-tests.log
+          echo "kth_node_test exit $rc" | tee -a test-status.txt
+        shell: bash
+      - name: Run kth's domain test suite
+        if: matrix.domain
+        run: |
+          TEST=$(find kth-src/build -name kth_domain_test -type f -perm -u+x | head -1)
+          echo "test binary: $TEST"
+          set +e
+          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w "/src/$(dirname "${TEST#kth-src/}")" "$IMAGE" \
+            bash -c "timeout --kill-after=30 1800 ./kth_domain_test --reporter compact" > domain-tests.log 2>&1
+          rc=$?
+          tail -n 40 domain-tests.log
+          echo "kth_domain_test exit $rc" | tee -a test-status.txt
+        shell: bash
+      - name: Restore the package image
+        uses: actions/cache/restore@v6
+        with:
+          path: /tmp/knuth-e2e.tar
+          key: knuth-e2e-${{ hashFiles('Dockerfile') }}
+      - name: Put this kth into the package image
+        run: |
+          docker load -i /tmp/knuth-e2e.tar
+          KTH=$(find kth-src/build -name kth -type f -perm -u+x -path '*node-exe*' | head -1)
+          echo "node binary: $KTH"
+          cp "$KTH" kth-built
+          printf 'FROM knuth-e2e\nCOPY kth-built /usr/local/bin/kth\n' > Dockerfile.built
+          docker build --platform linux/amd64 -f Dockerfile.built -t knuth-e2e .
+        shell: bash
+      - name: Fetch BCHN 29.2.0
+        run: |
+          TARBALL=bitcoin-cash-node-29.2.0-x86_64-linux-gnu.tar.gz
+          curl -fsSLO "https://github.com/bitcoin-cash-node/bitcoin-cash-node/releases/download/v29.2.0/$TARBALL"
+          echo "23bbe9ff749136a9b832a2a59023ce76a5391322c1ea2f4f24b5b91f035081bc  $TARBALL" | sha256sum -c
+          tar xzf "$TARBALL"
+          echo "$PWD/bitcoin-cash-node-29.2.0/bin" >> "$GITHUB_PATH"
+        shell: bash
+      - name: Run the end-to-end checks against this kth
+        run: python3 scripts/knuth_rpc_e2e.py e2e-out
+        shell: bash
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: kth-${{ matrix.name }}
+          path: |
+            kth-commit.txt
+            test-status.txt
+            node-tests.log
+            domain-tests.log
+            e2e-out
+          if-no-files-found: ignore
+      - name: Fail when a kth test suite failed
+        run: |
+          cat test-status.txt
+          ! grep -v ' exit 0$' test-status.txt
+        shell: bash

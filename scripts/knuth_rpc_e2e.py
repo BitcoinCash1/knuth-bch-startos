@@ -33,7 +33,7 @@ BCHN = ("127.0.0.1", 18443)
 KTH = ("127.0.0.1", 19332)
 NODES = {"kth": KTH, "bchn": BCHN}
 AUTH = base64.b64encode(b"e2e:e2e").decode()
-RESULTS: dict = {"setup": {}, "methods": [], "transport": [], "mining": []}
+RESULTS: dict = {"setup": {}, "methods": [], "transport": [], "mining": [], "rows": []}
 
 
 # ---- plain JSON-RPC ---------------------------------------------------------
@@ -214,7 +214,7 @@ def make_mempool(s: dict) -> dict:
                   json.dumps({cli("getnewaddress"): round(utxo["amount"] - 0.001, 8)}))
         return json.loads(cli("signrawtransactionwithwallet", raw))["hex"]
 
-    s["fresh_tx_send"], s["fresh_tx_test"] = fresh_tx(), fresh_tx()
+    s["fresh_tx_send"], s["fresh_tx_test"], s["fresh_tx_row5"] = fresh_tx(), fresh_tx(), fresh_tx()
     s["tip"] = cli("getbestblockhash")
     return s
 
@@ -652,6 +652,239 @@ def mining(s: dict) -> None:
     step("sendrawtransaction the same tx", BCHN, "sendrawtransaction", s["fresh_tx_send"])
 
 
+# ---- #773 rows: each client's own acceptance of the reply ------------------------
+
+CASHADDR = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+
+
+def cashaddr_polymod(values) -> int:
+    c = 1
+    for d in values:
+        c0 = c >> 35
+        c = ((c & 0x07ffffffff) << 5) ^ d
+        for bit, gen in enumerate((0x98f2bc8e61, 0x79b76d99e2, 0xf33e5fb3c4, 0xae2eabe2a8, 0x1e4f43e470)):
+            if c0 & (1 << bit):
+                c ^= gen
+    return c ^ 1
+
+
+def cashaddr_convert(data, frm: int, to: int, pad: bool) -> list:
+    acc = bits = 0
+    out = []
+    for v in data:
+        acc = (acc << frm) | v
+        bits += frm
+        while bits >= to:
+            bits -= to
+            out.append((acc >> bits) & ((1 << to) - 1))
+    if pad and bits:
+        out.append((acc << (to - bits)) & ((1 << to) - 1))
+    return out
+
+
+def cashaddr_retype(address: str, new_type: int) -> str:
+    """The same hash under another CashAddr type (0 P2PKH, 1 P2SH, 2 and 3
+    their token-aware forms)."""
+    prefix, data = address.split(":")
+    values = [CASHADDR.index(c) for c in data][:-8]
+    raw = cashaddr_convert(values, 5, 8, False)
+    raw[0] = (new_type << 3) | (raw[0] & 0x07)
+    payload = cashaddr_convert(raw, 8, 5, True)
+    mod = cashaddr_polymod([ord(x) & 0x1f for x in prefix] + [0] + payload + [0] * 8)
+    return prefix + ":" + "".join(CASHADDR[v] for v in payload + [(mod >> 5 * (7 - i)) & 31 for i in range(8)])
+
+
+def raw_exchange(node, request: bytes, timeout: float = 15) -> bytes:
+    with socket.create_connection(node, timeout=timeout) as sock:
+        sock.sendall(request)
+        data, deadline = b"", time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([sock], [], [], deadline - time.monotonic())
+            if not ready:
+                break
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+            if http_responses(data) and not http_responses(data)[0].get("short"):
+                break
+    return data
+
+
+def asicseer_json(node, body: bytes):
+    """ASICseer's json_rpc_call, keeping the parsed reply: (ok, note, json)."""
+    with socket.create_connection(node, timeout=15) as sock:
+        sock.sendall(ckpool_request(node, body))
+        r = LineReader(sock)
+        n, line = r.read_line(15)
+        if n < 1 or line[:15].lower() != b"http/1.1 200 ok":
+            return False, f"status line {line[:60]!r}", None
+        length = -1
+        while length < 0:
+            n, line = r.read_line(15)
+            if n < 1:
+                return False, "no Content-Length line", None
+            if line[:16].lower() == b"content-length: ":
+                length = int(line[16:].strip())
+                n, _ = r.read_line(15)
+                if n != 1:
+                    return False, "no blank line right after Content-Length", None
+        try:
+            return True, "read", json.loads(r.read_exact(length, 15))
+        except ValueError as error:
+            return False, f"body does not parse: {error}", None
+
+
+def row(number: int, client: str, check: str, ok: bool, detail) -> None:
+    RESULTS["rows"].append({"row": number, "client": client, "check": check,
+                            "verdict": "ok" if ok else "GAP",
+                            "detail": detail if isinstance(detail, str) else json.dumps(detail)[:400]})
+
+
+def row5_merkle(s: dict) -> None:
+    """A miner on getblocktemplatelight builds a block that carries a
+    transaction: the coinbase folded with the template's merkle branch must
+    give the root of the block it submits, which BCHN then accepts."""
+    client, check = "light-template miner", "block with a transaction, root from `merkle`, accepted by BCHN"
+    txid, _ = call(KTH, "sendrawtransaction", s["fresh_tx_row5"])
+    call(BCHN, "sendrawtransaction", s["fresh_tx_row5"])
+    time.sleep(7)  # past kth's template refresh window under mempool change
+    template, error = call(KTH, "getblocktemplatelight")
+    if error is not None or not template:
+        return row(5, client, check, False, {"template": error})
+    branch = template.get("merkle")
+    if not branch:
+        return row(5, client, check, False, {"merkle": branch, "kth mempool": call(KTH, "getrawmempool")[0]})
+    # The template's transactions, in canonical order (txid bytes as stored).
+    pool = sorted(call(KTH, "getrawmempool")[0] or [], key=lambda t: bytes.fromhex(t)[::-1])
+    txs = [bytes.fromhex(call(BCHN, "getrawtransaction", t, False)[0]) for t in pool]
+    subsidy = (50 * 100_000_000) >> (template["height"] // 150)
+    base = coinbase(template["height"], subsidy, b"knuth-rpc-e2e row 5")
+    root = sha256d(base)
+    for sibling in branch:
+        root = sha256d(root + bytes.fromhex(sibling)[::-1])
+    prev = bytes.fromhex(template["previousblockhash"])[::-1]
+    bits = int(template["bits"], 16)
+    target = (bits & 0xFFFFFF) << (8 * ((bits >> 24) - 3))
+    when = max(template["curtime"], template["mintime"])
+    for nonce in range(1 << 32):
+        header = struct.pack("<I", template["version"]) + prev + root + struct.pack("<III", when, bits, nonce)
+        if int.from_bytes(sha256d(header)[::-1], "big") <= target:
+            break
+    block = header + bytes([1 + len(txs)]) + base + b"".join(txs)
+    accepted, error = call(BCHN, "submitblock", block.hex())
+    tip = call(BCHN, "getbestblockhash")[0]
+    ok = error is None and accepted is None and tip == sha256d(header)[::-1].hex()
+    row(5, client, check, ok, {"merkle": branch, "kth mempool": pool, "first is a txid": branch[0] in pool,
+                               "bchn submitblock": accepted if error is None else error,
+                               "bchn tip is the block": tip == sha256d(header)[::-1].hex(),
+                               "sendrawtransaction to kth": txid})
+    wait_kth_height(template["height"], 120)
+
+
+def row6_validateaddress(s: dict) -> None:
+    """ASICseer's validate_address on its payout address: isvalid true, a hex
+    scriptPubKey for the coinbase output, and isscript. The scriptPubKey must
+    be the one the address pays to (BCHN's answer for the same address)."""
+    client = "ASICseer pool (validate_address)"
+    plain = s["addr"]
+    for label, address in (("P2PKH", plain), ("token-aware P2PKH", cashaddr_retype(plain, 2)),
+                           ("P2SH", cashaddr_retype(plain, 1)), ("token-aware P2SH", cashaddr_retype(plain, 3))):
+        body = json.dumps({"method": "validateaddress", "params": [address]}).encode() + b"\n"
+        ok, note, reply = asicseer_json(KTH, body)
+        bchn = call(BCHN, "validateaddress", address)[0] or {}
+        result = (reply or {}).get("result") or {}
+        spk = result.get("scriptPubKey")
+        accepted = (ok and result.get("isvalid") is True and isinstance(spk, str) and len(spk) % 2 == 0
+                    and "isscript" in result)
+        row(6, client, f"{label} {address}", accepted and spk == bchn.get("scriptPubKey")
+            and result.get("isscript") == bchn.get("isscript") and result.get("address") == bchn.get("address"),
+            {"kth": reply.get("result") if reply else note, "bchn": bchn})
+    wrong = "bitcoincash:qr7fzmep8g7h7ymfxy74lgc0v950j3r2959lhtxxsl"  # a mainnet address on regtest
+    reply = call(KTH, "validateaddress", wrong)
+    row(6, client, "mainnet address on regtest is not valid", reply[1] is None and reply[0] == {"isvalid": False},
+        {"kth": reply})
+
+
+def row8_blockchaininfo(s: dict) -> None:
+    """Fulcrum's GetChainInfoTask parse, the Explorer's blocks == headers gate,
+    and the remaining fields, against the same chain on BCHN."""
+    info, error = call(KTH, "getblockchaininfo")
+    bchn = call(BCHN, "getblockchaininfo")[0] or {}
+    if error is not None or not isinstance(info, dict):
+        return row(8, "Fulcrum", "getblockchaininfo parses", False, {"kth": error})
+    fulcrum = (isinstance(info.get("blocks"), int) and info["blocks"] >= 0 and bool(info.get("chain"))
+               and len(bytes.fromhex(info.get("bestblockhash", ""))) == 32)
+    row(8, "Fulcrum", "GetChainInfoTask parse; initialblockdownload false at the tip",
+        fulcrum and info.get("initialblockdownload") is False,
+        {f: info.get(f) for f in ("blocks", "chain", "bestblockhash", "initialblockdownload")})
+    row(8, "BCH Explorer", "indexer gate blocks == headers", info.get("blocks") == info.get("headers"),
+        {"blocks": info.get("blocks"), "headers": info.get("headers")})
+    same = {f: (info.get(f), bchn.get(f)) for f in ("mediantime", "chainwork")}
+    row(8, "Fulcrum, pool status pages", "mediantime and chainwork equal BCHN's on the same chain",
+        all(a == b and a is not None for a, b in same.values()), same)
+    kinds = {"verificationprogress": (int, float), "size_on_disk": int, "warnings": str}
+    present = {f: info.get(f) for f in kinds}
+    row(8, "Fulcrum, pool status pages", "verificationprogress, size_on_disk, warnings present",
+        all(isinstance(info.get(f), t) for f, t in kinds.items()), present)
+
+
+def row15_help(s: dict) -> None:
+    """Fulcrum's connection check: `help ["help"]` must succeed."""
+    body = json.dumps({"id": 1, "method": "help", "params": ["help"]}).encode() + b"\r\n"
+    request = (f"POST / HTTP/1.1\r\nHost: {KTH[0]}:{KTH[1]}\r\nContent-Type: application/json-rpc\r\n"
+               f"Authorization: Basic {AUTH}\r\nContent-Length: {len(body)}\r\n\r\n").encode() + body
+    replies = http_responses(raw_exchange(KTH, request))
+    reply = json.loads(replies[0]["body"]) if replies else None
+    ok = isinstance(reply, dict) and reply.get("error") is None and "result" in reply and reply.get("id") == 1
+    row(15, "Fulcrum", "help [\"help\"] succeeds", ok, reply)
+    listing = call(KTH, "help")
+    row(15, "operator", "help lists the methods", listing[1] is None and "getblockcount" in (listing[0] or ""),
+        listing)
+
+
+def row16_confirmations(s: dict) -> None:
+    """Fulcrum's verbose getblockheader: confirmations and height."""
+    tip = call(KTH, "getblockcount")[0]
+    header, error = call(KTH, "getblockheader", s["tx_block"], True)
+    bchn = call(BCHN, "getblockheader", s["tx_block"], True)[0] or {}
+    ok = (error is None and isinstance(header, dict) and isinstance(header.get("confirmations"), int)
+          and header.get("height") == s["tx_block_height"]
+          and header["confirmations"] == tip - s["tx_block_height"] + 1 == bchn.get("confirmations"))
+    row(16, "Fulcrum", "getblockheader [hash, true] confirmations", ok,
+        {"kth": header if error is None else error, "bchn confirmations": bchn.get("confirmations"), "tip": tip})
+
+
+def row18_estimatefee(s: dict) -> None:
+    """Fulcrum's one-argument estimatefee for nodes it does not know to take
+    none; it passes the number back to the wallet."""
+    fee, error = call(KTH, "estimatefee", 6)
+    ok = error is None and isinstance(fee, (int, float)) and (fee >= 0 or fee == -1)
+    row(18, "Fulcrum", "estimatefee [6] returns a fee rate", ok,
+        {"kth": fee if error is None else error, "bchn estimatefee []": call(BCHN, "estimatefee")[0]})
+
+
+def row19_networkhashps(s: dict) -> None:
+    """The Explorer's indexer and mining page requests; on the same chain the
+    rate must equal BCHN's."""
+    for params in ([1, s["tx_block_height"]], [1, 1], [1008]):
+        rate, error = call(KTH, "getnetworkhashps", *params)
+        bchn = call(BCHN, "getnetworkhashps", *params)[0]
+        ok = (error is None and isinstance(rate, (int, float)) and isinstance(bchn, (int, float))
+              and abs(rate - bchn) <= 1e-9 * max(abs(bchn), 1e-30))
+        row(19, "BCH Explorer", f"getnetworkhashps {json.dumps(params)}", ok,
+            {"kth": rate if error is None else error, "bchn": bchn})
+
+
+def rows(s: dict) -> None:
+    for check in (row6_validateaddress, row8_blockchaininfo, row15_help, row16_confirmations,
+                  row18_estimatefee, row19_networkhashps, row5_merkle):
+        try:
+            check(s)
+        except Exception as error:  # one broken check must not hide the others
+            row(0, check.__name__, "crashed", False, f"{type(error).__name__}: {error}")
+
+
 # ---- report -------------------------------------------------------------------
 
 def report() -> str:
@@ -672,6 +905,11 @@ def report() -> str:
         detail = r.get("error") or r.get("result")
         extra = f" (merkle branch: {r['merkle_branch_present']})" if "merkle_branch_present" in r else ""
         lines.append(f"| {r['step']} | {r['node']} | {json.dumps(detail)[:200].replace('|', '/')}{extra} |")
+    lines += ["", "## #773 rows: each client's own acceptance of kth's reply", "",
+              "| Row | Client | Check | Verdict | Detail |", "|---|---|---|---|---|"]
+    for r in RESULTS["rows"]:
+        lines.append(f"| {r['row']} | {r['client']} | {r['check']} | **{r['verdict']}** | "
+                     f"{r['detail'][:400].replace('|', '/')} |")
     gaps = [r["call"] for r in RESULTS["methods"] if r["verdict"].startswith("GAP")]
     gaps += [r["case"] for r in RESULTS["transport"] if r["verdict"] == "GAP"]
     lines += ["", f"## {len(gaps)} gaps", ""] + [f"- {g}" for g in gaps]
@@ -687,7 +925,7 @@ def main() -> None:
         RESULTS["setup"]["data"] = {k: v for k, v in s.items()
                                     if not k.startswith("fresh") and k not in ("others", "confirmed")}
         for name, phase in (("methods", lambda: methods(s)), ("transport", transport),
-                            ("mining", lambda: mining(s))):
+                            ("mining", lambda: mining(s)), ("rows", lambda: rows(s))):
             try:
                 phase()
             except Exception as error:  # one broken phase must not hide the others
