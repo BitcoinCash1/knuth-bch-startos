@@ -21,9 +21,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: pr771-fmt
-            branch: test/pr771-fmt
+          - name: fee-operator-sigop-price
+            branch: test/fee-operator-sigop-price
             domain: false
+            blockchain: true
+          - name: row10-operator-sigop-price
+            branch: test/row10-operator-sigop-price
+            domain: false
+            network: true
+          - name: row11-operator-sigop-price
+            branch: test/row11-operator-sigop-price
+            domain: false
+            network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
