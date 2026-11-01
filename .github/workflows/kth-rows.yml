@@ -24,6 +24,9 @@ jobs:
           - name: pr778-help-live-list
             branch: test/help-live-list
             domain: false
+          - name: pr780-estimatefee-args
+            branch: test/estimatefee-args
+            domain: false
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
