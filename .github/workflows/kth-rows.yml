@@ -21,6 +21,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - name: row1-accept-found-block
+            branch: mining/accept-found-block
+            domain: false
+            blockchain: true
           - name: row2-announce-found-block
             branch: mining/announce-found-block
             domain: false
