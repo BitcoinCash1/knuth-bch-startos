@@ -792,6 +792,12 @@ def row6_validateaddress(s: dict) -> None:
                            ("P2SH", cashaddr_retype(plain, 1)), ("token-aware P2SH", cashaddr_retype(plain, 3))):
         body = json.dumps({"method": "validateaddress", "params": [address]}).encode() + b"\n"
         ok, note, reply = asicseer_json(KTH, body)
+        if not ok:
+            # ASICseer's bare-LF request and its line reader need #770 and #771;
+            # send the same body over CRLF so this row is judged on its reply.
+            transport = note
+            reply = post(KTH, body)["json"]
+            ok, note = isinstance(reply, dict), f"over CRLF; ASICseer's own transport: {transport}"
         bchn = call(BCHN, "validateaddress", address)[0] or {}
         result = (reply or {}).get("result") or {}
         spk = result.get("scriptPubKey")
@@ -799,7 +805,7 @@ def row6_validateaddress(s: dict) -> None:
                     and "isscript" in result)
         row(6, client, f"{label} {address}", accepted and spk == bchn.get("scriptPubKey")
             and result.get("isscript") == bchn.get("isscript") and result.get("address") == bchn.get("address"),
-            {"kth": reply.get("result") if reply else note, "bchn": bchn})
+            {"kth": reply.get("result") if isinstance(reply, dict) else None, "note": note, "bchn": bchn})
     wrong = "bitcoincash:qr7fzmep8g7h7ymfxy74lgc0v950j3r2959lhtxxsl"  # a mainnet address on regtest
     reply = call(KTH, "validateaddress", wrong)
     row(6, client, "mainnet address on regtest is not valid", reply[1] is None and reply[0] == {"isvalid": False},
