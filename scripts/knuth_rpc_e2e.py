@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import select
 import socket
 import struct
@@ -33,6 +34,10 @@ BCHN = ("127.0.0.1", 18443)
 KTH = ("127.0.0.1", 19332)
 NODES = {"kth": KTH, "bchn": BCHN}
 AUTH = base64.b64encode(b"e2e:e2e").decode()
+# Branches with the Stratum V2 Template Provider (row 21) set KTH_SV2=1; the
+# option does not exist on the others, where kth would refuse to start.
+SV2 = os.environ.get("KTH_SV2") == "1"
+SV2_PORT = 18442
 RESULTS: dict = {"setup": {}, "methods": [], "transport": [], "mining": [], "rows": []}
 
 
@@ -107,7 +112,9 @@ def start_kth() -> None:
                     "--net.outbound_connections", "1", "--net.peer", "127.0.0.1:18444",
                     "--rpc.enabled", "true", "--rpc.bind", "127.0.0.1", "--rpc.port", "19332",
                     "--rpc.user", "e2e", "--rpc.password", "e2e",
-                    "--log.debug_file", "/data/kth-debug.log", "--log.error_file", "/data/kth-error.log"],
+                    "--log.debug_file", "/data/kth-debug.log", "--log.error_file", "/data/kth-error.log",
+                    *(["--sv2.enabled", "true", "--sv2.bind", "127.0.0.1", "--sv2.port", str(SV2_PORT)]
+                      if SV2 else [])],
                    check=True)
     wait_for(KTH, "kth")
 
@@ -1199,12 +1206,81 @@ def row3_submitblock(s: dict) -> None:
     call(BCHN, "submitblock", block)
 
 
+def sv2_frame(msg_type: int, payload: bytes, extension: int = 0) -> bytes:
+    """sv2-spec 3.2: extension_type U16, msg_type U8, msg_length U24, payload."""
+    return struct.pack("<HB", extension, msg_type) + len(payload).to_bytes(3, "little") + payload
+
+
+def sv2_str(value: bytes) -> bytes:
+    return bytes([len(value)]) + value
+
+
+def sv2_setup(protocol: int) -> bytes:
+    """SetupConnection (sv2-spec 3.6.1) for version 2, no flags."""
+    return sv2_frame(0x00, struct.pack("<BHHI", protocol, 2, 2, 0) + sv2_str(b"127.0.0.1")
+                     + struct.pack("<H", SV2_PORT) + sv2_str(b"knuth-rpc-e2e") + sv2_str(b"")
+                     + sv2_str(b"") + sv2_str(b""))
+
+
+def sv2_read(reader: LineReader, timeout: float = 10) -> tuple[int, int, bytes] | None:
+    header = reader.read_exact(6, timeout)
+    if len(header) < 6:
+        return None
+    extension, msg_type = struct.unpack("<HB", header[:3])
+    length = int.from_bytes(header[3:], "little")
+    payload = reader.read_exact(length, timeout)
+    return (extension, msg_type, payload) if len(payload) == length else None
+
+
+def sv2_error_code(payload: bytes, offset: int) -> str:
+    return payload[offset + 1:offset + 1 + payload[offset]].decode(errors="replace")
+
+
+def row21_template_provider(s: dict) -> None:
+    """A Stratum V2 Template Distribution client: SetupConnection gets Success
+    for version 2, CoinbaseOutputConstraints is taken, and RequestTransactionData
+    for an unknown template gets RequestTransactionData.Error. A client asking
+    for the mining protocol gets SetupConnection.Error and the connection ends."""
+    client = "Stratum V2 Template Distribution client (plaintext)"
+    if not SV2:
+        return
+    seen: dict = {}
+    try:
+        with socket.create_connection(("127.0.0.1", SV2_PORT), timeout=10) as sock:
+            reader = LineReader(sock)
+            sock.sendall(sv2_setup(2))
+            reply = sv2_read(reader)
+            seen["setup"] = reply and {"msg_type": reply[1],
+                                       "used_version": struct.unpack("<H", reply[2][:2])[0]}
+            sock.sendall(sv2_frame(0x70, struct.pack("<IH", 4000, 400)))
+            sock.sendall(sv2_frame(0x73, struct.pack("<Q", 7)))
+            reply = sv2_read(reader)
+            seen["request"] = reply and {"msg_type": reply[1],
+                                         "template_id": struct.unpack("<Q", reply[2][:8])[0],
+                                         "error_code": sv2_error_code(reply[2], 8)}
+        with socket.create_connection(("127.0.0.1", SV2_PORT), timeout=10) as sock:
+            reader = LineReader(sock)
+            sock.sendall(sv2_setup(0))
+            reply = sv2_read(reader)
+            seen["mining setup"] = reply and {"msg_type": reply[1], "error_code": sv2_error_code(reply[2], 4)}
+            seen["closed after error"] = reader.read_exact(1, 10) == b""
+    except OSError as error:
+        seen["error"] = f"{type(error).__name__}: {error}"
+    ok = (seen.get("setup") == {"msg_type": 0x01, "used_version": 2}
+          and seen.get("request") == {"msg_type": 0x75, "template_id": 7, "error_code": "template-id-not-found"}
+          and seen.get("mining setup") == {"msg_type": 0x02, "error_code": "unsupported-protocol"}
+          and seen.get("closed after error") is True)
+    row(21, client, "setup succeeds on version 2, constraints are taken, unknown template answered, "
+        "mining protocol refused", ok, seen)
+
+
 def rows(s: dict) -> None:
     for check in (row10_relay_in, row17_rawmempool_verbose, row11_relay_out,
                   row6_validateaddress, row7_decoderawtransaction, row8_blockchaininfo, row9_chain,
                   row12_block_reads, row13_gettxout, row14_getnetworkinfo, row15_help, row16_confirmations,
                   row18_estimatefee, row19_networkhashps, row20_getchaintips, row5_merkle, row4_getblocktemplate,
-                  row1_accept_found_block, row2_found_block_reaches_peers, row3_submitblock):
+                  row1_accept_found_block, row2_found_block_reaches_peers, row3_submitblock,
+                  row21_template_provider):
         try:
             check(s)
         except Exception as error:  # one broken check must not hide the others
