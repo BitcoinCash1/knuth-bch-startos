@@ -21,10 +21,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: net-socks5-proxy
-            branch: net/socks5-proxy
+          - name: row27a-bridges-keep-results
+            branch: sync/coordinator-bridges-keep-results
             domain: false
-            network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
