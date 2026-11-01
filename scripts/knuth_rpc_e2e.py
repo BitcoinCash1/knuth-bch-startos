@@ -1065,8 +1065,13 @@ def row12_block_reads(s: dict) -> None:
     for txid in pool[:2]:
         kth, error = call(KTH, "getrawtransaction", txid, False)
         bchn = call(BCHN, "getrawtransaction", txid, False)[0]
-        row(12, "Fulcrum", f"getrawtransaction [{txid[:12]}..., false] for a mempool tx", error is None and kth == bchn,
-            {"kth": (kth[:40] + "...") if isinstance(kth, str) else error})
+        # The transaction is the one asked for when its bytes hash to the txid.
+        # Compared with BCHN's copy only when BCHN holds it: a transaction sent
+        # to kth alone is in no other mempool.
+        ok = error is None and isinstance(kth, str) and sha256d(bytes.fromhex(kth))[::-1].hex() == txid \
+            and (bchn is None or kth == bchn)
+        row(12, "Fulcrum", f"getrawtransaction [{txid[:12]}..., false] for a mempool tx", ok,
+            {"kth": (kth[:40] + "...") if isinstance(kth, str) else error, "in BCHN's mempool": bchn is not None})
     kth, error = call(KTH, "getrawtransaction", s["coinbase_txid"], False)
     row(12, "Fulcrum", "a confirmed tx without its block hash is error -5, which Fulcrum tolerates",
         error is not None and error.get("code") == -5, {"kth": error})

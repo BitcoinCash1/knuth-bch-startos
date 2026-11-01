@@ -21,8 +21,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: row1-accept-found-block
-            branch: mining/accept-found-block
+          - name: row10-relay-in
+            branch: relay/receive-transactions
+            domain: false
+            network: true
+          - name: row11-relay-out
+            branch: relay/announce-transactions
+            domain: false
+            network: true
+          - name: row12b-verbose
+            branch: rpc/verbose-block-and-transaction
             domain: false
             blockchain: true
     name: kth ${{ matrix.name }}
