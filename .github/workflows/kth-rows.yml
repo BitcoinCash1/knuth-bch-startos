@@ -21,17 +21,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: bch-size-only-fee
-            branch: blockchain/bch-size-only-fee
+          - name: row12a-block-file-reads
+            branch: rpc/block-file-reads
             domain: false
-          - name: row10-relay-in
-            branch: relay/receive-transactions
+            blockchain: true
+          - name: row12b-verbose
+            branch: rpc/verbose-block-and-transaction
             domain: false
-            network: true
-          - name: row11-relay-out
-            branch: relay/announce-transactions
-            domain: false
-            network: true
+            blockchain: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
