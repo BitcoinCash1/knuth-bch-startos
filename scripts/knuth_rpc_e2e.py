@@ -216,6 +216,7 @@ def make_mempool(s: dict) -> dict:
 
     s["fresh_tx_send"], s["fresh_tx_test"], s["fresh_tx_row5"] = fresh_tx(), fresh_tx(), fresh_tx()
     s["fresh_tx_row4"] = fresh_tx()
+    s["fresh_tx_row11"] = fresh_tx()
     s["tip"] = cli("getbestblockhash")
     return s
 
@@ -1086,8 +1087,47 @@ def row12_block_reads(s: dict) -> None:
         {"kth": {k: kth.get(k) for k in ("blockhash", "confirmations", "time")} if error is None else error})
 
 
+def row10_relay_in(s: dict) -> None:
+    """Transactions relayed by a peer reach kth's mempool: the wallet
+    transactions BCHN holds in its mempool are in kth's too."""
+    kth = set(call(KTH, "getrawmempool")[0] or [])
+    missing = [t for t in s["mempool_txids"] if t not in kth]
+    row(10, "Fulcrum, BCH Explorer, miners", "BCHN's relayed mempool transactions are in kth's mempool",
+        not missing, {"kth mempool": sorted(kth), "missing": missing})
+
+
+def row11_relay_out(s: dict) -> None:
+    """A transaction sent only to kth reaches BCHN's mempool."""
+    txid, error = call(KTH, "sendrawtransaction", s["fresh_tx_row11"])
+    reached = False
+    for _ in range(30):
+        if txid and txid in (call(BCHN, "getrawmempool")[0] or []):
+            reached = True
+            break
+        time.sleep(1)
+    row(11, "wallets, Fulcrum (broadcast)", "a transaction sent only to kth reaches BCHN's mempool",
+        error is None and reached, {"kth sendrawtransaction": txid if error is None else error,
+                                    "in BCHN's mempool": reached})
+
+
+def row17_rawmempool_verbose(s: dict) -> None:
+    """The Explorer's getrawmempool [true]: an object keyed by txid, each with
+    fees.base, size and depends."""
+    kth, error = call(KTH, "getrawmempool", True)
+    bchn = call(BCHN, "getrawmempool", True)[0] or {}
+    ok = error is None and isinstance(kth, dict) and kth and all(
+        isinstance(v.get("fees", {}).get("base"), (int, float)) and isinstance(v.get("size"), int)
+        and isinstance(v.get("depends"), list) for v in kth.values())
+    shared = [t for t in kth if t in bchn] if isinstance(kth, dict) else []
+    same = all(kth[t]["fees"]["base"] == bchn[t]["fees"]["base"] and kth[t]["size"] == bchn[t]["size"]
+               for t in shared)
+    row(17, "BCH Explorer", "getrawmempool [true] entries keyed by txid", ok and same,
+        {"kth": kth if error is None else error, "shared with BCHN": len(shared)})
+
+
 def rows(s: dict) -> None:
-    for check in (row6_validateaddress, row7_decoderawtransaction, row8_blockchaininfo, row9_chain,
+    for check in (row10_relay_in, row17_rawmempool_verbose, row11_relay_out,
+                  row6_validateaddress, row7_decoderawtransaction, row8_blockchaininfo, row9_chain,
                   row12_block_reads, row13_gettxout, row14_getnetworkinfo, row15_help, row16_confirmations,
                   row18_estimatefee, row19_networkhashps, row20_getchaintips, row5_merkle, row4_getblocktemplate):
         try:

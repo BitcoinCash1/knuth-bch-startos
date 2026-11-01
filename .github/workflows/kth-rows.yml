@@ -21,42 +21,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: master
-            branch: master
+          - name: row10-relay-in
+            branch: relay/receive-transactions
             domain: false
-          - name: row6-validateaddress
-            branch: rpc/validateaddress
+          - name: row11-relay-out
+            branch: relay/announce-transactions
             domain: false
-          - name: row8-blockchaininfo
-            branch: rpc/getblockchaininfo-fields
+          - name: row17-rawmempool-verbose
+            branch: rpc/getrawmempool-verbose
             domain: false
-          - name: row9-chain-names
-            branch: rpc/chain-names
-            domain: false
-          - name: row7-decoderawtransaction
-            branch: rpc/decoderawtransaction
-            domain: false
-          - name: row13-gettxout
-            branch: rpc/gettxout
-            domain: false
-            blockchain: true
-          - name: row14-getnetworkinfo
-            branch: rpc/getnetworkinfo
-            domain: false
-          - name: row20-getchaintips
-            branch: rpc/getchaintips
-            domain: false
-          - name: row4-getblocktemplate
-            branch: rpc/getblocktemplate
-            domain: false
-          - name: row12a-block-file-reads
-            branch: rpc/block-file-reads
-            domain: false
-            blockchain: true
-          - name: row12b-verbose
-            branch: rpc/verbose-block-and-transaction
-            domain: false
-            blockchain: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
