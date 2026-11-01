@@ -1154,6 +1154,20 @@ def row11_relay_out(s: dict) -> None:
                                     "in BCHN's mempool": reached})
 
 
+def pr795_fee_filter(s: dict) -> None:
+    """kth tells its peer the floor its own mempool admits at: BCHN's getpeerinfo
+    shows the fee filter kth sent, 100 satoshis per 1000 bytes for Knuth's
+    default 0.1 per byte (master sends a fixed 1000)."""
+    peers, error = call(BCHN, "getpeerinfo")
+    kth_peers = [p for p in (peers or []) if "kth" in p.get("subver", "").lower()
+                 or "knuth" in p.get("subver", "").lower()]
+    seen = [{"subver": p.get("subver"), "minfeefilter": p.get("minfeefilter")} for p in kth_peers]
+    ok = error is None and bool(kth_peers) and all(
+        abs(float(p.get("minfeefilter", -1)) - 0.000001) < 1e-12 for p in kth_peers)
+    row(795, "every peer (fee filter)", "BCHN sees kth's fee filter at 100 sat/kB, its own floor",
+        ok, seen if error is None else error)
+
+
 def row17_rawmempool_verbose(s: dict) -> None:
     """The Explorer's getrawmempool [true]: an object keyed by txid, each with
     fees.base, size and depends."""
@@ -1275,7 +1289,7 @@ def row21_template_provider(s: dict) -> None:
 
 
 def rows(s: dict) -> None:
-    for check in (row10_relay_in, row17_rawmempool_verbose, row11_relay_out,
+    for check in (row10_relay_in, row17_rawmempool_verbose, row11_relay_out, pr795_fee_filter,
                   row6_validateaddress, row7_decoderawtransaction, row8_blockchaininfo, row9_chain,
                   row12_block_reads, row13_gettxout, row14_getnetworkinfo, row15_help, row16_confirmations,
                   row18_estimatefee, row19_networkhashps, row20_getchaintips, row5_merkle, row4_getblocktemplate,

@@ -21,9 +21,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: row27b-respawn-idle-workers
-            branch: sync/respawn-idle-download-workers
+          - name: pr795-fee-mempool-policy
+            branch: test/fee-mempool-policy
             domain: false
+            blockchain: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
