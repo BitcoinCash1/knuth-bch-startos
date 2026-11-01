@@ -21,8 +21,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: row27a-bridges-keep-results
-            branch: sync/coordinator-bridges-keep-results
+          - name: row27b-respawn-idle-workers
+            branch: sync/respawn-idle-download-workers
             domain: false
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
