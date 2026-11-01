@@ -21,10 +21,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: pr795-fee-mempool-policy-rerun
-            branch: test/fee-mempool-policy
+          - name: row10-on-fee-policy
+            branch: test/row10-fee-policy
             domain: false
-            blockchain: true
+            network: true
+          - name: row11-on-fee-policy
+            branch: test/row11-fee-policy
+            domain: false
+            network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
