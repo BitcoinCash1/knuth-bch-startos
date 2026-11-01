@@ -21,15 +21,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: row23-sv2-mines-a-block-3
-            branch: sv2/template-flow
-            domain: false
+          - name: shv-p2p-light-client
+            branch: shv/mmr-core
+            domain: true
             blockchain: true
-            sv2: true
-          - name: row22-noise-crypto-3
-            branch: sv2/noise-crypto
-            domain: false
-            infrastructure: true
+            shv: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -176,6 +172,7 @@ jobs:
         env:
           KTH_SV2: ${{ matrix.sv2 && '1' || '0' }}
           KTH_PROXY: ${{ matrix.proxy && '1' || '0' }}
+          KTH_SHV: ${{ matrix.shv && '1' || '0' }}
         shell: bash
       - uses: actions/upload-artifact@v7
         if: always()

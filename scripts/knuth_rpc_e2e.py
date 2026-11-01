@@ -43,6 +43,10 @@ SV2_PORT = 18442
 # through the relay below, which records what it was asked to connect to.
 PROXY = os.environ.get("KTH_PROXY") == "1"
 PROXY_PORT = 19050
+# Branches with SHV set KTH_SHV=1: kth keeps its MMR index and takes inbound P2P
+# connections, so the light client below can ask it for proofs.
+SHV = os.environ.get("KTH_SHV") == "1"
+KTH_P2P_PORT = 18555
 RESULTS: dict = {"setup": {}, "methods": [], "transport": [], "mining": [], "rows": []}
 
 
@@ -113,7 +117,9 @@ def start_kth() -> None:
                     "--platform", "linux/amd64", "--entrypoint", "/usr/local/bin/kth", "knuth-e2e",
                     "--init_run", "--network", "regtest", "--node.display", "daemon",
                     "--db.directory", "/data/e2e", "--db.db_mode", "full",
-                    "--net.inbound_port", "18555", "--net.inbound_connections", "0",
+                    "--net.inbound_port", str(KTH_P2P_PORT),
+                    "--net.inbound_connections", "4" if SHV else "0",
+                    *(["--node.mmr_index", "true"] if SHV else []),
                     "--net.outbound_connections", "1", "--net.peer", "127.0.0.1:18444",
                     "--rpc.enabled", "true", "--rpc.bind", "127.0.0.1", "--rpc.port", "19332",
                     "--rpc.user", "e2e", "--rpc.password", "e2e",
@@ -1511,13 +1517,127 @@ def pr803_outbound_proxy(s: dict) -> None:
         ok, seen)
 
 
+REGTEST_MAGIC = bytes.fromhex("dab5bffa")
+NODE_SHV = 1 << 9
+SHV_TO_ROOT = 1 << 0
+
+
+def p2p_message(command: bytes, payload: bytes) -> bytes:
+    return (REGTEST_MAGIC + command.ljust(12, b"\0") + struct.pack("<I", len(payload))
+            + sha256d(payload)[:4] + payload)
+
+
+def p2p_read(reader: LineReader, timeout: float = 15) -> tuple[bytes, bytes] | None:
+    head = reader.read_exact(24, timeout)
+    if len(head) < 24 or head[:4] != REGTEST_MAGIC:
+        return None
+    command = head[4:16].rstrip(b"\0")
+    size, = struct.unpack("<I", head[16:20])
+    payload = reader.read_exact(size, timeout)
+    return (command, payload) if len(payload) == size else None
+
+
+def read_compact(data: bytes, o: int) -> tuple[int, int]:
+    first = data[o]
+    if first < 0xfd:
+        return first, o + 1
+    width = {0xfd: 2, 0xfe: 4, 0xff: 8}[first]
+    return int.from_bytes(data[o + 1:o + 1 + width], "little"), o + 1 + width
+
+
+def merkle_root(hashes: list[bytes]) -> bytes:
+    level = list(hashes)
+    while len(level) > 1:
+        if len(level) % 2:
+            level.append(level[-1])
+        level = [sha256d(level[i] + level[i + 1]) for i in range(0, len(level), 2)]
+    return level[0]
+
+
+def walk_proof(leaf: bytes, index: int, siblings: list[bytes]) -> bytes:
+    node = leaf
+    for sibling in siblings:
+        node = sha256d(sibling + node) if index & 1 else sha256d(node + sibling)
+        index >>= 1
+    return node
+
+
+def shv_light_client(s: dict) -> None:
+    """An SHV light client (CHIP-2026-02) over P2P, with the wire formats of
+    BCHN's implementation: kth advertises NODE_SHV, answers getshv with a proof
+    to the root and a proof to a peak for a block, the header is the block at
+    that height, and both proofs lead to roots computed here from BCHN's own
+    block hashes."""
+    client = "SHV light client (getshv over P2P)"
+    if not SHV:
+        return
+    # kth's connected tip; the hashes up to it come from BCHN, on the same chain.
+    tip = call(KTH, "getblockcount")[0]
+    hashes = [bytes.fromhex(call(BCHN, "getblockhash", h)[0])[::-1] for h in range(tip + 1)]
+    height = 5
+    seen: dict = {"commitment height": tip, "height": height}
+    try:
+        with socket.create_connection(("127.0.0.1", KTH_P2P_PORT), timeout=20) as sock:
+            reader = LineReader(sock)
+            address = struct.pack("<Q", 0) + bytes(10) + b"\xff\xff" + socket.inet_aton("127.0.0.1") + struct.pack(">H", KTH_P2P_PORT)
+            version = (struct.pack("<iQq", 70016, 0, int(time.time())) + address + address
+                       + struct.pack("<Q", 0x5348565f) + b"\x0dknuth-rpc-e2e" + struct.pack("<i", 0) + b"\x00")
+            sock.sendall(p2p_message(b"version", version))
+            services = None
+            replies: list = []
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                message = p2p_read(reader)
+                if message is None:
+                    break
+                command, payload = message
+                if command == b"version":
+                    services, = struct.unpack("<Q", payload[4:12])
+                    sock.sendall(p2p_message(b"verack", b""))
+                    request = lambda kind: bytes([kind]) + compact_size(tip) + height.to_bytes(32, "little")
+                    sock.sendall(p2p_message(b"getshv", b"\x02" + request(SHV_TO_ROOT) + request(0)))
+                elif command == b"ping":
+                    sock.sendall(p2p_message(b"pong", payload))
+                elif command == b"shv":
+                    count, o = read_compact(payload, 0)
+                    for _ in range(count):
+                        kind = payload[o]; o += 1
+                        commitment, o = read_compact(payload, o)
+                        block_height, o = read_compact(payload, o)
+                        header = payload[o:o + 80]; o += 80
+                        size, o = read_compact(payload, o)
+                        proof = [payload[o + 32 * i:o + 32 * (i + 1)] for i in range(size)]; o += 32 * size
+                        target = payload[o:o + 32]; o += 32
+                        replies.append((kind, commitment, block_height, header, proof, target))
+                    break
+            seen["NODE_SHV advertised"] = services is not None and bool(services & NODE_SHV)
+            leaf = hashes[height]
+            root = merkle_root(hashes[:tip + 1])
+            checks = []
+            for kind, commitment, block_height, header, proof, target in replies:
+                entry = {"type": kind, "commitment": commitment, "height": block_height,
+                         "header is the block": sha256d(header) == leaf,
+                         "proof leads to target": walk_proof(leaf, block_height, proof) == target}
+                if kind & SHV_TO_ROOT:
+                    entry["target is the Merkle root of BCHN's hashes"] = target == root
+                checks.append(entry)
+            seen["replies"] = checks
+    except OSError as error:
+        seen["error"] = f"{type(error).__name__}: {error}"
+    replies_ok = len(seen.get("replies", [])) == 2 and all(all(v for k, v in e.items() if isinstance(v, bool))
+                                                          for e in seen["replies"])
+    to_root = [e for e in seen.get("replies", []) if e["type"] & SHV_TO_ROOT]
+    row(1001, client, "kth advertises NODE_SHV; both proofs verify and the root equals the Merkle root "
+        "of BCHN's block hashes", bool(seen.get("NODE_SHV advertised")) and replies_ok and len(to_root) == 1, seen)
+
+
 def rows(s: dict) -> None:
     for check in (row10_relay_in, row17_rawmempool_verbose, row11_relay_out, pr795_fee_filter,
                   row6_validateaddress, row7_decoderawtransaction, row8_blockchaininfo, row9_chain,
                   row12_block_reads, row13_gettxout, row14_getnetworkinfo, row15_help, row16_confirmations,
                   row18_estimatefee, row19_networkhashps, row20_getchaintips, row5_merkle, row4_getblocktemplate,
                   row1_accept_found_block, row2_found_block_reaches_peers, row3_submitblock,
-                  row21_template_provider, row23_template_flow, pr803_outbound_proxy):
+                  row21_template_provider, row23_template_flow, pr803_outbound_proxy, shv_light_client):
         try:
             check(s)
         except Exception as error:  # one broken check must not hide the others
