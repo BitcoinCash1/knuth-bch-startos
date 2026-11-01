@@ -21,16 +21,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: pr803-socks5-e2e
-            branch: net/socks5-proxy
+          - name: pr778-help-live-list
+            branch: test/help-live-list
             domain: false
-            network: true
-            proxy: true
-          - name: row23-sv2-mines-a-block
-            branch: sv2/template-flow
-            domain: false
-            blockchain: true
-            sv2: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
