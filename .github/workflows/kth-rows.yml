@@ -21,14 +21,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: row10-on-fee-policy
-            branch: test/row10-fee-policy
-            domain: false
-            network: true
-          - name: row11-on-fee-policy
-            branch: test/row11-fee-policy
-            domain: false
-            network: true
+          - name: shv-mmr-core
+            branch: shv/mmr-core
+            domain: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
