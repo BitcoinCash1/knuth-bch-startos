@@ -21,7 +21,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: row22-noise-crypto-2
+          - name: row23-sv2-mines-a-block-3
+            branch: sv2/template-flow
+            domain: false
+            blockchain: true
+            sv2: true
+          - name: row22-noise-crypto-3
             branch: sv2/noise-crypto
             domain: false
             infrastructure: true
