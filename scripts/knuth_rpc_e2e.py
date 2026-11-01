@@ -23,6 +23,7 @@ import socket
 import struct
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -38,6 +39,10 @@ AUTH = base64.b64encode(b"e2e:e2e").decode()
 # option does not exist on the others, where kth would refuse to start.
 SV2 = os.environ.get("KTH_SV2") == "1"
 SV2_PORT = 18442
+# Branches with outbound SOCKS5 (#803) set KTH_PROXY=1: kth then reaches BCHN only
+# through the relay below, which records what it was asked to connect to.
+PROXY = os.environ.get("KTH_PROXY") == "1"
+PROXY_PORT = 19050
 RESULTS: dict = {"setup": {}, "methods": [], "transport": [], "mining": [], "rows": []}
 
 
@@ -114,9 +119,95 @@ def start_kth() -> None:
                     "--rpc.user", "e2e", "--rpc.password", "e2e",
                     "--log.debug_file", "/data/kth-debug.log", "--log.error_file", "/data/kth-error.log",
                     *(["--sv2.enabled", "true", "--sv2.bind", "127.0.0.1", "--sv2.port", str(SV2_PORT)]
-                      if SV2 else [])],
+                      if SV2 else []),
+                    *(["--net.proxy", f"127.0.0.1:{PROXY_PORT}"] if PROXY else [])],
                    check=True)
     wait_for(KTH, "kth")
+
+
+class Socks5Relay:
+    """TEST ONLY. A minimal SOCKS5 server (RFC 1928, with RFC 1929 username and
+    password) that relays to the requested destination and records each request:
+    what kth asked for, the credentials it sent, and the local port of the relay's
+    own connection onward, which is the port BCHN sees for that peer."""
+
+    def __init__(self, port: int):
+        self.port, self.requests, self.lock = port, [], threading.Lock()
+        self.server = socket.create_server(("127.0.0.1", port))
+
+    def start(self) -> None:
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self) -> None:
+        while True:
+            try:
+                client, _ = self.server.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._serve, args=(client,), daemon=True).start()
+
+    @staticmethod
+    def _read(sock: socket.socket, n: int) -> bytes:
+        data = b""
+        while len(data) < n:
+            chunk = sock.recv(n - len(data))
+            if not chunk:
+                raise ConnectionError("closed")
+            data += chunk
+        return data
+
+    def _serve(self, client: socket.socket) -> None:
+        record: dict = {}
+        try:
+            version, count = self._read(client, 2)
+            methods = list(self._read(client, count))
+            record["offered"] = methods
+            method = 0x02 if 0x02 in methods else 0x00
+            client.sendall(bytes([5, method]))
+            if method == 0x02:
+                self._read(client, 1)
+                user = self._read(client, self._read(client, 1)[0])
+                self._read(client, self._read(client, 1)[0])
+                record["user"] = user.decode(errors="replace")
+                client.sendall(b"\x01\x00")
+            _, command, _, kind = self._read(client, 4)
+            if kind == 1:
+                host = socket.inet_ntoa(self._read(client, 4))
+            elif kind == 3:
+                host = self._read(client, self._read(client, 1)[0]).decode()
+            else:
+                host = socket.inet_ntop(socket.AF_INET6, self._read(client, 16))
+            port = struct.unpack(">H", self._read(client, 2))[0]
+            record.update({"command": command, "address_type": kind, "host": host, "port": port})
+            upstream = socket.create_connection((host, port), timeout=10)
+            upstream.settimeout(None)
+            record["relay_port"] = upstream.getsockname()[1]
+            client.sendall(b"\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00")
+        except (OSError, ValueError, ConnectionError) as error:
+            record["error"] = str(error)
+            client.close()
+            with self.lock:
+                self.requests.append(record)
+            return
+        with self.lock:
+            self.requests.append(record)
+
+        def pipe(source: socket.socket, sink: socket.socket) -> None:
+            try:
+                while chunk := source.recv(65536):
+                    sink.sendall(chunk)
+            except OSError:
+                pass
+            for s in (source, sink):
+                try:
+                    s.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+        threading.Thread(target=pipe, args=(client, upstream), daemon=True).start()
+        threading.Thread(target=pipe, args=(upstream, client), daemon=True).start()
+
+
+RELAY: Socks5Relay | None = None
 
 
 def kth_log(lines: int = 40) -> str:
@@ -231,8 +322,12 @@ def make_mempool(s: dict) -> dict:
 
 
 def setup() -> dict:
+    global RELAY
     start_bchn()
     s = make_chain()
+    if PROXY:
+        RELAY = Socks5Relay(PROXY_PORT)
+        RELAY.start()
     start_kth()
     synced = wait_kth_height(s["height"], 900)
     RESULTS["setup"]["kth_synced_bchn_chain"] = synced
@@ -1269,6 +1364,10 @@ def row21_template_provider(s: dict) -> None:
             sock.sendall(sv2_frame(0x70, struct.pack("<IH", 4000, 400)))
             sock.sendall(sv2_frame(0x73, struct.pack("<Q", 7)))
             reply = sv2_read(reader)
+            # Where the provider already sends work (row 23), NewTemplate and
+            # SetNewPrevHash come first; the answer to the request follows.
+            while reply and reply[1] in (0x71, 0x72):
+                reply = sv2_read(reader)
             seen["request"] = reply and {"msg_type": reply[1],
                                          "template_id": struct.unpack("<Q", reply[2][:8])[0],
                                          "error_code": sv2_error_code(reply[2], 8)}
@@ -1288,13 +1387,137 @@ def row21_template_provider(s: dict) -> None:
         "mining protocol refused", ok, seen)
 
 
+def row23_template_flow(s: dict) -> None:
+    """A Stratum V2 Template Distribution client mines on kth's work. After its
+    constraints it gets NewTemplate and SetNewPrevHash without asking, fetches
+    the template's transactions, builds its coinbase, solves the regtest header
+    and submits it: kth's tip becomes that block, and BCHN accepts it too."""
+    client = "Stratum V2 Template Distribution client (plaintext, mines a block)"
+    if not SV2:
+        return
+    seen: dict = {}
+
+    def fail(check: str) -> None:
+        row(23, client, check, False, seen)
+
+    try:
+        with socket.create_connection(("127.0.0.1", SV2_PORT), timeout=20) as sock:
+            reader = LineReader(sock)
+            sock.sendall(sv2_setup(2))
+            reply = sv2_read(reader)
+            if not reply or reply[1] != 0x01:
+                return fail("setup succeeds")
+            sock.sendall(sv2_frame(0x70, struct.pack("<IH", 200, 10)))
+            first, second = sv2_read(reader, 30), sv2_read(reader, 30)
+            seen["frames after constraints"] = [first and first[1], second and second[1]]
+            if not first or not second or first[1] != 0x71 or second[1] != 0x72:
+                return fail("NewTemplate then SetNewPrevHash after the constraints")
+
+            work, o = first[2], 0
+            template_id, = struct.unpack_from("<Q", work, o); o += 8
+            future = work[o]; o += 1
+            version, coinbase_version = struct.unpack_from("<II", work, o); o += 8
+            prefix = work[o + 1:o + 1 + work[o]]; o += 1 + work[o]
+            sequence, value = struct.unpack_from("<IQ", work, o); o += 12
+            output_count, = struct.unpack_from("<I", work, o); o += 4
+            outputs_size, = struct.unpack_from("<H", work, o)
+            outputs = work[o + 2:o + 2 + outputs_size]; o += 2 + outputs_size
+            locktime, = struct.unpack_from("<I", work, o); o += 4
+            path = [work[o + 1 + 32 * i:o + 33 + 32 * i] for i in range(work[o])]
+
+            activation = second[2]
+            previous = activation[8:40]
+            ntime, bits = struct.unpack_from("<II", activation, 40)
+            target = int.from_bytes(activation[48:80], "little")
+            seen.update({"template_id": template_id, "future_template": future,
+                         "SetNewPrevHash names it": struct.unpack_from("<Q", activation, 0)[0] == template_id,
+                         "coinbase value": value, "merkle path": len(path)})
+
+            sock.sendall(sv2_frame(0x73, struct.pack("<Q", template_id)))
+            data = sv2_read(reader, 30)
+            if not data or data[1] != 0x74:
+                return fail("RequestTransactionData returns the template's transactions")
+            body, o = data[2], 8
+            o += 2 + struct.unpack_from("<H", body, o)[0]
+            count, = struct.unpack_from("<H", body, o); o += 2
+            transactions = []
+            for _ in range(count):
+                size = int.from_bytes(body[o:o + 3], "little"); o += 3
+                transactions.append(body[o:o + size]); o += size
+            seen["transactions"] = len(transactions)
+
+            # The template's prefix, padded so the coinbase is at least the
+            # 100 bytes BCH requires of a transaction, paying one OP_TRUE output.
+            script_sig = prefix + b"knuth-rpc-e2e row 23".ljust(40, b".")
+            coinbase = (struct.pack("<I", coinbase_version) + b"\x01" + bytes(32) + b"\xff\xff\xff\xff"
+                        + compact_size(len(script_sig)) + script_sig + struct.pack("<I", sequence)
+                        + compact_size(output_count + 1) + outputs
+                        + struct.pack("<Q", value) + b"\x01\x51" + struct.pack("<I", locktime))
+            root = sha256d(coinbase)
+            for sibling in path:
+                root = sha256d(root + sibling)
+            for nonce in range(1 << 20):
+                header = struct.pack("<I", version) + previous + root + struct.pack("<III", ntime, bits, nonce)
+                if int.from_bytes(sha256d(header), "little") <= target:
+                    break
+            else:
+                return fail("a regtest header solves within 2^20 nonces")
+            block_hash = sha256d(header)[::-1].hex()
+            seen["block"] = block_hash
+
+            sock.sendall(sv2_frame(0x76, struct.pack("<QIII", template_id, version, ntime, nonce)
+                                   + struct.pack("<H", len(coinbase)) + coinbase))
+            tip = None
+            for _ in range(30):
+                tip = call(KTH, "getbestblockhash")[0]
+                if tip == block_hash:
+                    break
+                time.sleep(1)
+            seen["kth tip"] = tip
+
+            block = header + compact_size(1 + len(transactions)) + coinbase + b"".join(transactions)
+            accepted, error = call(BCHN, "submitblock", block.hex())
+            seen["BCHN submitblock"] = accepted if error is None else error
+    except OSError as error:
+        seen["error"] = f"{type(error).__name__}: {error}"
+        return fail("the client completes")
+    row(23, client, "kth's tip becomes the block mined on its template; BCHN accepts the block",
+        seen.get("kth tip") == seen.get("block") and seen.get("BCHN submitblock") is None, seen)
+
+
+def pr803_outbound_proxy(s: dict) -> None:
+    """kth reaches BCHN only through the SOCKS5 proxy: the relay was asked for
+    BCHN's address, each connection with fresh credentials, and every connection
+    BCHN has from kth is one of the relay's own."""
+    client = "node operators behind Tor (outbound SOCKS5)"
+    if not PROXY or RELAY is None:
+        return
+    with RELAY.lock:
+        requests = list(RELAY.requests)
+    to_bchn = [r for r in requests if r.get("port") == 18444 and "error" not in r]
+    relay_ports = {r.get("relay_port") for r in to_bchn}
+    peers = call(BCHN, "getpeerinfo")[0] or []
+    kth_peers = [p for p in peers if "knuth" in p.get("subver", "").lower()]
+    via_relay = [p for p in kth_peers if int(p.get("addr", ":0").rsplit(":", 1)[1]) in relay_ports]
+    users = [r.get("user") for r in requests]
+    seen = {"requests": [{k: r.get(k) for k in ("host", "port", "address_type", "offered", "relay_port", "error")}
+                         for r in requests],
+            "fresh credentials each time": None not in users and len(set(users)) == len(users),
+            "BCHN's kth peers": [p.get("addr") for p in kth_peers],
+            "kth synced": RESULTS["setup"].get("kth_synced_bchn_chain")}
+    ok = (bool(to_bchn) and bool(kth_peers) and len(via_relay) == len(kth_peers)
+          and seen["fresh credentials each time"] and bool(seen["kth synced"]))
+    row(803, client, "kth reaches BCHN only through the proxy, with fresh credentials each connection",
+        ok, seen)
+
+
 def rows(s: dict) -> None:
     for check in (row10_relay_in, row17_rawmempool_verbose, row11_relay_out, pr795_fee_filter,
                   row6_validateaddress, row7_decoderawtransaction, row8_blockchaininfo, row9_chain,
                   row12_block_reads, row13_gettxout, row14_getnetworkinfo, row15_help, row16_confirmations,
                   row18_estimatefee, row19_networkhashps, row20_getchaintips, row5_merkle, row4_getblocktemplate,
                   row1_accept_found_block, row2_found_block_reaches_peers, row3_submitblock,
-                  row21_template_provider):
+                  row21_template_provider, row23_template_flow, pr803_outbound_proxy):
         try:
             check(s)
         except Exception as error:  # one broken check must not hide the others

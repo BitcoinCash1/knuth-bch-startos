@@ -21,7 +21,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: row23-sv2-template-flow
+          - name: pr803-socks5-e2e
+            branch: net/socks5-proxy
+            domain: false
+            network: true
+            proxy: true
+          - name: row23-sv2-mines-a-block
             branch: sv2/template-flow
             domain: false
             blockchain: true
@@ -159,6 +164,7 @@ jobs:
         run: python3 scripts/knuth_rpc_e2e.py e2e-out
         env:
           KTH_SV2: ${{ matrix.sv2 && '1' || '0' }}
+          KTH_PROXY: ${{ matrix.proxy && '1' || '0' }}
         shell: bash
       - uses: actions/upload-artifact@v7
         if: always()
