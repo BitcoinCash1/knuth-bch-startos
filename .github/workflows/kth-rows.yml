@@ -21,14 +21,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: pr769-review
-            branch: test/pr769-review
-            domain: false
           - name: pr770-review
             branch: test/pr770-review
             domain: false
-          - name: pr771-review
-            branch: test/pr771-review
+          - name: http-combined-review
+            branch: test/http-combined-review
             domain: false
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
