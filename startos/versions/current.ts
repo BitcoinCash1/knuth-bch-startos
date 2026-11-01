@@ -8,8 +8,8 @@ import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 const ALLOW_DOWNGRADE = false
 
 export const current = VersionInfo.of({
-  version: '1.5.1:0',
-  releaseNotes: 'Upstream v1.5.1.',
+  version: '1.5.2:0',
+  releaseNotes: 'Upstream v1.5.2.',
   migrations: {
     up: async () => {},
     down: ALLOW_DOWNGRADE ? async () => {} : IMPOSSIBLE,
