@@ -21,22 +21,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: row21-sv2-template-provider
-            branch: sv2/template-provider-listener
+          - name: pr771-fmt
+            branch: test/pr771-fmt
             domain: false
-            sv2: true
-          - name: bch-size-only-fee
-            branch: blockchain/bch-size-only-fee
-            domain: false
-            blockchain: true
-          - name: row10-relay-in
-            branch: relay/receive-transactions
-            domain: false
-            network: true
-          - name: row11-relay-out
-            branch: relay/announce-transactions
-            domain: false
-            network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
