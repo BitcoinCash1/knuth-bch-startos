@@ -21,7 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: shv-p2p-light-client
+          - name: shv-p2p-light-client-2
             branch: shv/mmr-core
             domain: true
             blockchain: true
