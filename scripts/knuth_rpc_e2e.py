@@ -66,6 +66,13 @@ SV2_CLIENT_PORT = NOISE_BRIDGE_PORT if NOISE else SV2_PORT
 SV2_TRANSPORT = "Noise, SRI crates" if NOISE else "plaintext"
 # The sv2-spec 4.7.1 test vector: a valid authority key that is not kth's.
 OTHER_AUTHORITY = "9bXiEd8boQVhq7WddEcERUL5tyyJVFYdU8th3HfbNXK3Yw6GRXh"
+# KTH_I2P=1 (I2P through SAM, stacked on #803): an i2pd router runs beside the
+# nodes and kth takes I2P peers through its SAM bridge. A second kth whose only
+# peer is the first one's I2P address must sync the chain through the router.
+I2P = os.environ.get("KTH_I2P") == "1"
+I2PD_IMAGE = "purplei2p/i2pd:release-2.61.0"
+SAM_PORT = 7656
+KTH_B = ("127.0.0.1", 19342)
 RESULTS: dict = {"setup": {}, "methods": [], "transport": [], "mining": [], "rows": []}
 
 
@@ -137,7 +144,7 @@ def start_kth() -> None:
                     "--init_run", "--network", "regtest", "--node.display", "daemon",
                     "--db.directory", "/data/e2e", "--db.db_mode", "full",
                     "--net.inbound_port", str(KTH_P2P_PORT),
-                    "--net.inbound_connections", "4" if SHV else "0",
+                    "--net.inbound_connections", "4" if SHV or I2P else "0",
                     *(["--node.mmr_index", "true"] if SHV else []),
                     "--net.outbound_connections", "1",
                     "--net.peer", f"127.0.0.1:{STALL_PORT if STALL else 18444}",
@@ -148,7 +155,9 @@ def start_kth() -> None:
                       if SV2 else []),
                     *(["--sv2.noise", "true", "--sv2.static_key_file", "/data/sv2-static.key",
                        "--sv2.authority_key_file", "/data/sv2-authority.key"] if SV2 and NOISE else []),
-                    *(["--net.proxy", f"127.0.0.1:{PROXY_PORT}"] if PROXY else [])],
+                    *(["--net.proxy", f"127.0.0.1:{PROXY_PORT}"] if PROXY else []),
+                    *(["--net.i2psam", f"127.0.0.1:{SAM_PORT}", "--net.i2p_accept_incoming", "true",
+                       "--net.i2p_private_key_file", "/data/i2p_private_key"] if I2P else [])],
                    check=True)
     wait_for(KTH, "kth")
 
@@ -464,6 +473,11 @@ def make_mempool(s: dict) -> dict:
 
 def setup() -> dict:
     global RELAY, STALLER
+    if I2P:
+        # Started first: a new router needs minutes to reseed and build tunnels.
+        subprocess.run(["docker", "run", "--detach", "--name", "i2pd", "--network", "host", I2PD_IMAGE,
+                        "--sam.enabled=true", "--sam.address=127.0.0.1", f"--sam.port={SAM_PORT}",
+                        "--http.enabled=false", "--loglevel=warn"], check=True)
     start_bchn()
     s = make_chain()
     if PROXY:
@@ -1887,6 +1901,65 @@ def shv_light_client(s: dict) -> None:
         "of BCHN's block hashes", bool(seen.get("NODE_SHV advertised")) and replies_ok and len(to_root) == 1, seen)
 
 
+def kth_log_lines(container: str, pattern: str, limit: int = 12) -> list[str]:
+    copy = Path(f"/tmp/{container}-debug.log")
+    subprocess.run(["docker", "cp", f"{container}:/data/kth-debug.log", str(copy)], capture_output=True)
+    text = copy.read_text(errors="replace") if copy.exists() else ""
+    return [line[:300] for line in text.splitlines() if re.search(pattern, line)][:limit]
+
+
+def i2p_second_node(s: dict) -> None:
+    """Two kth nodes and one i2pd router. kth (A) synced from BCHN and takes I2P
+    peers through the router's SAM bridge. A second kth (B), with no TCP
+    listener and A's I2P address as its only peer, must reach A's tip through
+    the router; BCHN must only ever have A as a kth peer."""
+    client = "node operators over I2P (SAM bridge of i2pd)"
+    if not I2P:
+        return
+    check = "a second kth whose only peer is A's I2P address syncs A's chain through i2pd"
+    seen: dict = {}
+    address, deadline = None, time.monotonic() + 600
+    while address is None and time.monotonic() < deadline:
+        found = kth_log_lines("kth", r"\[sam\] I2P address: [a-z2-7]{52}\.b32\.i2p")
+        address = found[-1].rsplit(" ", 1)[-1] if found else None
+        if address is None:
+            time.sleep(5)
+    seen["A's I2P address"] = address
+    if address is None:
+        seen["A's SAM log"] = kth_log_lines("kth", r"\[sam\]")
+        return row(1002, client, check, False, seen)
+    tip = call(KTH, "getblockcount")[0]
+    seen["A height"] = tip
+    started = time.monotonic()
+    subprocess.run(["docker", "run", "--detach", "--name", "kth-b", "--network", "host",
+                    "--platform", "linux/amd64", "--entrypoint", "/usr/local/bin/kth", "knuth-e2e",
+                    "--init_run", "--network", "regtest", "--node.display", "daemon",
+                    "--db.directory", "/data/e2e", "--db.db_mode", "full",
+                    "--net.inbound_port", "18556", "--net.inbound_connections", "0",
+                    "--net.outbound_connections", "1", "--net.peer", f"{address}:0",
+                    "--net.i2psam", f"127.0.0.1:{SAM_PORT}", "--net.i2p_accept_incoming", "false",
+                    "--rpc.enabled", "true", "--rpc.bind", "127.0.0.1", "--rpc.port", str(KTH_B[1]),
+                    "--rpc.user", "e2e", "--rpc.password", "e2e",
+                    "--log.debug_file", "/data/kth-debug.log", "--log.error_file", "/data/kth-error.log"],
+                   check=True)
+    reached = False
+    while time.monotonic() - started < 900:
+        info, error = call(KTH_B, "getblockchaininfo")
+        if error is None and info and info.get("blocks", -1) >= tip:
+            reached = True
+            break
+        time.sleep(5)
+    seen["B reached A's height"] = reached
+    seen["seconds after B started"] = round(time.monotonic() - started)
+    seen["B height"] = (call(KTH_B, "getblockchaininfo")[0] or {}).get("blocks")
+    seen["B's tip is A's"] = call(KTH_B, "getbestblockhash")[0] == call(KTH, "getbestblockhash")[0]
+    peers = json.loads(cli("getpeerinfo"))
+    seen["BCHN's kth peers"] = [p.get("addr") for p in peers if "knuth" in p.get("subver", "").lower()]
+    seen["B's I2P log"] = kth_log_lines("kth-b", r"\[sam\]|b32\.i2p")
+    seen["A's I2P log"] = kth_log_lines("kth", r"\[sam\]|b32\.i2p")
+    row(1002, client, check, reached and seen["B's tip is A's"] and len(seen["BCHN's kth peers"]) == 1, seen)
+
+
 def rows(s: dict) -> None:
     for check in (row10_relay_in, row17_rawmempool_verbose, row11_relay_out, pr795_fee_filter,
                   row6_validateaddress, row7_decoderawtransaction, row8_blockchaininfo, row9_chain,
@@ -1894,7 +1967,7 @@ def rows(s: dict) -> None:
                   row18_estimatefee, row19_networkhashps, row20_getchaintips, row5_merkle, row4_getblocktemplate,
                   row1_accept_found_block, row2_found_block_reaches_peers, row3_submitblock,
                   row21_template_provider, row23_template_flow, row22_noise, pr803_outbound_proxy,
-                  shv_light_client):
+                  shv_light_client, i2p_second_node):
         try:
             check(s)
         except Exception as error:  # one broken check must not hide the others
@@ -1949,6 +2022,14 @@ def main() -> None:
     finally:
         if BRIDGE is not None:
             BRIDGE.terminate()
+        if I2P:
+            subprocess.run(["docker", "stop", "-t", "15", "kth-b"], capture_output=True)
+            subprocess.run(["docker", "cp", "kth-b:/data/kth-debug.log", str(OUT / "kth-b-debug.log")],
+                           capture_output=True)
+            (OUT / "i2pd.log").write_text(subprocess.run(["docker", "logs", "i2pd"], capture_output=True,
+                                                         text=True).stdout[-200000:]
+                                       + subprocess.run(["docker", "logs", "i2pd"], capture_output=True,
+                                                        text=True).stderr[-50000:])
         RESULTS["setup"].setdefault("kth_log", kth_log(80))
         # kth logs to a file as a daemon; stopped first so what it buffered is written.
         subprocess.run(["docker", "stop", "-t", "15", "kth"], capture_output=True)

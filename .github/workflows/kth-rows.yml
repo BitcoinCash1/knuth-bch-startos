@@ -21,10 +21,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: row22-sv2-noise
-            branch: test/sv2-noise
-            sv2: true
-            noise: true
+          - name: i2p-two-nodes
+            branch: test/i2p
+            i2p: true
+            domain: true
+            network: true
             infrastructure: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -176,6 +177,7 @@ jobs:
         env:
           KTH_SV2: ${{ matrix.sv2 && '1' || '0' }}
           KTH_NOISE: ${{ matrix.noise && '1' || '0' }}
+          KTH_I2P: ${{ matrix.i2p && '1' || '0' }}
           KTH_PROXY: ${{ matrix.proxy && '1' || '0' }}
           KTH_SHV: ${{ matrix.shv && '1' || '0' }}
           KTH_STALL: ${{ matrix.stall && '1' || '0' }}
