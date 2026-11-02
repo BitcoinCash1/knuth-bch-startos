@@ -18,6 +18,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import select
 import socket
 import struct
@@ -55,6 +56,16 @@ STALL_PORT = 19444
 # KTH_LONG=<n> (#773 row 27): BCHN mines n more blocks before kth starts, for a
 # long block download.
 LONG = int(os.environ.get("KTH_LONG") or 0)
+# KTH_NOISE=1 with KTH_SV2=1 (#773 row 22): kth's Template Provider speaks only
+# Noise, and the row 21 and 23 clients reach it through scripts/sv2-noise-bridge,
+# whose Noise side is the Stratum Reference Implementation's own crates.
+NOISE = os.environ.get("KTH_NOISE") == "1"
+NOISE_BRIDGE = os.environ.get("KTH_NOISE_BRIDGE") or "scripts/sv2-noise-bridge/target/release/sv2-noise-bridge"
+NOISE_BRIDGE_PORT = 18452
+SV2_CLIENT_PORT = NOISE_BRIDGE_PORT if NOISE else SV2_PORT
+SV2_TRANSPORT = "Noise, SRI crates" if NOISE else "plaintext"
+# The sv2-spec 4.7.1 test vector: a valid authority key that is not kth's.
+OTHER_AUTHORITY = "9bXiEd8boQVhq7WddEcERUL5tyyJVFYdU8th3HfbNXK3Yw6GRXh"
 RESULTS: dict = {"setup": {}, "methods": [], "transport": [], "mining": [], "rows": []}
 
 
@@ -135,6 +146,8 @@ def start_kth() -> None:
                     "--log.debug_file", "/data/kth-debug.log", "--log.error_file", "/data/kth-error.log",
                     *(["--sv2.enabled", "true", "--sv2.bind", "127.0.0.1", "--sv2.port", str(SV2_PORT)]
                       if SV2 else []),
+                    *(["--sv2.noise", "true", "--sv2.static_key_file", "/data/sv2-static.key",
+                       "--sv2.authority_key_file", "/data/sv2-authority.key"] if SV2 and NOISE else []),
                     *(["--net.proxy", f"127.0.0.1:{PROXY_PORT}"] if PROXY else [])],
                    check=True)
     wait_for(KTH, "kth")
@@ -298,6 +311,37 @@ class DropFirstBlockRequest:
 
 
 STALLER: DropFirstBlockRequest | None = None
+BRIDGE: subprocess.Popen | None = None
+NOISE_KEYS: dict = {}
+
+
+def start_noise_bridge() -> None:
+    """kth prints its authority key when the Noise listener starts. The bridge
+    pins that printed key, as an operator gives it to a pool or Job Declarator;
+    key-utils' own encoding of the authority secret's public key is kept to
+    compare with it."""
+    global BRIDGE
+    log, secret = Path("/tmp/kth-debug-noise.log"), Path("/tmp/sv2-authority.key")
+    for _ in range(60):
+        subprocess.run(["docker", "cp", "kth:/data/kth-debug.log", str(log)], capture_output=True)
+        found = re.findall(r"Noise authority public key: (\w+)", log.read_text(errors="replace")
+                           if log.exists() else "")
+        if found:
+            NOISE_KEYS["printed by kth"] = found[-1]
+            break
+        time.sleep(1)
+    if subprocess.run(["docker", "cp", "kth:/data/sv2-authority.key", str(secret)],
+                      capture_output=True).returncode == 0:
+        NOISE_KEYS["key-utils, from the secret file"] = subprocess.run(
+            [NOISE_BRIDGE, "--public-key-of", str(secret)], capture_output=True, text=True).stdout.strip()
+    RESULTS["setup"]["noise_keys"] = NOISE_KEYS
+    if "printed by kth" not in NOISE_KEYS:
+        return
+    BRIDGE = subprocess.Popen([NOISE_BRIDGE, "--listen", f"127.0.0.1:{NOISE_BRIDGE_PORT}",
+                               "--connect", f"127.0.0.1:{SV2_PORT}",
+                               "--authority", NOISE_KEYS["printed by kth"]],
+                              stdout=open(OUT / "noise-bridge.log", "w"), stderr=subprocess.STDOUT)
+    time.sleep(1)
 
 
 def kth_log(lines: int = 40) -> str:
@@ -430,6 +474,8 @@ def setup() -> dict:
         STALLER.start()
     started = time.monotonic()
     start_kth()
+    if SV2 and NOISE:
+        start_noise_bridge()
     if STALL:
         row27_request_timeout(s)
     synced = wait_kth_height(s["height"], 900)
@@ -1487,12 +1533,12 @@ def row21_template_provider(s: dict) -> None:
     for version 2, CoinbaseOutputConstraints is taken, and RequestTransactionData
     for an unknown template gets RequestTransactionData.Error. A client asking
     for the mining protocol gets SetupConnection.Error and the connection ends."""
-    client = "Stratum V2 Template Distribution client (plaintext)"
+    client = f"Stratum V2 Template Distribution client ({SV2_TRANSPORT})"
     if not SV2:
         return
     seen: dict = {}
     try:
-        with socket.create_connection(("127.0.0.1", SV2_PORT), timeout=10) as sock:
+        with socket.create_connection(("127.0.0.1", SV2_CLIENT_PORT), timeout=10) as sock:
             reader = LineReader(sock)
             sock.sendall(sv2_setup(2))
             reply = sv2_read(reader)
@@ -1508,7 +1554,7 @@ def row21_template_provider(s: dict) -> None:
             seen["request"] = reply and {"msg_type": reply[1],
                                          "template_id": struct.unpack("<Q", reply[2][:8])[0],
                                          "error_code": sv2_error_code(reply[2], 8)}
-        with socket.create_connection(("127.0.0.1", SV2_PORT), timeout=10) as sock:
+        with socket.create_connection(("127.0.0.1", SV2_CLIENT_PORT), timeout=10) as sock:
             reader = LineReader(sock)
             sock.sendall(sv2_setup(0))
             reply = sv2_read(reader)
@@ -1529,7 +1575,7 @@ def row23_template_flow(s: dict) -> None:
     constraints it gets NewTemplate and SetNewPrevHash without asking, fetches
     the template's transactions, builds its coinbase, solves the regtest header
     and submits it: kth's tip becomes that block, and BCHN accepts it too."""
-    client = "Stratum V2 Template Distribution client (plaintext, mines a block)"
+    client = f"Stratum V2 Template Distribution client ({SV2_TRANSPORT}, mines a block)"
     if not SV2:
         return
     seen: dict = {}
@@ -1538,7 +1584,7 @@ def row23_template_flow(s: dict) -> None:
         row(23, client, check, False, seen)
 
     try:
-        with socket.create_connection(("127.0.0.1", SV2_PORT), timeout=20) as sock:
+        with socket.create_connection(("127.0.0.1", SV2_CLIENT_PORT), timeout=20) as sock:
             reader = LineReader(sock)
             sock.sendall(sv2_setup(2))
             reply = sv2_read(reader)
@@ -1620,6 +1666,85 @@ def row23_template_flow(s: dict) -> None:
         return fail("the client completes")
     row(23, client, "kth's tip becomes the block mined on its template; BCHN accepts the block",
         seen.get("kth tip") == seen.get("block") and seen.get("BCHN submitblock") is None, seen)
+
+
+def read_until_closed(sock: socket.socket, seconds: float) -> dict:
+    started, received, closed = time.monotonic(), b"", False
+    while time.monotonic() - started < seconds:
+        ready, _, _ = select.select([sock], [], [], seconds - (time.monotonic() - started))
+        if not ready:
+            break
+        try:
+            chunk = sock.recv(65536)
+        except ConnectionResetError:
+            chunk = b""
+        if not chunk:
+            closed = True
+            break
+        received += chunk
+    return {"bytes": len(received), "closed": closed, "seconds": round(time.monotonic() - started, 1)}
+
+
+def row22_noise(s: dict) -> None:
+    """Stratum V2 over Noise (sv2-spec 4). Rows 21 and 23 reached kth only
+    through the bridge, so every frame they exchanged went through the Stratum
+    Reference Implementation's handshake and ciphers. Here: every bridge
+    handshake succeeded and frames went both ways; the authority key kth prints
+    is key-utils' encoding of its authority secret; a client pinned to another
+    authority refuses kth's certificate; plaintext sent straight to kth's port
+    never gets an SV2 answer, and the connection is closed."""
+    client = "Stratum V2 pool / Job Declarator (Noise, SRI crates)"
+    if not (SV2 and NOISE):
+        return
+    seen: dict = {"keys": NOISE_KEYS}
+    time.sleep(2)  # the bridge logs a connection when both sides have closed
+    events = []
+    log = OUT / "noise-bridge.log"
+    for line in (log.read_text(errors="replace").splitlines() if log.exists() else []):
+        try:
+            events.append(json.loads(line))
+        except ValueError:
+            pass
+    handshakes = [e for e in events if e.get("event") == "handshake"]
+    closed = [e for e in events if e.get("event") == "closed"]
+    seen["bridge"] = {"handshakes ok": sum(1 for e in handshakes if e.get("ok")),
+                      "handshakes failed": [e for e in handshakes if not e.get("ok")],
+                      "frames to kth": sum(e["frames_to_kth"] for e in closed),
+                      "frames from kth": sum(e["frames_from_kth"] for e in closed),
+                      "largest payload from kth": max([e["largest_payload_from_kth"] for e in closed] or [0])}
+
+    def probe(key: str) -> dict:
+        out = subprocess.run([NOISE_BRIDGE, "--probe", "--connect", f"127.0.0.1:{SV2_PORT}",
+                              "--authority", key], capture_output=True, text=True, timeout=30)
+        return {"exit": out.returncode, "output": out.stdout.strip()}
+
+    seen["probe pinned to kth's key"] = probe(NOISE_KEYS.get("printed by kth", ""))
+    seen["probe pinned to another authority"] = probe(OTHER_AUTHORITY)
+    try:
+        # Shorter than the 64-byte first flight: kth waits for the rest until
+        # its 10-second handshake deadline, then closes.
+        with socket.create_connection(("127.0.0.1", SV2_PORT), timeout=10) as sock:
+            sock.sendall(sv2_setup(2))
+            seen["plaintext setup"] = read_until_closed(sock, 30)
+        # Longer: kth takes the first 64 bytes as a key and answers with its
+        # 234-byte handshake flight, then the rest fails authentication.
+        with socket.create_connection(("127.0.0.1", SV2_PORT), timeout=10) as sock:
+            sock.sendall(sv2_setup(2) + sv2_setup(2))
+            seen["plaintext setup sent twice"] = read_until_closed(sock, 30)
+    except OSError as error:
+        seen["error"] = f"{type(error).__name__}: {error}"
+    bridge, other = seen["bridge"], seen["probe pinned to another authority"]
+    short, long = seen.get("plaintext setup", {}), seen.get("plaintext setup sent twice", {})
+    ok = (NOISE_KEYS.get("printed by kth") is not None
+          and NOISE_KEYS.get("printed by kth") == NOISE_KEYS.get("key-utils, from the secret file")
+          and bridge["handshakes ok"] >= 3 and not bridge["handshakes failed"]
+          and bridge["frames to kth"] >= 6 and bridge["frames from kth"] >= 5
+          and seen["probe pinned to kth's key"]["exit"] == 0
+          and other["exit"] == 1 and "second flight" in other["output"]
+          and short.get("bytes") == 0 and short.get("closed") and 8 <= short.get("seconds", 0) <= 15
+          and long.get("bytes") == 234 and long.get("closed") and long.get("seconds", 99) < 5)
+    row(22, client, "SRI's handshake and ciphers carry rows 21 and 23; another authority is refused; "
+        "plaintext gets no answer and is closed", ok, seen)
 
 
 def pr803_outbound_proxy(s: dict) -> None:
@@ -1768,7 +1893,8 @@ def rows(s: dict) -> None:
                   row12_block_reads, row13_gettxout, row14_getnetworkinfo, row15_help, row16_confirmations,
                   row18_estimatefee, row19_networkhashps, row20_getchaintips, row5_merkle, row4_getblocktemplate,
                   row1_accept_found_block, row2_found_block_reaches_peers, row3_submitblock,
-                  row21_template_provider, row23_template_flow, pr803_outbound_proxy, shv_light_client):
+                  row21_template_provider, row23_template_flow, row22_noise, pr803_outbound_proxy,
+                  shv_light_client):
         try:
             check(s)
         except Exception as error:  # one broken check must not hide the others
@@ -1821,6 +1947,8 @@ def main() -> None:
             except Exception as error:  # one broken phase must not hide the others
                 RESULTS["setup"][f"{name}_crashed"] = f"{type(error).__name__}: {error}"
     finally:
+        if BRIDGE is not None:
+            BRIDGE.terminate()
         RESULTS["setup"].setdefault("kth_log", kth_log(80))
         # kth logs to a file as a daemon; stopped first so what it buffered is written.
         subprocess.run(["docker", "stop", "-t", "15", "kth"], capture_output=True)

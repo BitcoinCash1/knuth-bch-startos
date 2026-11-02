@@ -21,12 +21,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: row27-baseline-long-download
-            branch: test/r27-baseline
-            long: 20000
-          - name: row27-bridges-long-download
-            branch: sync/coordinator-bridges-keep-results
-            long: 20000
+          - name: row22-sv2-noise
+            branch: test/sv2-noise
+            sv2: true
+            noise: true
+            infrastructure: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -168,10 +167,15 @@ jobs:
           tar xzf "$TARBALL"
           echo "$PWD/bitcoin-cash-node-29.2.0/bin" >> "$GITHUB_PATH"
         shell: bash
+      - name: Build the Stratum V2 Noise bridge (SRI crates)
+        if: matrix.noise
+        run: cargo build --release --locked --manifest-path scripts/sv2-noise-bridge/Cargo.toml
+        shell: bash
       - name: Run the end-to-end checks against this kth
         run: python3 scripts/knuth_rpc_e2e.py e2e-out
         env:
           KTH_SV2: ${{ matrix.sv2 && '1' || '0' }}
+          KTH_NOISE: ${{ matrix.noise && '1' || '0' }}
           KTH_PROXY: ${{ matrix.proxy && '1' || '0' }}
           KTH_SHV: ${{ matrix.shv && '1' || '0' }}
           KTH_STALL: ${{ matrix.stall && '1' || '0' }}
