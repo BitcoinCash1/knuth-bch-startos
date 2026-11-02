@@ -22,12 +22,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: i2p-two-nodes
-            branch: test/i2p
-            i2p: true
-            domain: true
-            network: true
-            infrastructure: true
+          - name: serve-blocks
+            branch: test/serve-blocks
+            serve: true
+            blockchain: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
