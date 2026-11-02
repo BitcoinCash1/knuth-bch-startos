@@ -371,8 +371,16 @@ class SamService:
         self.control: socket.socket | None = None
 
     def start(self) -> None:
-        # A new router builds its first tunnels before the session is ready.
-        self.control = sam_hello(600)
+        # The router opens its SAM port a little after its container starts.
+        deadline = time.monotonic() + 180
+        while self.control is None:
+            try:
+                # A new router builds its first tunnels before the session is ready.
+                self.control = sam_hello(600)
+            except ConnectionRefusedError:
+                if time.monotonic() > deadline:
+                    raise
+                time.sleep(2)
         keys = sam_ask(self.control, "DEST GENERATE SIGNATURE_TYPE=7")
         status = sam_ask(self.control, f"SESSION CREATE STYLE=STREAM ID={self.id} DESTINATION={keys['PRIV']} "
                                        "SIGNATURE_TYPE=7 i2cp.leaseSetEncType=4,0")
