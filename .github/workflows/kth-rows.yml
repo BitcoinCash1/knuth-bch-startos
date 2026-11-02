@@ -22,12 +22,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: i2p-two-nodes
-            branch: test/i2p
-            i2p: true
-            domain: true
-            network: true
-            infrastructure: true
+          - name: serve-blocks
+            branch: test/serve-blocks
+            serve: true
+            blockchain: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -179,6 +177,7 @@ jobs:
           KTH_SV2: ${{ matrix.sv2 && '1' || '0' }}
           KTH_NOISE: ${{ matrix.noise && '1' || '0' }}
           KTH_I2P: ${{ matrix.i2p && '1' || '0' }}
+          KTH_SERVE: ${{ matrix.serve && '1' || '0' }}
           KTH_PROXY: ${{ matrix.proxy && '1' || '0' }}
           KTH_SHV: ${{ matrix.shv && '1' || '0' }}
           KTH_STALL: ${{ matrix.stall && '1' || '0' }}
