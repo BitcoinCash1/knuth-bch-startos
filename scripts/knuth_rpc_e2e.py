@@ -375,12 +375,14 @@ def wallet_address() -> str:
 def make_chain() -> dict:
     """BCHN only: a mined chain with a block of wallet transactions."""
     addr = wallet_address()
+    cli("generatetoaddress", "110", addr)
     if LONG:
-        # To a script the wallet does not own, so its coin selection stays small.
+        # After the wallet's own coinbases: regtest halves the subsidy every 150
+        # blocks, so these pay nothing. To a script the wallet does not own, so
+        # its coin selection stays small.
         elsewhere = cashaddr_retype(addr, 1)
         for left in range(LONG, 0, -1000):
             cli("generatetoaddress", str(min(left, 1000)), elsewhere)
-    cli("generatetoaddress", "110", addr)
     others = [cli("getnewaddress") for _ in range(3)]
     confirmed = [cli("sendtoaddress", a, "1.5") for a in others]
     tx_block = json.loads(cli("generatetoaddress", "1", addr))[0]

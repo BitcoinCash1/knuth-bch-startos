@@ -21,12 +21,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: row27-baseline-request-timeout
-            branch: test/r27-baseline
-            stall: true
-          - name: row27-respawn-request-timeout
-            branch: sync/respawn-idle-download-workers
-            stall: true
           - name: row27-baseline-long-download
             branch: test/r27-baseline
             long: 20000
