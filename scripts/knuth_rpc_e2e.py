@@ -47,6 +47,14 @@ PROXY_PORT = 19050
 # connections, so the light client below can ask it for proofs.
 SHV = os.environ.get("KTH_SHV") == "1"
 KTH_P2P_PORT = 18555
+# KTH_STALL=1 (#773 row 27): kth reaches BCHN only through a relay that never
+# delivers kth's first request for blocks, so that request times out while the
+# peer stays connected.
+STALL = os.environ.get("KTH_STALL") == "1"
+STALL_PORT = 19444
+# KTH_LONG=<n> (#773 row 27): BCHN mines n more blocks before kth starts, for a
+# long block download.
+LONG = int(os.environ.get("KTH_LONG") or 0)
 RESULTS: dict = {"setup": {}, "methods": [], "transport": [], "mining": [], "rows": []}
 
 
@@ -120,7 +128,8 @@ def start_kth() -> None:
                     "--net.inbound_port", str(KTH_P2P_PORT),
                     "--net.inbound_connections", "4" if SHV else "0",
                     *(["--node.mmr_index", "true"] if SHV else []),
-                    "--net.outbound_connections", "1", "--net.peer", "127.0.0.1:18444",
+                    "--net.outbound_connections", "1",
+                    "--net.peer", f"127.0.0.1:{STALL_PORT if STALL else 18444}",
                     "--rpc.enabled", "true", "--rpc.bind", "127.0.0.1", "--rpc.port", "19332",
                     "--rpc.user", "e2e", "--rpc.password", "e2e",
                     "--log.debug_file", "/data/kth-debug.log", "--log.error_file", "/data/kth-error.log",
@@ -216,6 +225,81 @@ class Socks5Relay:
 RELAY: Socks5Relay | None = None
 
 
+class DropFirstBlockRequest:
+    """TEST ONLY. A TCP relay from kth to BCHN's P2P port that forwards every
+    message except kth's first getdata for blocks, which it swallows and records.
+    BCHN never sees that request, so kth's wait for those blocks times out while
+    the connection itself stays healthy: pings and everything else still pass."""
+
+    def __init__(self, port: int, upstream: tuple):
+        self.upstream, self.dropped, self.lock = upstream, None, threading.Lock()
+        self.server = socket.create_server(("127.0.0.1", port))
+
+    def start(self) -> None:
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self) -> None:
+        while True:
+            try:
+                client, _ = self.server.accept()
+                upstream = socket.create_connection(self.upstream, timeout=10)
+                upstream.settimeout(None)
+            except OSError:
+                return
+            threading.Thread(target=self._filter, args=(client, upstream), daemon=True).start()
+            threading.Thread(target=self._pipe, args=(upstream, client), daemon=True).start()
+
+    @staticmethod
+    def _close(*socks: socket.socket) -> None:
+        for s in socks:
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    def _pipe(self, source: socket.socket, sink: socket.socket) -> None:
+        try:
+            while chunk := source.recv(65536):
+                sink.sendall(chunk)
+        except OSError:
+            pass
+        self._close(source, sink)
+
+    def _filter(self, source: socket.socket, sink: socket.socket) -> None:
+        """kth to BCHN, one whole message at a time."""
+        buffer = b""
+        try:
+            while chunk := source.recv(65536):
+                buffer += chunk
+                while len(buffer) >= 24:
+                    size, = struct.unpack("<I", buffer[16:20])
+                    if len(buffer) < 24 + size:
+                        break
+                    message, buffer = buffer[:24 + size], buffer[24 + size:]
+                    if not self._swallow(message):
+                        sink.sendall(message)
+        except OSError:
+            pass
+        self._close(source, sink)
+
+    def _swallow(self, message: bytes) -> bool:
+        if message[4:16].rstrip(b"\0") != b"getdata":
+            return False
+        payload = message[24:]
+        count, o = read_compact(payload, 0)
+        kinds = {struct.unpack("<I", payload[o + 36 * i:o + 36 * i + 4])[0] for i in range(count)}
+        if not kinds & {2, 3, 4}:  # block, filtered block, compact block
+            return False
+        with self.lock:
+            if self.dropped is not None:
+                return False
+            self.dropped = {"blocks asked for": count, "at": time.monotonic()}
+        return True
+
+
+STALLER: DropFirstBlockRequest | None = None
+
+
 def kth_log(lines: int = 40) -> str:
     out = subprocess.run(["docker", "logs", "--tail", str(lines), "kth"], capture_output=True, text=True)
     return out.stdout + out.stderr
@@ -291,6 +375,11 @@ def wallet_address() -> str:
 def make_chain() -> dict:
     """BCHN only: a mined chain with a block of wallet transactions."""
     addr = wallet_address()
+    if LONG:
+        # To a script the wallet does not own, so its coin selection stays small.
+        elsewhere = cashaddr_retype(addr, 1)
+        for left in range(LONG, 0, -1000):
+            cli("generatetoaddress", str(min(left, 1000)), elsewhere)
     cli("generatetoaddress", "110", addr)
     others = [cli("getnewaddress") for _ in range(3)]
     confirmed = [cli("sendtoaddress", a, "1.5") for a in others]
@@ -328,19 +417,59 @@ def make_mempool(s: dict) -> dict:
 
 
 def setup() -> dict:
-    global RELAY
+    global RELAY, STALLER
     start_bchn()
     s = make_chain()
     if PROXY:
         RELAY = Socks5Relay(PROXY_PORT)
         RELAY.start()
+    if STALL:
+        STALLER = DropFirstBlockRequest(STALL_PORT, ("127.0.0.1", 18444))
+        STALLER.start()
+    started = time.monotonic()
     start_kth()
+    if STALL:
+        row27_request_timeout(s)
     synced = wait_kth_height(s["height"], 900)
     RESULTS["setup"]["kth_synced_bchn_chain"] = synced
+    RESULTS["setup"]["kth_sync_seconds"] = round(time.monotonic() - started)
     RESULTS["setup"]["bchn_height"] = s["height"]
+    if LONG:
+        row(27, "node operators (initial block download)",
+            f"block download of {s['height']} blocks reaches BCHN's tip with no restart", synced,
+            {"blocks": s["height"], "seconds": RESULTS["setup"]["kth_sync_seconds"],
+             "kth height": call(KTH, "getblockcount")[0]})
     s = make_mempool(s)
     time.sleep(15)  # time for kth to hear about the relayed transactions
     return s
+
+
+def row27_request_timeout(s: dict) -> None:
+    """Block download goes on after a request for blocks times out while the
+    peer stays connected (#773 row 27). The relay swallows kth's first request;
+    kth's wait for those blocks times out after 60 seconds, and then kth has to
+    ask again by itself: no block is mined and no peer comes or goes meanwhile."""
+    client = "node operators (initial block download)"
+    check = "block download reaches BCHN's tip after kth's first block request times out, with no restart"
+    deadline = time.monotonic() + 180
+    while STALLER.dropped is None and time.monotonic() < deadline:
+        time.sleep(1)
+    if STALLER.dropped is None:
+        row(27, client, check, False, {"error": "kth asked BCHN for no blocks within 180 seconds"})
+        return
+    seen: dict = {"tip": s["height"], "blocks asked for in the dropped request": STALLER.dropped["blocks asked for"]}
+    # 60 seconds of request timeout, then time to ask again and download.
+    reached = wait_kth_height(s["height"], 240)
+    seen["reached the tip"] = reached
+    seen["seconds from the drop"] = round(time.monotonic() - STALLER.dropped["at"])
+    seen["kth height"] = call(KTH, "getblockcount")[0]
+    seen["BCHN peers (the relay)"] = len(json.loads(cli("getpeerinfo")))
+    row(27, client, check, reached, seen)
+    if not reached:
+        # What an operator does today: a restart recreates the download workers,
+        # so the rest of the checks still run on a synced kth.
+        subprocess.run(["docker", "restart", "-t", "15", "kth"], capture_output=True)
+        wait_for(KTH, "kth")
 
 
 # ---- method matrix ------------------------------------------------------------

@@ -21,11 +21,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: shv-p2p-light-client-2
-            branch: shv/mmr-core
-            domain: true
-            blockchain: true
-            shv: true
+          - name: row27-baseline-request-timeout
+            branch: test/r27-baseline
+            stall: true
+          - name: row27-respawn-request-timeout
+            branch: sync/respawn-idle-download-workers
+            stall: true
+          - name: row27-baseline-long-download
+            branch: test/r27-baseline
+            long: 20000
+          - name: row27-bridges-long-download
+            branch: sync/coordinator-bridges-keep-results
+            long: 20000
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -173,6 +180,8 @@ jobs:
           KTH_SV2: ${{ matrix.sv2 && '1' || '0' }}
           KTH_PROXY: ${{ matrix.proxy && '1' || '0' }}
           KTH_SHV: ${{ matrix.shv && '1' || '0' }}
+          KTH_STALL: ${{ matrix.stall && '1' || '0' }}
+          KTH_LONG: ${{ matrix.long || '0' }}
         shell: bash
       - uses: actions/upload-artifact@v7
         if: always()
