@@ -22,10 +22,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: announce-before
-            branch: node/serve-headers-and-blocks
-            announce: true
-          - name: announce-blocks
+          - name: announce-merged
             branch: test/announce-blocks
             announce: true
             network: true
