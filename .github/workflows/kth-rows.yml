@@ -6,11 +6,12 @@ name: kth rows from #773, build, tests and client checks
 # node test suite (and the domain suite where the branch changes the domain
 # library), then put that kth into the package image and run
 # scripts/knuth_rpc_e2e.py, whose "#773 rows" section is each client's own
-# check of its row. The workflow runs when this file changes.
+# check of its row. It runs when this file changes, or by hand.
 on:
   push:
     branches: [knuth-rpc-e2e]
     paths: [.github/workflows/kth-rows.yml]
+  workflow_dispatch:
 
 permissions:
   contents: read

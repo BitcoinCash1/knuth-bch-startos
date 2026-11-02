@@ -147,7 +147,8 @@ def start_kth() -> None:
                     "--net.inbound_connections", "4" if SHV or I2P else "0",
                     *(["--node.mmr_index", "true"] if SHV else []),
                     "--net.outbound_connections", "1",
-                    "--net.peer", f"127.0.0.1:{STALL_PORT if STALL else 18444}",
+                    "--net.peer", (f"{BCHN_I2P.address}:0" if I2P
+                                   else f"127.0.0.1:{STALL_PORT if STALL else 18444}"),
                     "--rpc.enabled", "true", "--rpc.bind", "127.0.0.1", "--rpc.port", "19332",
                     "--rpc.user", "e2e", "--rpc.password", "e2e",
                     "--log.debug_file", "/data/kth-debug.log", "--log.error_file", "/data/kth-error.log",
@@ -324,6 +325,96 @@ BRIDGE: subprocess.Popen | None = None
 NOISE_KEYS: dict = {}
 
 
+def sam_line(sock: socket.socket) -> str:
+    data = b""
+    while not data.endswith(b"\n"):
+        byte = sock.recv(1)
+        if not byte:
+            raise ConnectionError("the SAM bridge closed the socket")
+        data += byte
+    return data.decode(errors="replace").strip()
+
+
+def sam_ask(sock: socket.socket, command: str) -> dict:
+    sock.sendall((command + "\n").encode())
+    reply = sam_line(sock)
+    fields = dict(part.split("=", 1) for part in reply.split()[2:] if "=" in part)
+    fields["reply"] = reply[:200]
+    return fields
+
+
+def sam_hello(timeout: float) -> socket.socket:
+    sock = socket.create_connection(("127.0.0.1", SAM_PORT), timeout=timeout)
+    if sam_ask(sock, "HELLO VERSION MIN=3.1 MAX=3.1").get("RESULT") != "OK":
+        raise ConnectionError("SAM HELLO refused")
+    return sock
+
+
+def i2p_b32(destination_base64: str) -> str:
+    destination = base64.b64decode(destination_base64.replace("-", "+").replace("~", "/"))
+    return base64.b32encode(hashlib.sha256(destination).digest()).decode().lower().rstrip("=") + ".b32.i2p"
+
+
+class SamService:
+    """TEST ONLY. Publishes BCHN's P2P port as an I2P destination through
+    i2pd's SAM bridge, written here from the SAM v3.1 specification so it shares
+    no code with kth's SAM client. Every I2P stream it accepts is relayed to
+    BCHN, and the local port of that relay connection is recorded: it is the
+    port BCHN sees for the peer."""
+
+    def __init__(self, target: tuple[str, int]):
+        self.target, self.address, self.accepted, self.relay_ports = target, None, [], []
+        self.id = "bchn" + os.urandom(4).hex()
+        self.control: socket.socket | None = None
+
+    def start(self) -> None:
+        # A new router builds its first tunnels before the session is ready.
+        self.control = sam_hello(600)
+        keys = sam_ask(self.control, "DEST GENERATE SIGNATURE_TYPE=7")
+        status = sam_ask(self.control, f"SESSION CREATE STYLE=STREAM ID={self.id} DESTINATION={keys['PRIV']} "
+                                       "SIGNATURE_TYPE=7 i2cp.leaseSetEncType=4,0")
+        if status.get("RESULT") != "OK":
+            raise ConnectionError(f"SESSION CREATE: {status['reply']}")
+        self.address = i2p_b32(keys["PUB"])
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self) -> None:
+        while True:
+            try:
+                stream = sam_hello(30)
+                status = sam_ask(stream, f"STREAM ACCEPT ID={self.id} SILENT=false")
+                if status.get("RESULT") != "OK":
+                    stream.close()
+                    time.sleep(2)
+                    continue
+                stream.settimeout(None)
+                caller = sam_line(stream)  # the caller's destination, then the stream
+                upstream = socket.create_connection(self.target, timeout=10)
+                upstream.settimeout(None)
+                self.accepted.append(i2p_b32(caller.split()[0]))
+                self.relay_ports.append(upstream.getsockname()[1])
+                for source, sink in ((stream, upstream), (upstream, stream)):
+                    threading.Thread(target=self._pipe, args=(source, sink), daemon=True).start()
+            except (OSError, ValueError):
+                time.sleep(2)
+
+    @staticmethod
+    def _pipe(source: socket.socket, sink: socket.socket) -> None:
+        try:
+            while chunk := source.recv(65536):
+                sink.sendall(chunk)
+        except OSError:
+            pass
+        for sock in (source, sink):
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+
+BCHN_I2P: SamService | None = None
+
+
 def start_noise_bridge() -> None:
     """kth prints its authority key when the Noise listener starts. The bridge
     pins that printed key, as an operator gives it to a pool or Job Declarator;
@@ -472,7 +563,7 @@ def make_mempool(s: dict) -> dict:
 
 
 def setup() -> dict:
-    global RELAY, STALLER
+    global RELAY, STALLER, BCHN_I2P
     if I2P:
         # Started first: a new router needs minutes to reseed and build tunnels.
         subprocess.run(["docker", "run", "--detach", "--name", "i2pd", "--network", "host", I2PD_IMAGE,
@@ -480,6 +571,10 @@ def setup() -> dict:
                         "--http.enabled=false", "--loglevel=warn"], check=True)
     start_bchn()
     s = make_chain()
+    if I2P:
+        BCHN_I2P = SamService(("127.0.0.1", 18444))
+        BCHN_I2P.start()
+        RESULTS["setup"]["bchn_i2p_address"] = BCHN_I2P.address
     if PROXY:
         RELAY = Socks5Relay(PROXY_PORT)
         RELAY.start()
@@ -1909,28 +2004,42 @@ def kth_log_lines(container: str, pattern: str, limit: int = 12) -> list[str]:
 
 
 def i2p_second_node(s: dict) -> None:
-    """Two kth nodes and one i2pd router. kth (A) synced from BCHN and takes I2P
-    peers through the router's SAM bridge. A second kth (B), with no TCP
-    listener and A's I2P address as its only peer, must reach A's tip through
-    the router; BCHN must only ever have A as a kth peer."""
+    """kth and one i2pd router. BCHN is reachable only as an I2P destination
+    that the harness publishes through the router's SAM bridge, and kth's only
+    configured peer is that I2P address: kth syncs BCHN's chain through I2P,
+    and BCHN's kth connections all come from the harness's I2P relay. A second
+    kth (B) whose only peer is kth's own I2P address connects to it: kth accepts
+    the stream, each side knows the other by its I2P address, and kth announces
+    its own address to B in addrv2."""
     client = "node operators over I2P (SAM bridge of i2pd)"
     if not I2P:
         return
-    check = "a second kth whose only peer is A's I2P address syncs A's chain through i2pd"
-    seen: dict = {}
+    seen: dict = {"BCHN's I2P address": BCHN_I2P.address if BCHN_I2P else None,
+                  "kth synced BCHN's chain": RESULTS["setup"].get("kth_synced_bchn_chain"),
+                  "kth height": call(KTH, "getblockcount")[0], "BCHN height": s["height"]}
+    peers = json.loads(cli("getpeerinfo"))
+    kth_peers = [p for p in peers if "knuth" in p.get("subver", "").lower()]
+    relay_ports = set(BCHN_I2P.relay_ports if BCHN_I2P else [])
+    seen["BCHN's kth peers"] = [p.get("addr") for p in kth_peers]
+    seen["all through the I2P relay"] = bool(kth_peers) and all(
+        int(p.get("addr", ":0").rsplit(":", 1)[1]) in relay_ports for p in kth_peers)
+    seen["kth's peer events"] = kth_log_lines("kth", r"CONNECTED: .*b32\.i2p", 4)
+    synced = bool(seen["kth synced BCHN's chain"] and seen["all through the I2P relay"]
+                  and any(BCHN_I2P.address in line for line in seen["kth's peer events"]))
+    row(1002, client, "kth's only peer is BCHN's I2P address; it syncs BCHN's chain through i2pd", synced, seen)
+
+    check = "a second kth reaches kth over I2P; kth accepts it and announces its own I2P address"
+    seen = {}
     address, deadline = None, time.monotonic() + 600
     while address is None and time.monotonic() < deadline:
         found = kth_log_lines("kth", r"\[sam\] I2P address: [a-z2-7]{52}\.b32\.i2p")
         address = found[-1].rsplit(" ", 1)[-1] if found else None
         if address is None:
             time.sleep(5)
-    seen["A's I2P address"] = address
+    seen["kth's I2P address"] = address
     if address is None:
-        seen["A's SAM log"] = kth_log_lines("kth", r"\[sam\]")
+        seen["kth's SAM log"] = kth_log_lines("kth", r"\[sam\]")
         return row(1002, client, check, False, seen)
-    tip = call(KTH, "getblockcount")[0]
-    seen["A height"] = tip
-    started = time.monotonic()
     subprocess.run(["docker", "run", "--detach", "--name", "kth-b", "--network", "host",
                     "--platform", "linux/amd64", "--entrypoint", "/usr/local/bin/kth", "knuth-e2e",
                     "--init_run", "--network", "regtest", "--node.display", "daemon",
@@ -1942,22 +2051,17 @@ def i2p_second_node(s: dict) -> None:
                     "--rpc.user", "e2e", "--rpc.password", "e2e",
                     "--log.debug_file", "/data/kth-debug.log", "--log.error_file", "/data/kth-error.log"],
                    check=True)
-    reached = False
-    while time.monotonic() - started < 900:
-        info, error = call(KTH_B, "getblockchaininfo")
-        if error is None and info and info.get("blocks", -1) >= tip:
-            reached = True
-            break
+    handshake, started = [], time.monotonic()
+    while not handshake and time.monotonic() - started < 600:
         time.sleep(5)
-    seen["B reached A's height"] = reached
-    seen["seconds after B started"] = round(time.monotonic() - started)
-    seen["B height"] = (call(KTH_B, "getblockchaininfo")[0] or {}).get("blocks")
-    seen["B's tip is A's"] = call(KTH_B, "getbestblockhash")[0] == call(KTH, "getbestblockhash")[0]
-    peers = json.loads(cli("getpeerinfo"))
-    seen["BCHN's kth peers"] = [p.get("addr") for p in peers if "knuth" in p.get("subver", "").lower()]
-    seen["B's I2P log"] = kth_log_lines("kth-b", r"\[sam\]|b32\.i2p")
-    seen["A's I2P log"] = kth_log_lines("kth", r"\[sam\]|b32\.i2p")
-    row(1002, client, check, reached and seen["B's tip is A's"] and len(seen["BCHN's kth peers"]) == 1, seen)
+        handshake = kth_log_lines("kth-b", rf"Handshake complete with \[{address}\]", 1)
+    b_address = kth_log_lines("kth-b", r"\[sam\] I2P address: ", 1)
+    b_address = b_address[0].rsplit(" ", 1)[-1] if b_address else None
+    seen.update({"B's handshake with kth": handshake, "seconds": round(time.monotonic() - started),
+                 "B's I2P address": b_address,
+                 "kth's event for B": kth_log_lines("kth", rf"CONNECTED: {b_address}", 1) if b_address else [],
+                 "addrv2 from kth to B": kth_log_lines("kth-b", rf"Received addrv2 from \[{address}", 1)})
+    row(1002, client, check, bool(handshake and seen["kth's event for B"] and seen["addrv2 from kth to B"]), seen)
 
 
 def rows(s: dict) -> None:
