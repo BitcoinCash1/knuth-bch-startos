@@ -76,6 +76,11 @@ KTH_B = ("127.0.0.1", 19342)
 # KTH_SERVE=1 (kth answers peers' getheaders and getdata): a second kth whose
 # only peer is the first one must sync the chain from it.
 SERVE = os.environ.get("KTH_SERVE") == "1"
+# KTH_ANNOUNCE=1 (kth announces new blocks to its peers, k-nuth/kth#812): a BCHN
+# whose only peer is kth must hear of each new block from kth.
+ANNOUNCE = os.environ.get("KTH_ANNOUNCE") == "1"
+BCHN_B_DIR = Path("/tmp/bchn-b-regtest")
+BCHN_B = ("127.0.0.1", 18453)
 RESULTS: dict = {"setup": {}, "methods": [], "transport": [], "mining": [], "rows": []}
 
 
@@ -147,7 +152,7 @@ def start_kth() -> None:
                     "--init_run", "--network", "regtest", "--node.display", "daemon",
                     "--db.directory", "/data/e2e", "--db.db_mode", "full",
                     "--net.inbound_port", str(KTH_P2P_PORT),
-                    "--net.inbound_connections", "4" if SHV or I2P or SERVE else "0",
+                    "--net.inbound_connections", "4" if SHV or I2P or SERVE or ANNOUNCE else "0",
                     *(["--node.mmr_index", "true"] if SHV else []),
                     "--net.outbound_connections", "1",
                     "--net.peer", (f"{BCHN_I2P.address}:0" if I2P
@@ -2111,6 +2116,66 @@ def serve_second_node(s: dict) -> None:
         reached and seen["B's tip is A's"] and len(seen["BCHN's kth peers"]) == 1, seen)
 
 
+def bchn_b_cli(*args) -> str:
+    return subprocess.run(["bitcoin-cli", "-regtest", f"-datadir={BCHN_B_DIR}", "-rpcuser=e2e",
+                           "-rpcpassword=e2e", f"-rpcport={BCHN_B[1]}", *args], check=True,
+                          capture_output=True, text=True).stdout.strip()
+
+
+def announce_second_node(s: dict) -> None:
+    """A second BCHN (B) whose only peer is kth. Once B has kth's chain, each
+    block BCHN mines must reach B within 20 seconds. BCHN asks a peer for new
+    headers only when it is told of a block, or after its 30-minute stale-tip
+    check, so B can only hear of these blocks from kth's announcements."""
+    client = "nodes whose peer is kth"
+    if not ANNOUNCE:
+        return
+    BCHN_B_DIR.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["bitcoind", "-regtest", f"-datadir={BCHN_B_DIR}", "-daemon", "-server",
+                    "-rpcuser=e2e", "-rpcpassword=e2e", f"-rpcport={BCHN_B[1]}", "-port=18454",
+                    "-listen=0", "-dnsseed=0", "-debug=net",
+                    f"-connect=127.0.0.1:{KTH_P2P_PORT}"], check=True)
+    wait_for(BCHN_B, "BCHN B")
+    seen: dict = {}
+    tip = call(KTH, "getbestblockhash")[0]
+    started = time.monotonic()
+    synced = False
+    while time.monotonic() - started < 300:
+        if call(BCHN_B, "getbestblockhash")[0] == tip:
+            synced = True
+            break
+        time.sleep(2)
+    seen["B synced kth's chain"] = synced
+    seen["sync seconds"] = round(time.monotonic() - started)
+
+    # From here on, a block reaches B only if kth announces it.
+    log = BCHN_B_DIR / "regtest" / "debug.log"
+    offset = log.stat().st_size if log.exists() else 0
+    addr = wallet_address()
+    delays: list = []
+    for _ in range(5):
+        new = json.loads(cli("generatetoaddress", "1", addr))[0]
+        mined = time.monotonic()
+        reached = None
+        while time.monotonic() - mined < 20:
+            if call(BCHN_B, "getbestblockhash")[0] == new:
+                reached = round(time.monotonic() - mined, 1)
+                break
+            time.sleep(0.5)
+        delays.append(reached)
+    seen["seconds for each new block to reach B"] = delays
+    text = log.read_text(errors="replace")[offset:] if log.exists() else ""
+    seen["announcements B received"] = {
+        "headers": len(re.findall(r"received: headers ", text)),
+        "inv of a block": len(re.findall(r"got inv: block ", text))}
+    peers = json.loads(bchn_b_cli("getpeerinfo"))
+    seen["B's peers"] = [p.get("subver") for p in peers]
+    ok = (synced and all(d is not None for d in delays) and len(peers) == 1
+          and "knuth" in (peers[0].get("subver") or "").lower()
+          and sum(seen["announcements B received"].values()) > 0)
+    row(1004, client, "a BCHN whose only peer is kth hears of each new block from kth", ok, seen)
+
+
 def rows(s: dict) -> None:
     for check in (row10_relay_in, row17_rawmempool_verbose, row11_relay_out, pr795_fee_filter,
                   row6_validateaddress, row7_decoderawtransaction, row8_blockchaininfo, row9_chain,
@@ -2118,7 +2183,7 @@ def rows(s: dict) -> None:
                   row18_estimatefee, row19_networkhashps, row20_getchaintips, row5_merkle, row4_getblocktemplate,
                   row1_accept_found_block, row2_found_block_reaches_peers, row3_submitblock,
                   row21_template_provider, row23_template_flow, row22_noise, pr803_outbound_proxy,
-                  shv_light_client, i2p_second_node, serve_second_node):
+                  shv_light_client, i2p_second_node, serve_second_node, announce_second_node):
         try:
             check(s)
         except Exception as error:  # one broken check must not hide the others
@@ -2181,6 +2246,12 @@ def main() -> None:
                                                          text=True).stdout[-200000:]
                                        + subprocess.run(["docker", "logs", "i2pd"], capture_output=True,
                                                         text=True).stderr[-50000:])
+        if ANNOUNCE:
+            subprocess.run(["bitcoin-cli", "-regtest", f"-datadir={BCHN_B_DIR}", "-rpcuser=e2e",
+                            "-rpcpassword=e2e", f"-rpcport={BCHN_B[1]}", "stop"], capture_output=True)
+            b_log = BCHN_B_DIR / "regtest" / "debug.log"
+            if b_log.exists():
+                (OUT / "bchn-b-debug.log").write_text(b_log.read_text(errors="replace")[-400000:])
         RESULTS["setup"].setdefault("kth_log", kth_log(80))
         # kth logs to a file as a daemon; stopped first so what it buffered is written.
         subprocess.run(["docker", "stop", "-t", "15", "kth"], capture_output=True)
