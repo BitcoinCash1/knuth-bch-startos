@@ -79,6 +79,9 @@ SERVE = os.environ.get("KTH_SERVE") == "1"
 # KTH_ANNOUNCE=1 (kth announces new blocks to its peers, k-nuth/kth#812): a BCHN
 # whose only peer is kth must hear of each new block from kth.
 ANNOUNCE = os.environ.get("KTH_ANNOUNCE") == "1"
+# KTH_COMPACT=1 (compact blocks, BIP152, k-nuth/kth#812 item 2): blocks must move
+# between BCHN and kth as cmpctblock in both directions, with no full block.
+COMPACT = os.environ.get("KTH_COMPACT") == "1"
 BCHN_B_DIR = Path("/tmp/bchn-b-regtest")
 BCHN_B = ("127.0.0.1", 18453)
 RESULTS: dict = {"setup": {}, "methods": [], "transport": [], "mining": [], "rows": []}
@@ -152,7 +155,7 @@ def start_kth() -> None:
                     "--init_run", "--network", "regtest", "--node.display", "daemon",
                     "--db.directory", "/data/e2e", "--db.db_mode", "full",
                     "--net.inbound_port", str(KTH_P2P_PORT),
-                    "--net.inbound_connections", "4" if SHV or I2P or SERVE or ANNOUNCE else "0",
+                    "--net.inbound_connections", "4" if SHV or I2P or SERVE or ANNOUNCE or COMPACT else "0",
                     *(["--node.mmr_index", "true"] if SHV else []),
                     "--net.outbound_connections", "1",
                     "--net.peer", (f"{BCHN_I2P.address}:0" if I2P
@@ -2176,6 +2179,90 @@ def announce_second_node(s: dict) -> None:
     row(1004, client, "a BCHN whose only peer is kth hears of each new block from kth", ok, seen)
 
 
+def start_bchn_b() -> None:
+    """BCHN B: a second BCHN whose only peer is kth. Started once."""
+    if call(BCHN_B, "getblockcount")[1] is None:
+        return
+    BCHN_B_DIR.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["bitcoind", "-regtest", f"-datadir={BCHN_B_DIR}", "-daemon", "-server",
+                    "-rpcuser=e2e", "-rpcpassword=e2e", f"-rpcport={BCHN_B[1]}", "-port=18454",
+                    "-listen=0", "-dnsseed=0", "-debug=net", "-debug=cmpctblock",
+                    f"-connect=127.0.0.1:{KTH_P2P_PORT}"], check=True)
+    wait_for(BCHN_B, "BCHN B")
+
+
+def per_msg(peers: list, field: str) -> dict:
+    """bytessent_per_msg or bytesrecv_per_msg of the one knuth peer in a getpeerinfo."""
+    for p in peers:
+        if "knuth" in (p.get("subver") or "").lower():
+            return dict(p.get(field) or {})
+    return {}
+
+
+def compact_blocks_both_ways(s: dict) -> None:
+    """BIP152 between BCHN and kth, in both directions. BCHN mines blocks whose
+    transactions kth already holds. BCHN must send kth each block as a
+    cmpctblock and no full block; and BCHN B, whose only peer is kth, must get
+    each block from kth as a cmpctblock and no full block. B has no mempool of
+    its own here, so it asks kth for the transactions with getblocktxn."""
+    client = "BCHN peers of kth (BIP152)"
+    if not COMPACT:
+        return
+    start_bchn_b()
+    seen: dict = {}
+    tip = call(KTH, "getbestblockhash")[0]
+    started = time.monotonic()
+    synced = False
+    while time.monotonic() - started < 300:
+        if call(BCHN_B, "getbestblockhash")[0] == tip:
+            synced = True
+            break
+        time.sleep(2)
+    seen["B synced kth's chain"] = synced
+    addr = wallet_address()
+    keys = ("cmpctblock", "getblocktxn", "blocktxn", "block", "getdata")
+    rounds: list = []
+    for _ in range(3):
+        txids = [cli("sendtoaddress", a, "0.01") for a in s["others"][:2]]
+        waited = time.monotonic()
+        in_kth = False
+        while time.monotonic() - waited < 45:
+            pool = call(KTH, "getrawmempool")[0] or []
+            if all(t in pool for t in txids):
+                in_kth = True
+                break
+            time.sleep(1)
+        a0 = per_msg(json.loads(cli("getpeerinfo")), "bytessent_per_msg")
+        b0 = per_msg(json.loads(bchn_b_cli("getpeerinfo")), "bytesrecv_per_msg")
+        new = json.loads(cli("generatetoaddress", "1", addr))[0]
+        mined = time.monotonic()
+        kth_at = b_at = None
+        while time.monotonic() - mined < 30 and (kth_at is None or b_at is None):
+            if kth_at is None and call(KTH, "getbestblockhash")[0] == new:
+                kth_at = round(time.monotonic() - mined, 1)
+            if b_at is None and call(BCHN_B, "getbestblockhash")[0] == new:
+                b_at = round(time.monotonic() - mined, 1)
+            time.sleep(0.25)
+        time.sleep(2)  # let late counters settle
+        a1 = per_msg(json.loads(cli("getpeerinfo")), "bytessent_per_msg")
+        b1 = per_msg(json.loads(bchn_b_cli("getpeerinfo")), "bytesrecv_per_msg")
+        rounds.append({
+            "transactions in kth's mempool before mining": in_kth,
+            "seconds to kth": kth_at, "seconds to B": b_at,
+            "bytes BCHN sent kth": {k: a1.get(k, 0) - a0.get(k, 0) for k in keys},
+            "bytes B received from kth": {k: b1.get(k, 0) - b0.get(k, 0) for k in keys}})
+    seen["rounds"] = rounds
+    ok = synced and all(
+        r["transactions in kth's mempool before mining"] and r["seconds to kth"] is not None
+        and r["seconds to B"] is not None
+        and r["bytes BCHN sent kth"]["cmpctblock"] > 0 and r["bytes BCHN sent kth"]["block"] == 0
+        and r["bytes B received from kth"]["cmpctblock"] > 0
+        and r["bytes B received from kth"]["block"] == 0
+        for r in rounds)
+    row(1005, client, "blocks move between BCHN and kth as compact blocks both ways, with no full block",
+        ok, seen)
+
+
 def rows(s: dict) -> None:
     for check in (row10_relay_in, row17_rawmempool_verbose, row11_relay_out, pr795_fee_filter,
                   row6_validateaddress, row7_decoderawtransaction, row8_blockchaininfo, row9_chain,
@@ -2183,7 +2270,8 @@ def rows(s: dict) -> None:
                   row18_estimatefee, row19_networkhashps, row20_getchaintips, row5_merkle, row4_getblocktemplate,
                   row1_accept_found_block, row2_found_block_reaches_peers, row3_submitblock,
                   row21_template_provider, row23_template_flow, row22_noise, pr803_outbound_proxy,
-                  shv_light_client, i2p_second_node, serve_second_node, announce_second_node):
+                  shv_light_client, i2p_second_node, serve_second_node, announce_second_node,
+                  compact_blocks_both_ways):
         try:
             check(s)
         except Exception as error:  # one broken check must not hide the others
@@ -2246,7 +2334,7 @@ def main() -> None:
                                                          text=True).stdout[-200000:]
                                        + subprocess.run(["docker", "logs", "i2pd"], capture_output=True,
                                                         text=True).stderr[-50000:])
-        if ANNOUNCE:
+        if ANNOUNCE or COMPACT:
             subprocess.run(["bitcoin-cli", "-regtest", f"-datadir={BCHN_B_DIR}", "-rpcuser=e2e",
                             "-rpcpassword=e2e", f"-rpcport={BCHN_B[1]}", "stop"], capture_output=True)
             b_log = BCHN_B_DIR / "regtest" / "debug.log"

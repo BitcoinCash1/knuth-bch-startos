@@ -22,11 +22,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: compact-blocks
+          - name: compact-before
+            branch: test/announce-blocks
+            compact: true
+          - name: compact-after
             branch: test/compact-blocks
-            domain: true
-            blockchain: true
-            network: true
+            compact: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -180,6 +181,7 @@ jobs:
           KTH_I2P: ${{ matrix.i2p && '1' || '0' }}
           KTH_SERVE: ${{ matrix.serve && '1' || '0' }}
           KTH_ANNOUNCE: ${{ matrix.announce && '1' || '0' }}
+          KTH_COMPACT: ${{ matrix.compact && '1' || '0' }}
           KTH_PROXY: ${{ matrix.proxy && '1' || '0' }}
           KTH_SHV: ${{ matrix.shv && '1' || '0' }}
           KTH_STALL: ${{ matrix.stall && '1' || '0' }}
