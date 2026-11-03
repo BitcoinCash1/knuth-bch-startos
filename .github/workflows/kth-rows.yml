@@ -22,9 +22,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: announce-merged
-            branch: test/announce-blocks
-            announce: true
+          - name: race-free-waits
+            branch: test/race-free-message-waits
             network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
