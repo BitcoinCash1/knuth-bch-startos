@@ -175,7 +175,7 @@ jobs:
       - name: Build SRI's mining_device (sv2-apps, pinned)
         if: matrix.sv2_mining
         run: |
-          sudo apt-get install -y -qq capnproto >/dev/null
+          sudo apt-get install -y -qq capnproto libcapnp-dev >/dev/null
           git clone --quiet https://github.com/stratum-mining/sv2-apps.git sv2-apps
           git -C sv2-apps checkout --quiet ffad32eb11128b8e3cf9ff20604480c11e5cbfab
           cargo build --release --locked --manifest-path sv2-apps/Cargo.toml -p integration_tests_sv2 --bin mining_device
