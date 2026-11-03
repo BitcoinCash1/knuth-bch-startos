@@ -26,6 +26,7 @@ jobs:
             branch: test/sv2-mining-channels
             sv2: true
             noise: true
+            sv2_mining: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -171,6 +172,14 @@ jobs:
         if: matrix.noise
         run: cargo build --release --locked --manifest-path scripts/sv2-noise-bridge/Cargo.toml
         shell: bash
+      - name: Build SRI's mining_device (sv2-apps, pinned)
+        if: matrix.sv2_mining
+        run: |
+          sudo apt-get install -y -qq capnproto >/dev/null
+          git clone --quiet https://github.com/stratum-mining/sv2-apps.git sv2-apps
+          git -C sv2-apps checkout --quiet ffad32eb11128b8e3cf9ff20604480c11e5cbfab
+          cargo build --release --locked --manifest-path sv2-apps/Cargo.toml -p integration_tests_sv2 --bin mining_device
+        shell: bash
       - name: Run the end-to-end checks against this kth
         run: python3 scripts/knuth_rpc_e2e.py e2e-out
         env:
@@ -180,6 +189,7 @@ jobs:
           KTH_SERVE: ${{ matrix.serve && '1' || '0' }}
           KTH_ANNOUNCE: ${{ matrix.announce && '1' || '0' }}
           KTH_COMPACT: ${{ matrix.compact && '1' || '0' }}
+          KTH_SV2_MINING: ${{ matrix.sv2_mining && '1' || '0' }}
           KTH_PROXY: ${{ matrix.proxy && '1' || '0' }}
           KTH_SHV: ${{ matrix.shv && '1' || '0' }}
           KTH_STALL: ${{ matrix.stall && '1' || '0' }}

@@ -82,6 +82,11 @@ ANNOUNCE = os.environ.get("KTH_ANNOUNCE") == "1"
 # KTH_COMPACT=1 (compact blocks, BIP152, k-nuth/kth#812 item 2): blocks must move
 # between BCHN and kth as cmpctblock in both directions, with no full block.
 COMPACT = os.environ.get("KTH_COMPACT") == "1"
+# KTH_SV2_MINING=1 (#773 row 24, the Mining Protocol server): SRI's own CPU
+# mining_device mines on kth over Noise, and BCHN must accept its blocks.
+SV2_MINING = os.environ.get("KTH_SV2_MINING") == "1"
+MINING_DEVICE = os.environ.get("KTH_MINING_DEVICE") or "sv2-apps/target/release/mining_device"
+MINING_ADDRESS = ""
 BCHN_B_DIR = Path("/tmp/bchn-b-regtest")
 BCHN_B = ("127.0.0.1", 18453)
 RESULTS: dict = {"setup": {}, "methods": [], "transport": [], "mining": [], "rows": []}
@@ -165,6 +170,8 @@ def start_kth() -> None:
                     "--log.debug_file", "/data/kth-debug.log", "--log.error_file", "/data/kth-error.log",
                     *(["--sv2.enabled", "true", "--sv2.bind", "127.0.0.1", "--sv2.port", str(SV2_PORT)]
                       if SV2 else []),
+                    *(["--sv2.mining.enabled", "true", "--sv2.mining.address", MINING_ADDRESS]
+                      if SV2 and SV2_MINING else []),
                     *(["--sv2.noise", "true", "--sv2.static_key_file", "/data/sv2-static.key",
                        "--sv2.authority_key_file", "/data/sv2-authority.key"] if SV2 and NOISE else []),
                     *(["--net.proxy", f"127.0.0.1:{PROXY_PORT}"] if PROXY else []),
@@ -600,6 +607,10 @@ def setup() -> dict:
     if STALL:
         STALLER = DropFirstBlockRequest(STALL_PORT, ("127.0.0.1", 18444))
         STALLER.start()
+    global MINING_ADDRESS
+    if SV2_MINING:
+        MINING_ADDRESS = wallet_address()
+        RESULTS["setup"]["sv2_mining_address"] = MINING_ADDRESS
     started = time.monotonic()
     start_kth()
     if SV2 and NOISE:
@@ -2263,6 +2274,60 @@ def compact_blocks_both_ways(s: dict) -> None:
         ok, seen)
 
 
+def row24_mining_protocol(s: dict) -> None:
+    """SRI's mining_device, an independent SV2 client, opens a Mining Protocol
+    channel on kth over Noise, pinned to the authority key kth prints. kth
+    builds jobs from its own template paying sv2.mining.address; the device
+    mines them, and a share that meets regtest's target must become a block
+    that BCHN accepts, with a coinbase paying that address."""
+    client = "SRI mining_device"
+    if not (SV2 and NOISE and SV2_MINING):
+        return
+    seen: dict = {"payout address": MINING_ADDRESS}
+    key = NOISE_KEYS.get("printed by kth")
+    seen["pinned authority"] = key
+    before = int(cli("getblockcount"))
+    log = OUT / "mining-device.log"
+    with open(log, "w") as out:
+        device = subprocess.Popen([MINING_DEVICE, "--address-pool", f"127.0.0.1:{SV2_PORT}",
+                                   *(["--pubkey-pool", key] if key else []),
+                                   "--id-user", "knuth-rpc-e2e", "--cores", "1"],
+                                  stdout=out, stderr=subprocess.STDOUT)
+        started = time.monotonic()
+        while time.monotonic() - started < 240 and int(cli("getblockcount")) < before + 2:
+            if device.poll() is not None:
+                break
+            time.sleep(1)
+        seen["device still running"] = device.poll() is None
+        device.terminate()
+        try:
+            device.wait(10)
+        except subprocess.TimeoutExpired:
+            device.kill()
+    seen["seconds"] = round(time.monotonic() - started)
+    after = int(cli("getblockcount"))
+    blocks = []
+    for height in range(before + 1, after + 1):
+        block = json.loads(cli("getblock", cli("getblockhash", str(height)), "2"))
+        coinbase = block["tx"][0]
+        paid = [a for o in coinbase["vout"]
+                for a in (o["scriptPubKey"].get("addresses") or [o["scriptPubKey"].get("address")])
+                if a]
+        blocks.append({"height": height, "pays the configured address": MINING_ADDRESS in paid,
+                       "coinbase value": sum(o["value"] for o in coinbase["vout"])})
+    seen["new BCHN blocks"] = blocks
+    seen["kth tip is BCHN's"] = call(KTH, "getbestblockhash")[0] == cli("getbestblockhash")
+    text = log.read_text(errors="replace") if log.exists() else ""
+    seen["device log lines"] = {
+        "share accepted": len(re.findall(r"(?i)SubmitSharesSuccess|share.{0,20}accepted", text)),
+        "new job": len(re.findall(r"(?i)NewMiningJob|new job", text)),
+        "error": len(re.findall(r"(?i)error", text))}
+    ok = (bool(blocks) and all(b["pays the configured address"] for b in blocks)
+          and seen["kth tip is BCHN's"])
+    row(24, client, "an independent SV2 client mines on kth's Mining Protocol channel and finds blocks BCHN accepts",
+        ok, seen)
+
+
 def rows(s: dict) -> None:
     for check in (row10_relay_in, row17_rawmempool_verbose, row11_relay_out, pr795_fee_filter,
                   row6_validateaddress, row7_decoderawtransaction, row8_blockchaininfo, row9_chain,
@@ -2271,7 +2336,7 @@ def rows(s: dict) -> None:
                   row1_accept_found_block, row2_found_block_reaches_peers, row3_submitblock,
                   row21_template_provider, row23_template_flow, row22_noise, pr803_outbound_proxy,
                   shv_light_client, i2p_second_node, serve_second_node, announce_second_node,
-                  compact_blocks_both_ways):
+                  compact_blocks_both_ways, row24_mining_protocol):
         try:
             check(s)
         except Exception as error:  # one broken check must not hide the others
