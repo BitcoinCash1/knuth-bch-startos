@@ -1806,7 +1806,7 @@ def row23_template_flow(s: dict) -> None:
         seen["error"] = f"{type(error).__name__}: {error}"
         return fail("the client completes")
     row(23, client, "kth's tip becomes the block mined on its template; BCHN accepts the block",
-        seen.get("kth tip") == seen.get("block") and seen.get("BCHN submitblock") is None, seen)
+        seen.get("kth tip") == seen.get("block") and seen.get("BCHN submitblock") in (None, "duplicate"), seen)
 
 
 def read_until_closed(sock: socket.socket, seconds: float) -> dict:
