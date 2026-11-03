@@ -27,6 +27,11 @@ jobs:
             sv2: true
             noise: true
             sv2_mining: true
+          - name: sv2-mining-relayed
+            branch: test/row24-with-announce
+            sv2: true
+            noise: true
+            sv2_mining: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330

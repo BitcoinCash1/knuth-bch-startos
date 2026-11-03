@@ -1703,10 +1703,12 @@ def row21_template_provider(s: dict) -> None:
         seen["error"] = f"{type(error).__name__}: {error}"
     ok = (seen.get("setup") == {"msg_type": 0x01, "used_version": 2}
           and seen.get("request") == {"msg_type": 0x75, "template_id": 7, "error_code": "template-id-not-found"}
-          and seen.get("mining setup") == {"msg_type": 0x02, "error_code": "unsupported-protocol"}
+          and seen.get("mining setup") == ({"msg_type": 0x01, "error_code": ""} if SV2_MINING
+                                            else {"msg_type": 0x02, "error_code": "unsupported-protocol"})
           and seen.get("closed after error") is True)
     row(21, client, "setup succeeds on version 2, constraints are taken, unknown template answered, "
-        "mining protocol refused", ok, seen)
+        + ("mining protocol accepted (sv2.mining.enabled)" if SV2_MINING else "mining protocol refused"),
+        ok, seen)
 
 
 def row23_template_flow(s: dict) -> None:
@@ -2294,7 +2296,7 @@ def row24_mining_protocol(s: dict) -> None:
                                    "--id-user", "knuth-rpc-e2e", "--cores", "1"],
                                   stdout=out, stderr=subprocess.STDOUT)
         started = time.monotonic()
-        while time.monotonic() - started < 240 and int(cli("getblockcount")) < before + 2:
+        while time.monotonic() - started < 240 and (call(KTH, "getblockcount")[0] or 0) < before + 2:
             if device.poll() is not None:
                 break
             time.sleep(1)
@@ -2305,6 +2307,24 @@ def row24_mining_protocol(s: dict) -> None:
         except subprocess.TimeoutExpired:
             device.kill()
     seen["seconds"] = round(time.monotonic() - started)
+    # Without block announcements in this stack, kth's blocks are handed to
+    # BCHN with submitblock, as row 23 does; BCHN validates each one.
+    kth_height = call(KTH, "getblockcount")[0] or before
+    # With block announcements (#814) BCHN fetches kth's blocks itself.
+    waited = time.monotonic()
+    while time.monotonic() - waited < 30 and int(cli("getblockcount")) < kth_height:
+        time.sleep(1)
+    seen["BCHN fetched kth's blocks over P2P"] = int(cli("getblockcount")) >= kth_height
+    submitted = []
+    for height in range(before + 1, kth_height + 1):
+        hash_ = call(KTH, "getblockhash", height)[0]
+        raw = call(KTH, "getblock", hash_, 0)[0]
+        if int(cli("getblockcount")) >= height and cli("getblockhash", str(height)) == hash_:
+            submitted.append({"height": height, "BCHN submitblock": "already had it"})
+            continue
+        accepted, error = call(BCHN, "submitblock", raw)
+        submitted.append({"height": height, "BCHN submitblock": accepted if error is None else error})
+    seen["kth blocks handed to BCHN"] = submitted
     after = int(cli("getblockcount"))
     blocks = []
     for height in range(before + 1, after + 1):
@@ -2323,7 +2343,8 @@ def row24_mining_protocol(s: dict) -> None:
         "new job": len(re.findall(r"(?i)NewMiningJob|new job", text)),
         "error": len(re.findall(r"(?i)error", text))}
     ok = (bool(blocks) and all(b["pays the configured address"] for b in blocks)
-          and seen["kth tip is BCHN's"])
+          and seen["kth tip is BCHN's"]
+          and all(r["BCHN submitblock"] in (None, "already had it") for r in submitted))
     row(24, client, "an independent SV2 client mines on kth's Mining Protocol channel and finds blocks BCHN accepts",
         ok, seen)
 
