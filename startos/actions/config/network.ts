@@ -11,20 +11,21 @@ import { i18n } from '../../i18n'
 
 const { InputSpec, Value } = sdk
 
-// Select order must match BCHN exactly (mainnet → … → chipnet → regtest).
+// Keep Tempnet next to Chipnet, whose ports it shares.
 const networkSpec = InputSpec.of({
   network: Value.select({
     name: i18n('Network'),
     description:
       i18n('Bitcoin Cash network to connect to. Changing this requires a node restart and a separate data directory per network.'),
     warning:
-      i18n('Switching networks requires a full restart. The node will sync from scratch on the new network. Your mainnet data is preserved separately on disk.'),
+      i18n('Switching networks requires a full restart. The node will sync from scratch on the new network. Your mainnet data is preserved separately on disk. Tempnet is a temporary Faster Blocks test ending 2026-11-15 and needs a fresh sync in its own data directory.'),
     values: {
       mainnet: i18n('Mainnet'),
       testnet3: i18n('Testnet3 (legacy test network)'),
       testnet4: i18n('Testnet4 (light-weight test network)'),
       scalenet: i18n('Scalenet (high-throughput test network)'),
       chipnet: i18n('Chipnet (upgrade / CHIP staging)'),
+      tempnet: i18n('Tempnet (Faster Blocks test until 2026-11-15)'),
       regtest: i18n('Regtest (local testing only)'),
     },
     default: 'mainnet',

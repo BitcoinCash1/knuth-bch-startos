@@ -21,6 +21,7 @@ const inputSpec = InputSpec.of({
       testnet4: i18n('Testnet4'),
       scalenet: i18n('Scalenet'),
       chipnet:  i18n('Chipnet'),
+      tempnet:  i18n('Tempnet'),
       regtest:  i18n('Regtest'),
     },
   }),
@@ -31,6 +32,7 @@ const testNetSubdirs: Record<string, string> = {
   testnet4: 'testnet4',
   scalenet: 'scalenet',
   chipnet:  'chipnet',
+  tempnet:  'tempnet',
   regtest:  'regtest',
 }
 
@@ -39,7 +41,7 @@ export const deleteTestNetworkData = sdk.Action.withInput(
   async ({ effects: _effects }) => ({
     name: i18n('Delete Test Network Data'),
     description:
-      i18n('Delete blockchain data for one or more test networks (Testnet3, Testnet4, Scalenet, Chipnet, Regtest). This frees disk space without touching mainnet.'),
+      i18n('Delete blockchain data for one or more test networks (Testnet3, Testnet4, Scalenet, Chipnet, Tempnet, Regtest). This frees disk space without touching mainnet.'),
     warning:
       i18n('All block data and chainstate for the selected networks will be permanently deleted. Mainnet is never affected.'),
     // Must be stopped: deleting the active network while kth is still
@@ -51,8 +53,8 @@ export const deleteTestNetworkData = sdk.Action.withInput(
   }),
   inputSpec,
   async ({ effects: _effects }) => {
-    const all: Array<'testnet3' | 'testnet4' | 'scalenet' | 'chipnet' | 'regtest'> =
-      ['testnet3', 'testnet4', 'scalenet', 'chipnet', 'regtest']
+    const all: Array<'testnet3' | 'testnet4' | 'scalenet' | 'chipnet' | 'tempnet' | 'regtest'> =
+      ['testnet3', 'testnet4', 'scalenet', 'chipnet', 'tempnet', 'regtest']
     return { networks: all }
   },
   async ({ effects, input }) => {

@@ -4,7 +4,8 @@
 # GHCR image now includes RPC, but currently rejects pulls from this package.
 # Keep the upstream toolchain and Conan options here until that image is
 # accessible. Release checks prefer the official image and otherwise validate
-# this source build. No node patches are applied. The one difference from that
+# this source build. No node patches are applied to the released binary. The
+# tempnet-only exception is built separately below. The one difference from that
 # recipe is the Conan upgrade below, without which it cannot build kth 1.5.0.
 #
 # Cross-compiled with pure Go-style static linkage is not applicable; kth is C++,
@@ -43,6 +44,38 @@ RUN conan profile detect --force \
       -o "utxoz/*:with_large_benchmarks=False" \
       -s compiler.cppstd=23
 
+# ── Tempnet build ───────────────────────────────────────────────────
+# Released kth 1.5.2 cannot run Tempnet. This commit contains k-nuth/kth#752
+# with the fast-sync crash fix from #815 applied on top. Keep it in a separate
+# binary so every other network still runs the released node. Remove this stage
+# and kth-tempnet once a kth release includes both #752 and #815.
+FROM --platform=linux/amd64 ${TOOLCHAIN} AS kth-tempnet-build
+
+ARG TEMPNET_COMMIT=880af5356b0a22a78439dea9c1a25c5a16f93cf7
+ARG CURRENCY=BCH
+
+RUN pip install --no-cache-dir --upgrade "conan>=2.25,<3" "kthbuild>=4,<5"
+
+WORKDIR /src/kth
+RUN git clone --branch tempnet/start9 --single-branch https://github.com/CyberAshven/kth.git . \
+ && git checkout --detach ${TEMPNET_COMMIT}
+
+RUN conan profile detect --force \
+ && conan remote add kth https://packages.kth.cash/api/ --force \
+ && conan install conanfile.py --version 1.5.2 -of build --build=missing \
+      -o "kth/*:currency=${CURRENCY}" \
+      -o "kth/*:rpc=True" \
+      -o "kth/*:tests=False" \
+      -o "utxoz/*:with_tests=False" \
+      -o "utxoz/*:with_benchmarks=False" \
+      -o "utxoz/*:with_large_benchmarks=False" \
+      -s compiler.cppstd=23 \
+ && cmake --preset conan-release -DGLOBAL_BUILD=ON -DCMAKE_BUILD_TYPE=Release \
+ && cmake --build --preset conan-release --target node-exe \
+ && find build -type f -path '*/node-exe/*' -name kth -executable \
+      -exec install -Dm755 {} /out/kth-tempnet \; \
+ && test -x /out/kth-tempnet
+
 # ── Runtime ─────────────────────────────────────────────────────────
 FROM --platform=linux/amd64 ubuntu:24.04
 
@@ -60,6 +93,7 @@ COPY --from=kth-build /usr/local/lib64/libgcc_s.so.1*  /opt/kth/lib/
 RUN echo /opt/kth/lib > /etc/ld.so.conf.d/kth.conf && ldconfig
 
 COPY --from=kth-build /deploy/direct_deploy/kth/bin/kth /usr/local/bin/kth
+COPY --from=kth-tempnet-build /out/kth-tempnet /usr/local/bin/kth-tempnet
 
 WORKDIR /data
 VOLUME /data

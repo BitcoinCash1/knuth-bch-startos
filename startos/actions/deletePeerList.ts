@@ -30,6 +30,16 @@ export const deletePeerList = sdk.Action.withoutInput(
       `${rootDir}/blockchain/peers.dat`,
       '/peers.dat',
     ]
+    // The Tempnet binary imports its old hosts and banlist files from /data.
+    // Remove them with the unified peer database so bans cannot be reimported.
+    const tempnetPeers = network === 'tempnet' ? [
+      `${rootDir}/tempnet/hosts-tempnet.cache`,
+      `${rootDir}/tempnet/banlist-tempnet.dat`,
+      `${rootDir}/tempnet/peers-tempnet.dat`,
+      `${rootDir}/hosts-tempnet.cache`,
+      `${rootDir}/banlist-tempnet.dat`,
+      `${rootDir}/peers-tempnet.dat`,
+    ] : []
 
     await sdk.SubContainer.withTemp(
       effects,
@@ -42,7 +52,7 @@ export const deletePeerList = sdk.Action.withoutInput(
         await sub.exec([
           'sh',
           '-c',
-          `rm -f ${[hostsFile, ...legacy].join(' ')} ${rootDir}/*/peers.dat`,
+          `rm -f ${[hostsFile, ...legacy, ...tempnetPeers].join(' ')} ${rootDir}/*/peers.dat`,
         ])
       },
     )

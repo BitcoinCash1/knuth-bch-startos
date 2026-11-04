@@ -11,7 +11,7 @@ what is specific to running it on StartOS once it is installed.
 
 ## What you get on StartOS
 
-- The upstream **Knuth Bitcoin Cash node** with its original consensus and relay policy
+- The upstream **Knuth Bitcoin Cash node**; Tempnet uses the pending upstream Tempnet support and fast-sync crash fix
 - **P2P** (port follows the selected network)
 - Optional **JSON-RPC**, served by Knuth itself
 - The same multi-network layout as BCHN / BCHD / Flowee: mainnet under `/data/blockchain`, testnets under `/data/<network>/`
@@ -48,6 +48,21 @@ To use Chipnet, select **Config → Network → chipnet** and enable JSON-RPC so
 dashboard can verify synchronization. Native x86_64 execution is available;
 ARM64 and RISC-V packages emulate the x86_64 node.
 
+## Tempnet
+
+Select **Config → Network → tempnet** to switch to Tempnet. Enable **Config →
+Node Settings → JSON-RPC Server** so the dashboard can verify synchronization.
+The node restarts automatically and downloads and validates the chain into its
+own `/data/tempnet` directory. Tempnet needs a fresh sync; do not copy chipnet's
+database into it. Your other networks' chain data stays in their own directories.
+
+Tempnet is a temporary public test network ending **2026-11-15**. It tests
+CHIP-2025-03 Faster Blocks on chipnet and uses seed `tempnet.bitjson.com:48333`.
+It shares chipnet's P2P and RPC ports, and only one network runs at a time.
+Released Knuth 1.5.2 cannot run it, so Tempnet alone uses a separate binary with
+the pending upstream Tempnet support (#752) and fast-sync crash fix (#815).
+Every other network keeps the released Knuth binary.
+
 ## JSON-RPC
 
 Off by default. Credentials are generated from a cryptographic random source at
@@ -61,13 +76,14 @@ refreshes the corresponding StartOS interface automatically.
 | testnet4 | 28333 | 28332 |
 | scalenet | 38333 | 38332 |
 | chipnet  | 48333 | 48332 |
+| tempnet  | 48333 | 48332 |
 | regtest  | 18444 | 18443 |
 
 Use the **Interfaces** tab for the RPC endpoint other services should call. gRPC is not exposed in this package.
 
 ## Configuration
 
-- **Network** — mainnet (default), testnet3, testnet4, scalenet, chipnet, regtest. Switches data directory, P2P port, and RPC port; node restarts automatically. Mainnet data is kept separately when you leave and return.
+- **Network** — mainnet (default), testnet3, testnet4, scalenet, chipnet, tempnet, regtest. Switches data directory, P2P port, and RPC port; node restarts automatically. Mainnet data is kept separately when you leave and return.
 - **Node Settings** — database mode (`full` / `blocks` / `pruned`), connections, logging, JSON-RPC, UTXO-Z, IPC, Tor.
 
 `full` database mode is required for Fulcrum and BCH Explorer.
@@ -104,8 +120,8 @@ For inbound onion access, use **Interfaces → Peer Interface → Add Onion Serv
 
 The BitcoinCash1 repository checks new stable upstream releases daily. A new
 version must pass a binary-version check and a running JSON-RPC check before its
-package version is updated and a release build is requested. The package keeps
-upstream node behavior and adds no transaction-size rule.
+package version is updated and a release build is requested. Each network keeps
+its selected node binary's behavior; the package adds no transaction-size rule.
 
 Maintainers can build a sideload package from **Actions → Build → Run workflow**.
 Choose the branch and architecture target, then download its `.s9pk` and

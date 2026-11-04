@@ -41,9 +41,9 @@
 | Field | Value |
 |---|---|
 | **Image ID** | `knuth` |
-| **Build** | `Dockerfile` builds the pinned Knuth release with RPC enabled and copies its matching GCC runtime |
+| **Build** | `Dockerfile` builds the pinned Knuth release with RPC enabled, a separate Tempnet binary, and their matching GCC runtime |
 | **Architectures** | Native `x86_64`; `aarch64` and `riscv64` use StartOS emulation of that image (`emulateMissing`). They are not native ARM or RISC-V builds. |
-| **Command** | `kth -c /data/kth.cfg --init_run --network <name>` |
+| **Command** | `kth -c /data/kth.cfg --init_run --network <name>`; Tempnet uses `kth-tempnet` |
 
 The node build follows the RPC-enabled recipe merged in
 [k-nuth/docker-images#7](https://github.com/k-nuth/docker-images/pull/7), commit
@@ -51,10 +51,21 @@ The node build follows the RPC-enabled recipe merged in
 `rpc=True` / `tests=False` Conan options. The build stage upgrades Conan to the
 newest 2.x release, as kth's own CI does: the pinned toolchain ships Conan
 2.24.0, and kth 1.5.0 pulls `openssl/4.1.0`, whose recipe requires Conan 2.25 or
-later. The package adds runtime utilities; it does not patch the Knuth node or
-put anything between it and its RPC clients. Official GHCR pulls currently
+later. The released binary is unpatched. The package adds runtime utilities and
+puts nothing between Knuth and its RPC clients. Official GHCR pulls currently
 return an authorization error, so packaging retains the source build.
 The SDK is pinned to `@start9labs/start-sdk` 3.1.1.
+
+Tempnet alone runs `/usr/local/bin/kth-tempnet`, built from
+[`CyberAshven/kth`](https://github.com/CyberAshven/kth/tree/tempnet/start9) branch
+`tempnet/start9` at commit `880af5356b0a22a78439dea9c1a25c5a16f93cf7`.
+Released kth 1.5.2 cannot run Tempnet; this commit contains k-nuth/kth#752 with
+the fast-sync crash fix from #815 applied on top. The second build uses the same
+pinned toolchain, Conan upgrade and options as the released binary, with kth's
+source-build CMake presets. Every other network continues to run
+`/usr/local/bin/kth` from the pinned release. Remove the second build stage,
+binary and Tempnet-specific binary selection once a kth release includes both
+#752 and #815.
 
 ---
 
@@ -77,7 +88,13 @@ The SDK is pinned to `@start9labs/start-sdk` 3.1.1.
 |---|---|
 | `/data/blockchain` | mainnet chain DB |
 | `/data/peers.dat` | mainnet hosts pool |
-| `/data/testnet3`, `/data/testnet4`, `/data/scalenet`, `/data/chipnet`, `/data/regtest` | per-testnet chain + peers |
+| `/data/testnet3`, `/data/testnet4`, `/data/scalenet`, `/data/chipnet`, `/data/tempnet`, `/data/regtest` | per-testnet chain + peers |
+
+Tempnet's configured peer database is `/data/tempnet/peers-tempnet.dat`. Its
+source build can import the legacy `hosts-tempnet.cache` and
+`banlist-tempnet.dat` files from the working directory `/data`. Delete Peer
+List removes these Tempnet files as well; backups exclude them and Tempnet's
+chain directory.
 
 ---
 
@@ -113,13 +130,21 @@ installation starts with an empty database and does not need this action.
 
 | Group | Settings |
 |---|---|
-| **Network** | mainnet / testnet3 / testnet4 / scalenet / chipnet / regtest — rewrites peer port, RPC port, `db.directory`, `net.hosts_file` (the peer port, `db.directory` and `net.hosts_file` are also reasserted on every start, because kth tells chipnet from testnet4 only by peer port 48333) |
+| **Network** | mainnet / testnet3 / testnet4 / scalenet / chipnet / tempnet / regtest — rewrites peer port, RPC port, `db.directory`, `net.hosts_file` (the peer port, `db.directory` and `net.hosts_file` are also reasserted on every start, because kth tells chipnet from testnet4 only by peer port 48333) |
 | **Node Settings** | db mode (`full` / `blocks` / `pruned`), max size (pruned), connections, latency, verbose log, **JSON-RPC toggle**, IPC, UTXOZ, Tor |
 
 Interfaces are refreshed when the selected network, RPC toggle, or RPC username
 changes. New RPC passwords use the operating system's cryptographic random
 source. Existing credentials remain stable until the credential action rotates them.
 Malformed or non-finite numeric config values use their declared defaults.
+
+To switch to Tempnet, select **Config → Network → tempnet** and enable JSON-RPC
+so the dashboard can verify synchronization. Tempnet is a temporary public test
+network ending **2026-11-15**, testing CHIP-2025-03 Faster Blocks on chipnet from
+height 327,989 with median-time-past 1792065600. It uses chipnet's network magic
+and ports (P2P 48333, RPC 48332), with seed `tempnet.bitjson.com:48333`; only one
+network runs at a time. Its database is isolated under `/data/tempnet` and needs
+a fresh sync. Never reuse or copy chipnet's database into that directory.
 
 ---
 
@@ -153,7 +178,7 @@ Per-network peer/RPC ports match the shared BitcoinCash1 table (see Quick Refere
 
 **Backed up:** `kth.cfg`, `store.json` (credentials, flags).
 
-**Excluded:** chain dirs (`/blockchain`, testnet subdirs), `peers.dat`, logs.
+**Excluded:** chain dirs (`/blockchain`, testnet subdirs including `/tempnet`), `peers.dat`, logs.
 
 ---
 
@@ -209,8 +234,8 @@ current connectivity or synchronization.
 
 ## 13. What Is Unchanged from Upstream
 
-- Consensus / P2P protocol from `k-nuth/kth`
-- Transaction relay and size policy from the pinned upstream release; this package adds no size cap or consensus rule
+- Consensus / P2P protocol from `k-nuth/kth`, with Tempnet alone using the source commit above
+- Transaction relay and size policy from the selected node binary; this package adds no size cap or consensus rule
 - Config key names and `db_mode` values from v1.3.0
 - IPC/C-API and UTXOZ behavior
 
@@ -260,6 +285,7 @@ networks:
   testnet4: { peer: 28333, rpc: 28332, db: /data/testnet4 }
   scalenet: { peer: 38333, rpc: 38332, db: /data/scalenet }
   chipnet:  { peer: 48333, rpc: 48332, db: /data/chipnet }
+  tempnet:  { peer: 48333, rpc: 48332, db: /data/tempnet, binary: kth-tempnet }
   regtest:  { peer: 18444, rpc: 18443, db: /data/regtest }
 config_keys_v1_3_0: [net.*, db.*, chain.*, node.*, rpc.*, log.*]
 db_mode: [full, blocks, pruned]   # not full_indexed/normal

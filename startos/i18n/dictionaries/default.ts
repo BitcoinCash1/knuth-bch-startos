@@ -86,7 +86,7 @@ const dict = {
   // actions/config/network.ts
   Network: 81,
   'Bitcoin Cash network to connect to. Changing this requires a node restart and a separate data directory per network.': 82,
-  'Switching networks requires a full restart. The node will sync from scratch on the new network. Your mainnet data is preserved separately on disk.': 83,
+  'Switching networks requires a full restart. The node will sync from scratch on the new network. Your mainnet data is preserved separately on disk. Tempnet is a temporary Faster Blocks test ending 2026-11-15 and needs a fresh sync in its own data directory.': 83,
   Mainnet: 84,
   'Testnet3 (legacy test network)': 85,
   'Testnet4 (light-weight test network)': 86,
@@ -146,7 +146,7 @@ const dict = {
   Chipnet: 135,
   Regtest: 136,
   'Delete Test Network Data': 137,
-  'Delete blockchain data for one or more test networks (Testnet3, Testnet4, Scalenet, Chipnet, Regtest). This frees disk space without touching mainnet.': 138,
+  'Delete blockchain data for one or more test networks (Testnet3, Testnet4, Scalenet, Chipnet, Tempnet, Regtest). This frees disk space without touching mainnet.': 138,
   'All block data and chainstate for the selected networks will be permanently deleted. Mainnet is never affected.': 139,
   'Nothing to Delete': 140,
   'No networks were selected.': 141,
@@ -197,6 +197,9 @@ const dict = {
   'Unable to verify synchronization — enable JSON-RPC (${netLabel})': 181,
   'Waiting for current peer status (${netLabel})': 182,
   'Waiting for a readable validated block tip (${netLabel})': 183,
+  // actions/config/network.ts and actions/deleteTestNetworkData.ts
+  'Tempnet (Faster Blocks test until 2026-11-15)': 184,
+  Tempnet: 185,
 } as const
 
 /**

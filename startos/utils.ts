@@ -7,13 +7,14 @@ export const rpcInterfaceId = 'rpc'
 export const rootDir = '/data'
 
 // ── Network types ─────────────────────────────────────────────────────────────
-// Order matches BCHN StartOS: mainnet → testnets → scalenet → chipnet → regtest.
+// Keep Tempnet after Chipnet in the network dropdowns.
 export const NETWORKS = [
   'mainnet',
   'testnet3',
   'testnet4',
   'scalenet',
   'chipnet',
+  'tempnet',
   'regtest',
 ] as const
 export type Network = (typeof NETWORKS)[number]
@@ -25,6 +26,7 @@ export const networkPorts: Record<Network, { rpc: number; peer: number }> = {
   testnet4: { rpc: 28332, peer: 28333 },
   scalenet: { rpc: 38332, peer: 38333 },
   chipnet: { rpc: 48332, peer: 48333 },
+  tempnet: { rpc: 48332, peer: 48333 },
   regtest: { rpc: 18443, peer: 18444 },
 }
 
@@ -39,6 +41,7 @@ export const networkName: Record<Network, string> = {
   testnet4: 'testnet4',
   scalenet: 'scalenet',
   chipnet: 'chipnet',
+  tempnet: 'tempnet',
   regtest: 'regtest',
 }
 
@@ -53,7 +56,10 @@ export const networkDbDir = (network: Network): string =>
 export const networkHostsFile = (network: Network): string =>
   network === 'mainnet'
     ? `${rootDir}/peers.dat`
-    : `${rootDir}/${network}/peers.dat`
+    : network === 'tempnet'
+      // The Tempnet binary uses net.hosts_file for its unified peer database.
+      ? `${rootDir}/tempnet/peers-tempnet.dat`
+      : `${rootDir}/${network}/peers.dat`
 
 // ── Port (mainnet default, kept for backward compat) ──────────────────────────
 export const peerPort = networkPorts.mainnet.peer

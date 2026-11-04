@@ -21,6 +21,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
   const network: Network = store?.network ?? 'mainnet'
   const { rpc: rpcPort } = networkPorts[network]
   const netName = networkName[network]
+  const knuthBinary = network === 'tempnet' ? 'kth-tempnet' : 'kth'
   const netLabel = network.charAt(0).toUpperCase() + network.slice(1)
   const dataDir = networkDbDir(network)
   const torEnabled = store?.torEnabled ?? false
@@ -218,7 +219,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
 
   async function nodeIsUp(): Promise<boolean> {
     try {
-      const res = await knuthSub.exec(['sh', '-c', 'pgrep -x kth >/dev/null'])
+      const res = await knuthSub.exec(['sh', '-c', `pgrep -x ${knuthBinary} >/dev/null`])
       return res.exitCode === 0
     } catch {
       return false
@@ -230,7 +231,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
       .addDaemon('primary', {
         subcontainer: knuthSub,
         exec: {
-          command: ['kth', ...knuthArgs],
+          command: [knuthBinary, ...knuthArgs],
           // 5 min left the UI "Stopped" while kth kept running, so Delete
           // Peer List / Delete Test Network Data never actually took effect.
           sigtermTimeout: 45_000,
