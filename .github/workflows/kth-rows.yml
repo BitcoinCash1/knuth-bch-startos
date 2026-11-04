@@ -22,11 +22,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: tempnet-start9
-            branch: tempnet/start9
-            domain: true
+          - name: tempnet-752-alone
+            branch: test/752-alone
             blockchain: true
-            network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
