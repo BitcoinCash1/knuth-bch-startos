@@ -22,8 +22,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: sv2-jd-client
-            branch: test/sv2-jd-client
+          - name: sv2-jd-failover
+            branch: test/sv2-jd-failover
             sv2: true
             noise: true
             sv2_mining: true
