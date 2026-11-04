@@ -22,9 +22,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: tempnet-752-alone
-            branch: test/752-alone
-            blockchain: true
+          - name: sv2-jd-client
+            branch: test/sv2-jd-client
+            sv2: true
+            noise: true
+            sv2_mining: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
