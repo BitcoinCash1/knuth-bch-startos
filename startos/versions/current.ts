@@ -11,8 +11,8 @@ export const current = VersionInfo.of({
   version: '1.5.2:1',
   releaseNotes:
     'Add Tempnet as a network option. Tempnet runs kth commit ' +
-    '880af5356b0a22a78439dea9c1a25c5a16f93cf7 from CyberAshven/kth, with ' +
-    'Tempnet support (#752) and the fast-sync crash fix (#815) pending an upstream release. ' +
+    'c67aa441b98085b4001b397842b622afe877d7aa from CyberAshven/kth, with ' +
+    'Tempnet support (#752) and the fast-sync crash fix (#815) merged onto kth master, pending an upstream release. ' +
     'Every other network is unchanged and continues to run released kth 1.5.2.',
   migrations: {
     up: async () => {},
