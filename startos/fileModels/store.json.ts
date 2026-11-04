@@ -4,7 +4,7 @@ import { sdk } from '../sdk'
 export const shape = z.object({
   // Enum order matches BCHN store / Network action dropdown.
   network: z
-    .enum(['mainnet', 'testnet3', 'testnet4', 'scalenet', 'chipnet', 'regtest'])
+    .enum(['mainnet', 'testnet3', 'testnet4', 'scalenet', 'chipnet', 'tempnet', 'regtest'])
     .catch('mainnet'),
   // Same flag BCHN/Flowee clear on network switch (for dependents).
   fullySynced: z.boolean().catch(false),
