@@ -1,0 +1,160 @@
+name: kth SV2 job declaration against BCH P2Pool
+
+# Row 25 (test/sv2-jd-client) and row 25b (test/sv2-jd-payout-outputs):
+# build that kth with kth's toolchain, build BCH P2Pool, and mine on BCHN
+# regtest through Job Declaration. Runs when this file changes, or by hand.
+on:
+  push:
+    paths: [.github/workflows/kth-jd.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  row:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: sv2-jd-client
+            branch: test/sv2-jd-client
+            row: "25"
+          - name: sv2-jd-payout-outputs
+            branch: test/sv2-jd-payout-outputs
+            row: "25b"
+    name: kth ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      IMAGE: kthnode/gcc15-ubuntu24.04@sha256:4988fdeb3654c2b5ea591ffa4454f67e1a631549449c62e35060ba69da79eb67
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Make room for the build
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        shell: bash
+      - name: Fetch kth ${{ matrix.branch }}
+        run: |
+          git clone --depth 1 --branch "${{ matrix.branch }}" https://github.com/CyberAshven/kth.git kth-src
+          git -C kth-src log -1 --format='%H %s' | tee kth-commit.txt
+        shell: bash
+      - name: Restore the compiler cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ccache
+          key: kth-jd-ccache-${{ matrix.name }}-${{ github.run_id }}
+          restore-keys: |
+            kth-jd-ccache-${{ matrix.name }}-
+            kth-jd-ccache-
+      - name: Build kth and its tests in the kth toolchain
+        run: |
+          TARGETS="kth_node_test node-exe"
+          if [ "${{ matrix.domain }}" = "true" ]; then TARGETS="$TARGETS kth_domain_test"; fi
+          if [ "${{ matrix.blockchain }}" = "true" ]; then TARGETS="$TARGETS kth_blockchain_test"; fi
+          if [ "${{ matrix.network }}" = "true" ]; then TARGETS="$TARGETS kth_network_test"; fi
+          if [ "${{ matrix.infrastructure }}" = "true" ]; then TARGETS="$TARGETS kth_infrastructure_test"; fi
+          mkdir -p ccache
+          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -v "$PWD/ccache:/ccache" -w /src \
+            -e TARGETS="$TARGETS" -e CCACHE_DIR=/ccache -e CCACHE_MAXSIZE=1200M -e CCACHE_BASEDIR=/src "$IMAGE" \
+            bash -euo pipefail -c '
+              LAUNCH=""
+              if command -v ccache >/dev/null || (apt-get update -qq && apt-get install -y -qq ccache >/dev/null); then
+                LAUNCH="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+                ccache -z
+              fi
+              pip install --no-cache-dir --upgrade "conan>=2.25,<3" "kthbuild>=4,<5"
+              conan profile detect --force
+              conan remote add kth https://packages.kth.cash/api/ --force
+              time conan install conanfile.py --version 1.5.2 -of build --build=missing \
+                -o currency=BCH -o rpc=True -o tests=True \
+                -o "utxoz/*:with_tests=False" -o "utxoz/*:with_benchmarks=False" \
+                -o "utxoz/*:with_large_benchmarks=False" \
+                -s compiler.cppstd=23 -s build_type=Release
+              cmake --preset conan-release -DGLOBAL_BUILD=ON -DENABLE_TEST=ON -DCMAKE_BUILD_TYPE=Release $LAUNCH
+              time cmake --build --preset conan-release -j"$(nproc)" --target $TARGETS
+              if [ -n "$LAUNCH" ]; then ccache -s; fi
+              chmod -R a+rwX /ccache
+            '
+        shell: bash
+      - name: Save the compiler cache
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: ccache
+          key: kth-jd-ccache-${{ matrix.name }}-${{ github.run_id }}
+      - name: Fetch BCHN 29.2.0
+        run: |
+          TARBALL=bitcoin-cash-node-29.2.0-x86_64-linux-gnu.tar.gz
+          curl -fsSLO "https://github.com/bitcoin-cash-node/bitcoin-cash-node/releases/download/v29.2.0/$TARBALL"
+          echo "23bbe9ff749136a9b832a2a59023ce76a5391322c1ea2f4f24b5b91f035081bc  $TARBALL" | sha256sum -c
+          tar xzf "$TARBALL"
+          echo "$PWD/bitcoin-cash-node-29.2.0/bin" >> "$GITHUB_PATH"
+        shell: bash
+      - name: Build SRI's mining_device (sv2-apps, pinned)
+        run: |
+          sudo apt-get install -y -qq capnproto libcapnp-dev >/dev/null
+          git clone --quiet https://github.com/stratum-mining/sv2-apps.git sv2-apps
+          git -C sv2-apps checkout --quiet ffad32eb11128b8e3cf9ff20604480c11e5cbfab
+          cargo build --release --locked --manifest-path sv2-apps/Cargo.toml -p integration_tests_sv2 --bin mining_device
+        shell: bash
+      - name: Fetch BCH P2Pool feat/rust-only-tooling
+        run: |
+          git clone --depth 1 --branch feat/rust-only-tooling https://github.com/CyberAshven/BitcoinCash-p2poolv2.git p2pool
+          git -C p2pool log -1 --format='%H %s' | tee p2pool-commit.txt
+        shell: bash
+      - name: Build BCH P2Pool
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            build-essential \
+            clang \
+            cmake \
+            git \
+            libbz2-dev \
+            liblz4-dev \
+            libsnappy-dev \
+            libssl-dev \
+            libzmq3-dev \
+            libzstd-dev \
+            pkg-config \
+            zlib1g-dev \
+            ca-certificates
+          # Run from the clone so rustup reads rust-toolchain.toml. -p builds
+          # p2poolv2 and p2poolv2_cli; the workspace release profile is fat LTO.
+          cd p2pool
+          cargo build --release --locked -p p2poolv2_node
+        shell: bash
+      - name: Run the Job Declaration check
+        run: |
+          KTH_BIN=$(find "$PWD/kth-src/build" -name kth -type f -perm -u+x -path '*node-exe*' -print -quit)
+          if [ -z "$KTH_BIN" ]; then
+            echo "missing kth node-exe binary under kth-src/build"
+            exit 1
+          fi
+          export KTH_IMAGE="$IMAGE"
+          export KTH_JD_ROW="${{ matrix.row }}"
+          export KTH_SRC="$PWD/kth-src"
+          export KTH_BIN
+          export P2POOL_BIN="$PWD/p2pool/target/release/p2poolv2"
+          export P2POOL_CLI="$PWD/p2pool/target/release/p2poolv2_cli"
+          export KTH_MINING_DEVICE="$PWD/sv2-apps/target/release/mining_device"
+          echo "node binary: $KTH_BIN"
+          for bin in "$P2POOL_BIN" "$P2POOL_CLI" "$KTH_MINING_DEVICE"; do
+            if [ ! -x "$bin" ]; then
+              echo "missing binary: $bin"
+              exit 1
+            fi
+          done
+          python3 -u scripts/jd_p2pool_e2e.py e2e-out
+        shell: bash
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: kth-jd-${{ matrix.name }}
+          path: |
+            kth-commit.txt
+            p2pool-commit.txt
+            e2e-out
+          if-no-files-found: error
