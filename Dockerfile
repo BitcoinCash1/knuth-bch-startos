@@ -46,12 +46,13 @@ RUN conan profile detect --force \
 
 # ── Tempnet build ───────────────────────────────────────────────────
 # Released kth 1.5.2 cannot run Tempnet. This commit contains k-nuth/kth#752
-# with the fast-sync crash fix from #815 applied on top. Keep it in a separate
+# with the fast-sync crash fix from #815 applied on top, merged onto kth master
+# so it also carries master's consensus fixes (#763 to #768). Keep it in a separate
 # binary so every other network still runs the released node. Remove this stage
 # and kth-tempnet once a kth release includes both #752 and #815.
 FROM --platform=linux/amd64 ${TOOLCHAIN} AS kth-tempnet-build
 
-ARG TEMPNET_COMMIT=880af5356b0a22a78439dea9c1a25c5a16f93cf7
+ARG TEMPNET_COMMIT=c67aa441b98085b4001b397842b622afe877d7aa
 ARG CURRENCY=BCH
 
 RUN pip install --no-cache-dir --upgrade "conan>=2.25,<3" "kthbuild>=4,<5"

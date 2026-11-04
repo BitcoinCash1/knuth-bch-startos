@@ -58,7 +58,7 @@ The SDK is pinned to `@start9labs/start-sdk` 3.1.1.
 
 Tempnet alone runs `/usr/local/bin/kth-tempnet`, built from
 [`CyberAshven/kth`](https://github.com/CyberAshven/kth/tree/tempnet/start9) branch
-`tempnet/start9` at commit `880af5356b0a22a78439dea9c1a25c5a16f93cf7`.
+`tempnet/start9` at commit `c67aa441b98085b4001b397842b622afe877d7aa`.
 Released kth 1.5.2 cannot run Tempnet; this commit contains k-nuth/kth#752 with
 the fast-sync crash fix from #815 applied on top. The second build uses the same
 pinned toolchain, Conan upgrade and options as the released binary, with kth's
