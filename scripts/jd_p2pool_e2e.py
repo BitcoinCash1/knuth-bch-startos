@@ -475,21 +475,21 @@ def start_p2pool(binary: str, config: Path) -> None:
     P2POOL = spawn([binary, "--config", str(config)], OUT / "p2pool-console.log", env)
     deadline = time.monotonic() + 120
     last = ""
+    sv2_open = False
     while time.monotonic() < deadline:
         ensure_p2pool()
         status, body = http_get("/health")
-        metrics_status, metrics = http_get("/metrics")
-        template = metrics_status == 200 and any(
-            line.startswith("network_difficulty ") or line.startswith("coinbase_total ")
-            for line in metrics.splitlines()
-        )
-        if port_open(P2POOL_SV2) and status == 200 and body.strip() == "OK" and template:
-            progress(f"P2Pool SV2 port {P2POOL_SV2} is answering and a template is up")
+        if not sv2_open:
+            sv2_open = port_open(P2POOL_SV2)
+        if sv2_open and status == 200 and body.strip() == "OK":
+            _, metrics = http_get("/metrics")
+            EVIDENCE["p2pool"]["metrics_body"] = metrics
+            progress(f"P2Pool SV2 port {P2POOL_SV2} accepted a connection and /health is OK")
             return
-        last = f"tcp={port_open(P2POOL_SV2)} health={status} {body.strip()!r} metrics={metrics_status}"
+        last = f"tcp={sv2_open} health={status} {body.strip()!r}"
         time.sleep(1)
     fail(
-        "P2Pool SV2 port did not answer with a block template within 120s "
+        "P2Pool SV2 port did not accept a connection with /health OK within 120s "
         f"({last}). log tail:\n" + tail(p2pool_log_text(), 40)
     )
 
