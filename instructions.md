@@ -58,6 +58,9 @@ database into it. Your other networks' chain data stays in their own directories
 
 Tempnet is a temporary public test network ending **2026-11-15**. It tests
 CHIP-2025-03 Faster Blocks on chipnet and uses seed `tempnet.bitjson.com:48333`.
+That seed also returns chipnet nodes, which Tempnet rejects and bans at the
+fork (block 327,989), so the node also connects to the known Tempnet nodes
+listed in the Tempnet BCHN build's TEMPNET.md.
 It shares chipnet's P2P and RPC ports, and only one network runs at a time.
 Released Knuth 1.5.2 cannot run it, so Tempnet alone uses a separate binary with
 the pending upstream Tempnet support (#752) and fast-sync crash fix (#815).

@@ -5,6 +5,7 @@ import {
   networkName,
   networkDbDir,
   networkHostsFile,
+  tempnetPeers,
   Network,
 } from './utils'
 import { storeJson } from './fileModels/store.json'
@@ -52,6 +53,12 @@ export const main = sdk.setupMain(async ({ effects }) => {
     '--network',
     netName,
   ]
+
+  // Command-line peers are not written to kth.cfg, so nothing carries over
+  // when the node is switched back to chipnet.
+  if (network === 'tempnet') {
+    for (const peer of tempnetPeers) knuthArgs.push('--net.peer', peer)
+  }
 
   // kth tells chipnet from testnet4 (same network magic) only by
   // net.inbound_port == 48333, and kth.cfg is read after --network, so a port

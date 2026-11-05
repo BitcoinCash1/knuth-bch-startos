@@ -61,5 +61,17 @@ export const networkHostsFile = (network: Network): string =>
       ? `${rootDir}/tempnet/peers-tempnet.dat`
       : `${rootDir}/${network}/peers.dat`
 
+// Tempnet shares chipnet's network magic, ports and DNS seeds. Those seeds
+// return chipnet nodes, which Tempnet rejects at the fork (block 327,989, as
+// "bad-diffbits") and bans, so a node that only finds them stalls there with no
+// peers. These are the known Tempnet nodes from the Tempnet BCHN build's
+// TEMPNET.md (github.com/9500/bchn-tempnet, list of 2026-10-18), kept as
+// persistent peers. Remove them with the rest of Tempnet after 2026-11-15.
+export const tempnetPeers: readonly string[] = [
+  '15.204.253.47:48335',
+  '15.204.228.134:48333',
+  '135.148.26.244:48333',
+]
+
 // ── Port (mainnet default, kept for backward compat) ──────────────────────────
 export const peerPort = networkPorts.mainnet.peer
