@@ -856,19 +856,28 @@ def row25(binary: str, pubkey: str, solo: str) -> None:
     text = wait_kth_line(refused, 90, "kth to log the pool's refusal and continue solo mining")
     if "Pool accepted local template as job" in text:
         fail("row 25: kth logged 'Pool accepted local template as job' without the payout extension")
-    # The pool logs the refusal before it answers, through a non-blocking
-    # writer. Give that writer a bounded moment to reach the file.
-    seen_rejection = "Rejected SV2 custom job" in p2pool_log_text()
+    # P2Pool refuses a plain coinbase either at its JDS, answering
+    # DeclareMiningJob.Error with its own code (it logs nothing then), or at
+    # the pool, which logs "Rejected SV2 custom job" before it answers through
+    # a non-blocking writer. Either one is P2Pool's refusal.
+    jds_refusal = "JDS refused the local template: invalid-coinbase-tx" in text
+
+    def pool_refusal() -> bool:
+        return "Rejected SV2 custom job" in p2pool_log_text()
+
+    seen_rejection = jds_refusal or pool_refusal()
     rejection_deadline = time.monotonic() + 15
     while not seen_rejection and time.monotonic() < rejection_deadline:
         time.sleep(1)
         ensure_p2pool()
-        seen_rejection = "Rejected SV2 custom job" in p2pool_log_text()
+        seen_rejection = pool_refusal()
     if not seen_rejection:
         fail(
-            "row 25: kth fell back, but P2Pool's debug log has no 'Rejected SV2 custom job'. tail:\n"
+            "row 25: kth fell back, but neither P2Pool's JDS code invalid-coinbase-tx nor its "
+            "'Rejected SV2 custom job' log line was seen. P2Pool tail:\n"
             + tail(p2pool_log_text(), 40)
         )
+    EVIDENCE["refusal"] = "jds invalid-coinbase-tx" if jds_refusal else "pool rejected custom job"
     before = int(cli("getblockcount"))
     EVIDENCE["heights"]["before_device"] = before
     proc = start_device(device_command(binary, pubkey, 1, None), OUT / "mining-device.log")
@@ -891,7 +900,7 @@ def row25(binary: str, pubkey: str, solo: str) -> None:
                          + read_text(OUT / "mining-device.log")[-2000:])
                 EVIDENCE["assertions"] = {
                     "pool_refused": True,
-                    "p2pool_rejected_custom_job": True,
+                    "p2pool_refusal": EVIDENCE["refusal"],
                     "pool_accepted_absent": True,
                     "device_still_running": True,
                     "solo_block": {"height": block["height"], "hash": block["hash"]},
