@@ -1045,11 +1045,13 @@ def row25b(binary: str, pubkey: str, solo: str) -> None:
         if shares == 0:
             stop_at = min(stop_at, before + EASY_BLOCK_LIMIT)
         cursor, blocks = pull_blocks(cursor, stop_at)
+        # Row 25c: the first block after the large declaration is the one that
+        # can hold the spends, whoever its PPLNS window pays.
+        if EVIDENCE["row"] == "25c" and blocks and "large_template" not in EVIDENCE:
+            EVIDENCE["large_template"] = require_large_block(blocks[0]["height"])
         for block in blocks:
             verdict = pplns_verdict(block, solo)
             block["pplns"] = verdict
-            # The first PPLNS block is the one that can carry row 25c's mempool;
-            # later ones on that chain find it empty.
             if verdict["match"] and matched is None:
                 matched = block
         if shares > 0 and matched is not None:
@@ -1062,7 +1064,7 @@ def row25b(binary: str, pubkey: str, solo: str) -> None:
                 "later_fallback": bool(fallback_line(kth_log_text())),
             }
             if EVIDENCE["row"] == "25c":
-                EVIDENCE["assertions"]["large_template"] = require_large_block(matched["height"])
+                EVIDENCE["assertions"]["large_template"] = EVIDENCE["large_template"]
             progress(f"row {EVIDENCE['row']}: share credited and block {matched['height']} "
                      "pays the PPLNS split")
             return
