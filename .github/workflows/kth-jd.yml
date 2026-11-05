@@ -22,16 +22,16 @@ jobs:
           - name: sv2-jd-client
             branch: test/sv2-jd-client-announce
             row: "25"
-            p2pool: test/kth-jd-e2e
+            p2pool: alpha
           - name: sv2-jd-payout-outputs
             branch: test/sv2-jd-payout-outputs-announce
             row: "25b"
-            p2pool: test/kth-jd-e2e
-          # BCH large templates need P2Pool's side of 0x4C54 (P2Pool PR #63).
+            p2pool: alpha
+          # BCH large templates need P2Pool's side of 0x4C54 (P2Pool #63, on alpha).
           - name: sv2-jd-large-templates
             branch: test/sv2-jd-large-templates-announce
             row: "25c"
-            p2pool: feat/jd-large-templates
+            p2pool: alpha
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
