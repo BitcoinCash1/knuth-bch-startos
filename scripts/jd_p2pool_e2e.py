@@ -719,12 +719,20 @@ def pplns_verdict(block: dict, solo: str) -> dict:
         if snap_sats == block_sats and block_sats:
             metrics_match = True
             break
-    # The PPLNS split is P2Pool's own distribution, exactly, and it carries
-    # the donation the node logs.
-    matched = metrics_match and near and not solo_paid and len(others) >= 1 and len(zero) >= 1
+    # A block found while the PPLNS window holds only the share chain's genesis
+    # pays that genesis payee alone: genesis has no per-share cuts, so it
+    # carries no donation. The block that proves kth's pooled mining pays the
+    # miner's own payout address, with the donation its shares carry, and is
+    # exactly P2Pool's distribution.
+    miner = EVIDENCE["addresses"].get("payout", "")
+    pays_miner = any(any(same_address(item, miner) for item in output["addresses"])
+                     for output in others)
+    matched = (metrics_match and pays_miner and near and not solo_paid
+               and len(zero) >= 1)
     return {
         "donation_sats": donation_sats,
         "expected_donation_sats": expected,
+        "pays_miner": pays_miner,
         "donation_bps_logged": bps,
         "donation_address": donation_address,
         "donation_as_logged": near,
