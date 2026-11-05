@@ -701,7 +701,6 @@ def pplns_verdict(block: dict, solo: str) -> dict:
     donation_sats = sum(output["sats"] for output in donation)
     near = bool(donation) and abs(donation_sats - expected) <= 10_000
     solo_paid = pays(outputs, solo)
-    matched = near and not solo_paid and len(others) >= 1 and len(zero) >= 1
     block_sats = sorted(output["sats"] for output in positive)
     metrics_match = False
     for snapshot in EVIDENCE["p2pool"]["metrics_snapshots"]:
@@ -709,6 +708,10 @@ def pplns_verdict(block: dict, solo: str) -> dict:
         if snap_sats == block_sats and block_sats:
             metrics_match = True
             break
+    # The PPLNS split is P2Pool's own distribution, exactly. The donation is
+    # P2Pool policy that changes between builds (150 bps, 100 bps, or none for
+    # a declared job), so it is recorded but not required.
+    matched = metrics_match and not solo_paid and len(others) >= 1 and len(zero) >= 1
     return {
         "donation_sats": donation_sats,
         "expected_donation_sats": expected,
@@ -1129,14 +1132,28 @@ def send_to_kth(raws: list[str]) -> int:
     return taken
 
 
-def fill_large_mempool(funder: str) -> dict:
-    """Leave kth with a mempool of LARGE_SPENDS spends; BCHN does not see them."""
+LARGE_FUNDING: dict = {}
+
+
+def fund_large_mempool(funder: str) -> None:
+    """Mine row 25c's P2SH(OP_TRUE) coinbases and their maturity during setup.
+
+    This runs before P2Pool and kth start. Mining 150 tips in a second while
+    Job Declaration runs would race each declared job against the next tip.
+    """
     decoded = json.loads(cli("decodescript", "51"))
     address = decoded["p2sh"]
-    script = bytes.fromhex(json.loads(cli("validateaddress", address))["scriptPubKey"])
     progress(f"row 25c: mining {LARGE_FUNDING_BLOCKS} coinbases to P2SH(OP_TRUE) {address}")
     hashes = json.loads(cli("generatetoaddress", str(LARGE_FUNDING_BLOCKS), address))
     bitcoin_cli(BCHN_DIR, BCHN[1], ["generatetoaddress", "100", funder], timeout=300)
+    LARGE_FUNDING.update(address=address, hashes=hashes)
+
+
+def fill_large_mempool(funder: str) -> dict:
+    """Leave kth with a mempool of LARGE_SPENDS spends; BCHN does not see them."""
+    address = LARGE_FUNDING["address"]
+    hashes = LARGE_FUNDING["hashes"]
+    script = bytes.fromhex(json.loads(cli("validateaddress", address))["scriptPubKey"])
     fanouts = []
     for block_hash in hashes:
         block = json.loads(cli("getblock", block_hash, "2"))
@@ -1345,6 +1362,8 @@ def run() -> None:
     }
     progress("mining 101 blocks")
     bitcoin_cli(BCHN_DIR, BCHN[1], ["generatetoaddress", "101", funder], timeout=180)
+    if row == "25c":
+        fund_large_mempool(funder)
     EVIDENCE["heights"]["after_funding"] = int(cli("getblockcount"))
     start_bchn_b()
 
