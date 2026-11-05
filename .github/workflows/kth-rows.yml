@@ -22,38 +22,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Today's master merged into #815, #795, #808, #809 and #805; the #803 coverage;
-        # and the proof-of-work ceiling and reward fixes off master.
-          - name: network-race-free-master
-            branch: test/network-race-free-master
-            network: true
-          - name: bch-size-only-fee-master
-            branch: test/bch-size-only-fee-master
-            blockchain: true
-          - name: i2p-sam-master
-            branch: test/i2p-sam-master
-            i2p: true
-            proxy: true
-            network: true
-          - name: serve-headers-master
-            branch: test/serve-headers-master
+        # Today's master carried up the #809, #795 and #814 stacks (#814, #816, #796, #797); #806's two small fixes.
+          - name: announce-blocks-master
+            branch: test/announce-blocks-master
             serve: true
-          - name: shv-mmr-master
-            branch: test/shv-mmr-master
-            shv: true
+            announce: true
+          - name: compact-blocks-master
+            branch: test/compact-blocks-master
+            serve: true
+            announce: true
+            compact: true
             blockchain: true
-          - name: socks5-proxy-cover
-            branch: test/socks5-proxy-cover
-            proxy: true
-            network: true
-          - name: pow-limit-per-call
-            branch: test/pow-limit-per-call
-            domain: true
-            capi: true
-          - name: reward-retarget
-            branch: test/reward-retarget
-            domain: true
-            capi: true
+          - name: receive-transactions-master
+            branch: test/receive-transactions-master
+            blockchain: true
+          - name: announce-transactions-master
+            branch: test/announce-transactions-master
+            blockchain: true
+          - name: respawn-idle-workers-nits
+            branch: test/respawn-idle-workers-nits
+            stall: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
