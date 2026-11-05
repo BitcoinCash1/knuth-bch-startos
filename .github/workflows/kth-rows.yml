@@ -22,84 +22,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Master a6b8f33e merged in, #791's found-block fix, and the review fixes.
-          - name: accept-found-block-master
-            branch: test/accept-found-block-master
-            blockchain: true
-          - name: submitblock-master
-            branch: test/submitblock-master
-            blockchain: true
-          - name: sv2-template-flow-master
-            branch: test/sv2-template-flow-master
-            sv2: true
-            blockchain: true
-          - name: sv2-noise-master
-            branch: test/sv2-noise-master
-            sv2: true
-            noise: true
-          - name: sv2-mining-channels-master
-            branch: test/sv2-mining-channels-master
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: sv2-jd-client-master
-            branch: test/sv2-jd-client-master
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: sv2-jd-failover-master
-            branch: test/sv2-jd-failover-master
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: sv2-jd-payout-outputs-master
-            branch: test/sv2-jd-payout-outputs-master
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: sv2-jd-large-templates-master
-            branch: test/sv2-jd-large-templates-master
-            sv2: true
-            noise: true
-            sv2_mining: true
+        # #816 with its test teardown fix, and #793 on the fixed #791.
           - name: compact-blocks-master
             branch: test/compact-blocks-master
             serve: true
             announce: true
             compact: true
             blockchain: true
-          - name: serve-headers-master
-            branch: test/serve-headers-master
-            serve: true
-          - name: announce-blocks-master
-            branch: test/announce-blocks-master
+          - name: announce-found-block-master
+            branch: test/announce-found-block-master
+            blockchain: true
             serve: true
             announce: true
-          - name: bch-size-only-fee-master
-            branch: test/bch-size-only-fee-master
-            blockchain: true
-          - name: receive-transactions-master
-            branch: test/receive-transactions-master
-            blockchain: true
-          - name: announce-transactions-master
-            branch: test/announce-transactions-master
-            blockchain: true
-          - name: socks5-proxy-master
-            branch: test/socks5-proxy-cover
-            proxy: true
-            network: true
-          - name: i2p-sam-master
-            branch: test/i2p-sam-master
-            i2p: true
-            proxy: true
-            network: true
-          - name: shv-mmr-master
-            branch: test/shv-mmr-master
-            shv: true
-            blockchain: true
-          - name: respawn-idle-workers-master
-            branch: test/respawn-idle-workers-nits
-            stall: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
