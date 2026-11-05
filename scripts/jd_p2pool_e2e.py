@@ -14,6 +14,21 @@ BCH large templates (0x4C54) and a mempool that standard Job Declaration
 cannot carry: more than 65,535 transactions and more than one U24 frame of
 transaction data. The PPLNS block must hold that whole mempool.
 
+How a PPLNS block is proven (P2Pool BCH v2, read before changing a row):
+- P2Pool BCH takes the donation and fee per share ("cuts-per-share" in its
+  protocol string). Each share in the PPLNS window gives its own cut off its
+  own weight, and the donation address is paid as an ordinary payee. There is
+  never a separate donation output.
+- The node logs its default at start: "Donating N basis points of each block
+  this node finds to ADDRESS." A miner's login may choose another with
+  donation=<percent>; this harness sends none, so the node default applies.
+- A block found while the window holds only the share chain's genesis pays
+  the genesis payee (an unspendable NUMS key) alone, with no donation: genesis
+  has no cut. That block is recorded and never counts as the proof.
+- The proof is a block whose outputs equal P2Pool's own /metrics distribution
+  exactly, that pays the miner's payout address, and whose donation payee is
+  more than zero and at most N basis points of the block.
+
 Standard library only. Writes <out>/jd-p2pool-e2e.json.
 """
 
