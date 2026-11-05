@@ -22,29 +22,40 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: sv2-jd-client
-            branch: test/sv2-jd-client
+        # Today's master merged into the SV2 stack (#804, #807, #817, #832-#835).
+          - name: sv2-template-flow-master
+            branch: test/sv2-template-flow-master
             sv2: true
-            noise: true
-            sv2_mining: true
-          - name: sv2-jd-failover
-            branch: test/sv2-jd-failover
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: sv2-jd-payout-outputs
-            branch: test/sv2-jd-payout-outputs
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: sv2-jd-large-templates
-            branch: test/sv2-jd-large-templates
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: template-subsidy
-            branch: test/template-subsidy
             blockchain: true
+          - name: sv2-noise-master
+            branch: test/sv2-noise-master
+            sv2: true
+            noise: true
+          - name: sv2-mining-channels-master
+            branch: test/sv2-mining-channels-master
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: sv2-jd-client-master
+            branch: test/sv2-jd-client-master
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: sv2-jd-failover-master
+            branch: test/sv2-jd-failover-master
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: sv2-jd-payout-outputs-master
+            branch: test/sv2-jd-payout-outputs-master
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: sv2-jd-large-templates-master
+            branch: test/sv2-jd-large-templates-master
+            sv2: true
+            noise: true
+            sv2_mining: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
