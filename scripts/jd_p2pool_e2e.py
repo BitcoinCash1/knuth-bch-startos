@@ -708,9 +708,11 @@ def pplns_verdict(block: dict, solo: str) -> dict:
     total = sum(output["sats"] for output in positive)
     expected = (total * bps) // 10000
     donation_sats = sum(output["sats"] for output in donation)
-    # The donation the node logs (a declared job's payout carries it too);
-    # none is required only when the node logs none.
-    near = (bps == 0 and not donation) or (bool(donation) and abs(donation_sats - expected) <= 10_000)
+    # P2Pool BCH takes the donation per share ("cuts-per-share"): each window
+    # share's own cut comes off its own weight, and the donation address is a
+    # payee like any other. So its amount is at most the logged bps of the
+    # block, less when the window also holds shares without cuts (genesis).
+    near = (bps == 0 and not donation) or (bool(donation) and 0 < donation_sats <= expected + 10_000)
     solo_paid = pays(outputs, solo)
     block_sats = sorted(output["sats"] for output in positive)
     metrics_match = False
@@ -720,10 +722,10 @@ def pplns_verdict(block: dict, solo: str) -> dict:
             metrics_match = True
             break
     # A block found while the PPLNS window holds only the share chain's genesis
-    # pays that genesis payee alone: genesis has no per-share cuts, so it
-    # carries no donation. The block that proves kth's pooled mining pays the
-    # miner's own payout address, with the donation its shares carry, and is
-    # exactly P2Pool's distribution.
+    # pays that genesis payee alone: genesis has no cut, so the donation payee
+    # is absent there. The block that proves kth's pooled mining pays the
+    # miner's own payout address and the donation payee its shares' cuts
+    # create, and is exactly P2Pool's distribution.
     miner = EVIDENCE["addresses"].get("payout", "")
     pays_miner = any(any(same_address(item, miner) for item in output["addresses"])
                      for output in others)
