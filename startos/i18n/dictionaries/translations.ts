@@ -184,6 +184,9 @@ export default {
     183: 'Esperando una punta de cadena validada que se pueda consultar (${netLabel})',
     184: 'Tempnet (prueba de bloques más rápidos hasta el 2026-11-15)',
     185: 'Tempnet',
+    // TEST ONLY chipnet Stratum V2; kept in English.
+    186: 'Stratum V2 (test)',
+    187: 'Stratum V2 listener for the chipnet Job Declaration test',
   },
   de_DE: {
     0: 'Knuth wird gestartet!',
@@ -368,6 +371,9 @@ export default {
     183: 'Warte auf eine lesbare validierte Kettenspitze (${netLabel})',
     184: 'Tempnet (Test für schnellere Blöcke bis zum 2026-11-15)',
     185: 'Tempnet',
+    // TEST ONLY chipnet Stratum V2; kept in English.
+    186: 'Stratum V2 (test)',
+    187: 'Stratum V2 listener for the chipnet Job Declaration test',
   },
   pl_PL: {
     0: 'Uruchamianie Knuth!',
@@ -552,6 +558,9 @@ export default {
     183: 'Oczekiwanie na dostępny zweryfikowany szczyt łańcucha (${netLabel})',
     184: 'Tempnet (test szybszych bloków do 2026-11-15)',
     185: 'Tempnet',
+    // TEST ONLY chipnet Stratum V2; kept in English.
+    186: 'Stratum V2 (test)',
+    187: 'Stratum V2 listener for the chipnet Job Declaration test',
   },
   fr_FR: {
     0: 'Démarrage de Knuth !',
@@ -736,5 +745,8 @@ export default {
     183: 'En attente d’un sommet de chaîne validé et consultable (${netLabel})',
     184: 'Tempnet (test de blocs plus rapides jusqu’au 2026-11-15)',
     185: 'Tempnet',
+    // TEST ONLY chipnet Stratum V2; kept in English.
+    186: 'Stratum V2 (test)',
+    187: 'Stratum V2 listener for the chipnet Job Declaration test',
   },
 } satisfies Record<string, LangDict>

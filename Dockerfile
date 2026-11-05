@@ -77,6 +77,35 @@ RUN conan profile detect --force \
       -exec install -Dm755 {} /out/kth-tempnet \; \
  && test -x /out/kth-tempnet
 
+# ── Job Declaration build (TEST ONLY) ───────────────────────────────
+# TEST ONLY, Job Declaration client (k-nuth/kth#832, #834) on chipnet against the BCH P2Pool pool.
+FROM --platform=linux/amd64 ${TOOLCHAIN} AS kth-jd-build
+
+ARG JD_COMMIT=438dc711
+ARG CURRENCY=BCH
+
+RUN pip install --no-cache-dir --upgrade "conan>=2.25,<3" "kthbuild>=4,<5"
+
+WORKDIR /src/kth
+RUN git clone --branch test/sv2-jd-payout-outputs-announce --single-branch https://github.com/CyberAshven/kth.git . \
+ && git checkout --detach ${JD_COMMIT}
+
+RUN conan profile detect --force \
+ && conan remote add kth https://packages.kth.cash/api/ --force \
+ && conan install conanfile.py --version 1.5.2 -of build --build=missing \
+      -o "kth/*:currency=${CURRENCY}" \
+      -o "kth/*:rpc=True" \
+      -o "kth/*:tests=False" \
+      -o "utxoz/*:with_tests=False" \
+      -o "utxoz/*:with_benchmarks=False" \
+      -o "utxoz/*:with_large_benchmarks=False" \
+      -s compiler.cppstd=23 \
+ && cmake --preset conan-release -DGLOBAL_BUILD=ON -DCMAKE_BUILD_TYPE=Release \
+ && cmake --build --preset conan-release --target node-exe \
+ && find build -type f -path '*/node-exe/*' -name kth -executable \
+      -exec install -Dm755 {} /out/kth-jd \; \
+ && test -x /out/kth-jd
+
 # ── Runtime ─────────────────────────────────────────────────────────
 FROM --platform=linux/amd64 ubuntu:24.04
 
@@ -95,6 +124,7 @@ RUN echo /opt/kth/lib > /etc/ld.so.conf.d/kth.conf && ldconfig
 
 COPY --from=kth-build /deploy/direct_deploy/kth/bin/kth /usr/local/bin/kth
 COPY --from=kth-tempnet-build /out/kth-tempnet /usr/local/bin/kth-tempnet
+COPY --from=kth-jd-build /out/kth-jd /usr/local/bin/kth-jd
 
 WORKDIR /data
 VOLUME /data

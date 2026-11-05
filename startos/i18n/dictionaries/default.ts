@@ -200,6 +200,9 @@ const dict = {
   // actions/config/network.ts and actions/deleteTestNetworkData.ts
   'Tempnet (Faster Blocks test until 2026-11-15)': 184,
   Tempnet: 185,
+  // interfaces.ts — TEST ONLY chipnet Stratum V2
+  'Stratum V2 (test)': 186,
+  'Stratum V2 listener for the chipnet Job Declaration test': 187,
 } as const
 
 /**

@@ -22,7 +22,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
   const network: Network = store?.network ?? 'mainnet'
   const { rpc: rpcPort } = networkPorts[network]
   const netName = networkName[network]
-  const knuthBinary = network === 'tempnet' ? 'kth-tempnet' : 'kth'
+  let knuthBinary = network === 'tempnet' ? 'kth-tempnet' : 'kth'
   const netLabel = network.charAt(0).toUpperCase() + network.slice(1)
   const dataDir = networkDbDir(network)
   const torEnabled = store?.torEnabled ?? false
@@ -58,6 +58,63 @@ export const main = sdk.setupMain(async ({ effects }) => {
   // when the node is switched back to chipnet.
   if (network === 'tempnet') {
     for (const peer of tempnetPeers) knuthArgs.push('--net.peer', peer)
+  }
+
+  // TEST ONLY, Job Declaration client (k-nuth/kth#832, #834) on chipnet
+  // against the BCH P2Pool pool. Selects kth-jd and appends the Stratum V2
+  // listener, Mining Protocol server, and Job Declaration client. Key files
+  // are under the chain data directory so they stay on the main volume.
+  if (network === 'chipnet') {
+    const jdBinary = 'kth-jd'
+    const sv2Bind = '0.0.0.0'
+    const sv2Port = '3335'
+    const sv2StaticKeyFile = `${dataDir}/sv2-static.key`
+    const sv2AuthorityKeyFile = `${dataDir}/sv2-authority.key`
+    const sv2MiningAddress =
+      'bchtest:qrzq5f9ltv70u4su7d40agd4nlnp8qlgqcma6x2tvp'
+    const sv2PoolEndpoint = '100.118.176.3:3336'
+    const sv2PoolAuthorityPublicKey =
+      '9brH2jNuXdHcpaGAHaWmDJno8Zhqbi41u63sSeboEmNuPwpCw8c'
+    const sv2UserIdentity =
+      'bchtest:qrzq5f9ltv70u4su7d40agd4nlnp8qlgqcma6x2tvp.kthjd,p2p=tp2pool:qrzq5f9ltv70u4su7d40agd4nlnp8qlgqcpjxs8987'
+    const sv2Mode = 'full-template'
+    const sv2ResponseTimeoutSeconds = '10'
+
+    knuthBinary = jdBinary
+    knuthArgs.push(
+      '--sv2.enabled',
+      'true',
+      '--sv2.bind',
+      sv2Bind,
+      '--sv2.port',
+      sv2Port,
+      '--sv2.noise',
+      'true',
+      '--sv2.static_key_file',
+      sv2StaticKeyFile,
+      '--sv2.authority_key_file',
+      sv2AuthorityKeyFile,
+      '--sv2.mining.enabled',
+      'true',
+      '--sv2.mining.address',
+      sv2MiningAddress,
+      '--sv2.jd.enabled',
+      'true',
+      '--sv2.jd.mining_address',
+      sv2PoolEndpoint,
+      '--sv2.jd.mining_authority_public_key',
+      sv2PoolAuthorityPublicKey,
+      '--sv2.jd.jds_address',
+      sv2PoolEndpoint,
+      '--sv2.jd.jds_authority_public_key',
+      sv2PoolAuthorityPublicKey,
+      '--sv2.jd.user_identity',
+      sv2UserIdentity,
+      '--sv2.jd.mode',
+      sv2Mode,
+      '--sv2.jd.response_timeout_seconds',
+      sv2ResponseTimeoutSeconds,
+    )
   }
 
   // kth tells chipnet from testnet4 (same network magic) only by
