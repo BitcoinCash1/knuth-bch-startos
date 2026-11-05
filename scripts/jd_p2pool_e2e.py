@@ -451,7 +451,7 @@ port = {API_PORT}
         "wait_for_chain_sync": False,
         "version_mask": "1fffffe0",
         "logging_level": "debug",
-        "donation": "unset, so the Bitcoin Cash default of 150 bps applies",
+        "donation": "unset, so the node default applies (read from its start-up log)",
         "donation_address": DONATION,
         "miner_address": None,
     }
@@ -684,22 +684,33 @@ def pays(outputs: list[dict], address: str) -> bool:
     )
 
 
+def node_donation() -> tuple[int, str] | None:
+    """The donation P2Pool logs at start: basis points and address."""
+    found = re.search(r"Donating (\d+) basis points of each block this node finds to (\S+?)\.",
+                      p2pool_log_text())
+    return (int(found.group(1)), found.group(2)) if found else None
+
+
 def pplns_verdict(block: dict, solo: str) -> dict:
     outputs = block["coinbase_outputs"]
+    logged = node_donation()
+    bps, donation_address = logged if logged else (0, DONATION)
     positive = [output for output in outputs if output["sats"] > 0]
     zero = [output for output in outputs if output["sats"] == 0]
     donation = [
         output for output in positive
-        if any(same_address(item, DONATION) for item in output["addresses"])
+        if any(same_address(item, donation_address) for item in output["addresses"])
     ]
     others = [
         output for output in positive
-        if not any(same_address(item, DONATION) for item in output["addresses"])
+        if not any(same_address(item, donation_address) for item in output["addresses"])
     ]
     total = sum(output["sats"] for output in positive)
-    expected = (total * 150) // 10000
+    expected = (total * bps) // 10000
     donation_sats = sum(output["sats"] for output in donation)
-    near = bool(donation) and abs(donation_sats - expected) <= 10_000
+    # The donation the node logs (a declared job's payout carries it too);
+    # none is required only when the node logs none.
+    near = (bps == 0 and not donation) or (bool(donation) and abs(donation_sats - expected) <= 10_000)
     solo_paid = pays(outputs, solo)
     block_sats = sorted(output["sats"] for output in positive)
     metrics_match = False
@@ -708,14 +719,15 @@ def pplns_verdict(block: dict, solo: str) -> dict:
         if snap_sats == block_sats and block_sats:
             metrics_match = True
             break
-    # The PPLNS split is P2Pool's own distribution, exactly. The donation is
-    # P2Pool policy that changes between builds (150 bps, 100 bps, or none for
-    # a declared job), so it is recorded but not required.
-    matched = metrics_match and not solo_paid and len(others) >= 1 and len(zero) >= 1
+    # The PPLNS split is P2Pool's own distribution, exactly, and it carries
+    # the donation the node logs.
+    matched = metrics_match and near and not solo_paid and len(others) >= 1 and len(zero) >= 1
     return {
         "donation_sats": donation_sats,
         "expected_donation_sats": expected,
-        "donation_near_150_bps": near,
+        "donation_bps_logged": bps,
+        "donation_address": donation_address,
+        "donation_as_logged": near,
         "pays_solo": solo_paid,
         "other_positive_outputs": len(others),
         "zero_value_outputs": len(zero),
