@@ -334,6 +334,16 @@ def wallet_address() -> str:
     return cli("getnewaddress")
 
 
+def bchn_relay_floor() -> list[str]:
+    # Row 25c: kth announces the spends it accepts, and BCHN A is its only peer.
+    # A floor above the spends' fee rate keeps them out of A's mempool, so A's
+    # next tip cannot confirm them. The fan-outs pay more and still get in.
+    # kth connects to its configured peer once, at start, so A stays online.
+    if EVIDENCE.get("row") != "25c":
+        return []
+    return [f"-minrelaytxfee={LARGE_RELAY_FLOOR_SATS_PER_KB / 100_000_000:.8f}"]
+
+
 def start_bchn() -> None:
     if shutil.which("bitcoind") is None:
         fail("missing bitcoind on PATH (the workflow fetches BCHN 29.2.0)")
@@ -343,7 +353,7 @@ def start_bchn() -> None:
             ["bitcoind", "-regtest", f"-datadir={BCHN_DIR}", "-daemon", "-server",
              f"-rpcuser={AUTH}", f"-rpcpassword={AUTH}", f"-rpcport={BCHN[1]}", f"-port={BCHN_P2P}",
              "-listen=1", "-txindex=1", "-fallbackfee=0.0001", "-allowunconnectedmining",
-             f"-zmqpubhashblock={ZMQ}"],
+             f"-zmqpubhashblock={ZMQ}", *bchn_relay_floor()],
             capture_output=True, text=True, timeout=30,
         )
     except subprocess.TimeoutExpired:
@@ -1104,6 +1114,11 @@ LARGE_FANOUT = 2_000
 LARGE_SPENDS = LARGE_FUNDING_BLOCKS * LARGE_FANOUT  # 100,000 > 65,535
 LARGE_FANOUT_SATS = 1_000_000
 LARGE_FEE_SATS = 1_000
+# Satoshis per 1,000 bytes. A spend pays 1,000 sats for 187 bytes (5,348/kB),
+# under the floor. A fan-out is about 64,100 bytes and pays
+# LARGE_FANOUT_FEE_SATS (about 15,600/kB), over it.
+LARGE_RELAY_FLOOR_SATS_PER_KB = 8_000
+LARGE_FANOUT_FEE_SATS = 1_000_000
 # One 90-byte OP_RETURN per spend makes each 187 bytes, so the spends total
 # 18,700,000 bytes: more than 2^24 - 1, within regtest's 32 MB floor.
 LARGE_PADDING = bytes(range(90))
@@ -1198,7 +1213,7 @@ def fill_large_mempool(funder: str) -> dict:
         block = json.loads(cli("getblock", block_hash, "2"))
         coinbase = block["tx"][0]
         value = sats(coinbase["vout"][0]["value"])
-        change = value - LARGE_FANOUT * LARGE_FANOUT_SATS - 100_000
+        change = value - LARGE_FANOUT * LARGE_FANOUT_SATS - LARGE_FANOUT_FEE_SATS
         if change < 0:
             fail(f"row 25c: coinbase {coinbase['txid']} pays {value} sats, too little for the fan-out")
         outs = [output(LARGE_FANOUT_SATS, script) for _ in range(LARGE_FANOUT)]
@@ -1226,6 +1241,10 @@ def fill_large_mempool(funder: str) -> dict:
     total = sum(len(raw) // 2 for raw in raws)
     progress(f"row 25c: sending {len(raws)} spends, {total} bytes, to kth")
     taken = send_to_kth(raws)
+    relayed = json.loads(cli("getmempoolinfo"))
+    if int(relayed.get("size", 0)) != 0:
+        fail(f"row 25c: BCHN A took {relayed.get('size')} of the spends kth relayed; "
+             "the relay floor did not keep them out")
     info, error = call(KTH, "getmempoolinfo")
     if error is not None or not info or int(info.get("size", 0)) < LARGE_SPENDS:
         fail(f"row 25c: kth mempool after the spends: {info!r} {error!r}")
