@@ -9,6 +9,11 @@ Row 25b (KTH_JD_ROW=25b, branch test/sv2-jd-payout-outputs) negotiates
 extension 0x5052. P2Pool accepts the custom jobs, credits a share, and a
 block on BCHN pays the PPLNS split.
 
+Row 25c (KTH_JD_ROW=25c, branch test/sv2-jd-large-templates) is row 25b with
+BCH large templates (0x4C54) and a mempool that standard Job Declaration
+cannot carry: more than 65,535 transactions and more than one U24 frame of
+transaction data. The PPLNS block must hold that whole mempool.
+
 Standard library only. Writes <out>/jd-p2pool-e2e.json.
 """
 
@@ -653,9 +658,10 @@ def same_address(left: str, right: str) -> bool:
 
 def describe_block(height: int) -> dict:
     # parse_float keeps satoshi amounts exact. json's default float does not.
-    raw = json.loads(cli("getblock", cli("getblockhash", str(height)), "2"), parse_float=Decimal)
+    raw = json.loads(cli("getblock", cli("getblockhash", str(height)), "1"))
+    coinbase = json.loads(cli("getrawtransaction", raw["tx"][0], "1"), parse_float=Decimal)
     outputs = []
-    for vout in raw["tx"][0]["vout"]:
+    for vout in coinbase["vout"]:
         script = vout["scriptPubKey"]
         addresses = list(script.get("addresses") or [])
         if script.get("address"):
@@ -953,6 +959,28 @@ def row25b(binary: str, pubkey: str, solo: str) -> None:
     if caught is None:
         fail("kth RPC stopped answering after the hashrate probe")
     _, _ = pull_blocks(before_probe, caught, "probe")
+    if EVIDENCE["row"] == "25c":
+        probe_end = caught
+        # After the probe, so the probe's blocks cannot take the mempool.
+        accepted_before = kth_log_text().count("Pool accepted local template as job")
+        EVIDENCE["large_mempool"] = fill_large_mempool(EVIDENCE["addresses"]["funder"])
+        # Declarations follow tips. One more tip makes kth declare the large template.
+        bitcoin_cli(BCHN_DIR, BCHN[1], ["generatetoaddress", "1", EVIDENCE["addresses"]["funder"]],
+                    timeout=120)
+        deadline = time.monotonic() + 600
+        while kth_log_text().count("Pool accepted local template as job") <= accepted_before:
+            ensure_kth()
+            ensure_p2pool()
+            line = fallback_line(kth_log_text())
+            if time.monotonic() > deadline:
+                fail("row 25c: P2Pool did not accept the large template within 600s. "
+                     + (f"fallback: {line}" if line else ""))
+            time.sleep(2)
+        progress("row 25c: P2Pool accepted the large template")
+        caught = kth_height()
+        if caught is None:
+            fail("kth RPC stopped answering after the large template")
+        _, _ = pull_blocks(probe_end, caught, "setup")
     before = kth_height()
     if before is None:
         fail("kth RPC stopped answering after the hashrate probe")
@@ -1000,7 +1028,10 @@ def row25b(binary: str, pubkey: str, solo: str) -> None:
                 "metrics_sats_matched": matched["pplns"]["metrics_sats_matched"],
                 "later_fallback": bool(fallback_line(kth_log_text())),
             }
-            progress(f"row 25b: share credited and block {matched['height']} pays the PPLNS split")
+            if EVIDENCE["row"] == "25c":
+                EVIDENCE["assertions"]["large_template"] = require_large_block(matched["height"])
+            progress(f"row {EVIDENCE['row']}: share credited and block {matched['height']} "
+                     "pays the PPLNS split")
             return
         time.sleep(2)
     line = fallback_line(kth_log_text())
@@ -1011,6 +1042,142 @@ def row25b(binary: str, pubkey: str, solo: str) -> None:
         + (f"fallback: {line}. " if line else "")
         + "blocks:\n" + json.dumps(EVIDENCE["blocks"], indent=2)[:3000]
     )
+
+
+# TEST ONLY: row 25c's mempool. Every output is P2SH(OP_TRUE), which regtest
+# relays as nonstandard and anyone can spend with the scriptSig 01 51 (a push
+# of the redeem script OP_1), so the harness signs nothing.
+LARGE_FUNDING_BLOCKS = 50
+LARGE_FANOUT = 2_000
+LARGE_SPENDS = LARGE_FUNDING_BLOCKS * LARGE_FANOUT  # 100,000 > 65,535
+LARGE_FANOUT_SATS = 1_000_000
+LARGE_FEE_SATS = 1_000
+# One 90-byte OP_RETURN per spend makes each about 186 bytes, so the spends
+# total about 18.6 MB: more than 2^24 - 1, within regtest's 32 MB floor.
+LARGE_PADDING = bytes(range(90))
+U24_MAX = (1 << 24) - 1
+SEQ0_64K_MAX = 65_535
+
+
+def varint(value: int) -> bytes:
+    if value < 0xFD:
+        return value.to_bytes(1, "little")
+    if value <= 0xFFFF:
+        return b"\xfd" + value.to_bytes(2, "little")
+    return b"\xfe" + value.to_bytes(4, "little")
+
+
+def output(sats: int, script: bytes) -> bytes:
+    return sats.to_bytes(8, "little") + varint(len(script)) + script
+
+
+def spend_true(txid: str, vout: int, outputs: list[bytes]) -> str:
+    """Version 2, one P2SH(OP_TRUE) input, the given outputs, lock time 0."""
+    script_sig = bytes([0x01, 0x51])
+    raw = (2).to_bytes(4, "little") + varint(1)
+    raw += bytes.fromhex(txid)[::-1] + vout.to_bytes(4, "little")
+    raw += varint(len(script_sig)) + script_sig + (0xFFFFFFFF).to_bytes(4, "little")
+    raw += varint(len(outputs)) + b"".join(outputs) + (0).to_bytes(4, "little")
+    return raw.hex()
+
+
+def sats(value) -> int:
+    return int((Decimal(str(value)) * 100_000_000).to_integral_value(ROUND_HALF_UP))
+
+
+def send_to_kth(raws: list[str]) -> int:
+    """sendrawtransaction to kth in JSON-RPC batches; returns how many it took."""
+    global _next_id
+    taken = 0
+    for start in range(0, len(raws), 500):
+        chunk = raws[start:start + 500]
+        body = []
+        for raw in chunk:
+            _next_id += 1
+            body.append({"id": _next_id, "method": "sendrawtransaction", "params": [raw]})
+        reply = post(KTH, json.dumps(body).encode(), timeout=300)
+        answers = reply["json"]
+        if not isinstance(answers, list):
+            # No batch support: one call per transaction.
+            for raw in chunk:
+                result, error = call(KTH, "sendrawtransaction", raw, timeout=60)
+                if error is not None:
+                    fail(f"row 25c: kth refused a spend: {error}")
+                taken += 1
+            continue
+        for answer in answers:
+            if not isinstance(answer, dict) or answer.get("error") is not None:
+                fail(f"row 25c: kth refused a spend in a batch: {str(answer)[:300]}")
+            taken += 1
+        if start % 20_000 == 0:
+            progress(f"row 25c: kth took {taken} of {len(raws)} spends")
+    return taken
+
+
+def fill_large_mempool(funder: str) -> dict:
+    """Leave kth with a mempool of LARGE_SPENDS spends; BCHN does not see them."""
+    decoded = json.loads(cli("decodescript", "51"))
+    address = decoded["p2sh"]
+    script = bytes.fromhex(json.loads(cli("validateaddress", address))["scriptPubKey"])
+    progress(f"row 25c: mining {LARGE_FUNDING_BLOCKS} coinbases to P2SH(OP_TRUE) {address}")
+    hashes = json.loads(cli("generatetoaddress", str(LARGE_FUNDING_BLOCKS), address))
+    bitcoin_cli(BCHN_DIR, BCHN[1], ["generatetoaddress", "100", funder], timeout=300)
+    fanouts = []
+    for block_hash in hashes:
+        block = json.loads(cli("getblock", block_hash, "2"))
+        coinbase = block["tx"][0]
+        value = sats(coinbase["vout"][0]["value"])
+        change = value - LARGE_FANOUT * LARGE_FANOUT_SATS - 100_000
+        if change < 0:
+            fail(f"row 25c: coinbase {coinbase['txid']} pays {value} sats, too little for the fan-out")
+        outs = [output(LARGE_FANOUT_SATS, script) for _ in range(LARGE_FANOUT)]
+        if change > 0:
+            outs.append(output(change, script))
+        txid = cli("sendrawtransaction", spend_true(coinbase["txid"], 0, outs))
+        fanouts.append(txid)
+    # Confirm the fan-outs so every spend has a confirmed parent.
+    bitcoin_cli(BCHN_DIR, BCHN[1], ["generatetoaddress", "1", funder], timeout=300)
+    target = int(cli("getblockcount"))
+    deadline = time.monotonic() + 300
+    while (kth_height() or 0) < target:
+        ensure_kth()
+        if time.monotonic() > deadline:
+            fail(f"row 25c: kth did not reach height {target} after the fan-out")
+        time.sleep(1)
+    padding = bytes([0x6A, 0x4C, len(LARGE_PADDING)]) + LARGE_PADDING
+    raws = []
+    for txid in fanouts:
+        for vout in range(LARGE_FANOUT):
+            raws.append(spend_true(txid, vout, [
+                output(LARGE_FANOUT_SATS - LARGE_FEE_SATS, script),
+                output(0, padding),
+            ]))
+    total = sum(len(raw) // 2 for raw in raws)
+    progress(f"row 25c: sending {len(raws)} spends, {total} bytes, to kth")
+    taken = send_to_kth(raws)
+    info, error = call(KTH, "getmempoolinfo")
+    if error is not None or not info or int(info.get("size", 0)) < LARGE_SPENDS:
+        fail(f"row 25c: kth mempool after the spends: {info!r} {error!r}")
+    if total <= U24_MAX or len(raws) <= SEQ0_64K_MAX:
+        fail(f"row 25c: the spends are not beyond the standard limits ({len(raws)} txs, {total} bytes)")
+    return {
+        "address": address,
+        "funding_blocks": LARGE_FUNDING_BLOCKS,
+        "fanouts": len(fanouts),
+        "spends": len(raws),
+        "spend_bytes": total,
+        "kth_accepted": taken,
+        "kth_mempool": info,
+    }
+
+
+def require_large_block(height: int) -> dict:
+    block = json.loads(cli("getblock", cli("getblockhash", str(height)), "1"))
+    count, size = int(block["nTx"]), int(block["size"])
+    if count <= SEQ0_64K_MAX + 1 or size <= U24_MAX:
+        fail(f"row 25c: PPLNS block {height} has {count} transactions and {size} bytes; "
+             "the large template was not mined")
+    return {"height": height, "transactions": count, "bytes": size}
 
 
 def record_p2pool_api() -> None:
@@ -1137,8 +1304,8 @@ def run() -> None:
         fail("missing docker")
     image = require_env("KTH_IMAGE")
     row = require_env("KTH_JD_ROW")
-    if row not in ("25", "25b"):
-        fail(f"KTH_JD_ROW must be 25 or 25b, got {row!r}")
+    if row not in ("25", "25b", "25c"):
+        fail(f"KTH_JD_ROW must be 25, 25b or 25c, got {row!r}")
     EVIDENCE["row"] = row
     src = Path(require_env("KTH_SRC")).resolve()
     if not src.is_dir():

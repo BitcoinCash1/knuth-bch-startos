@@ -22,9 +22,16 @@ jobs:
           - name: sv2-jd-client
             branch: test/sv2-jd-client-announce
             row: "25"
+            p2pool: test/kth-jd-e2e
           - name: sv2-jd-payout-outputs
             branch: test/sv2-jd-payout-outputs-announce
             row: "25b"
+            p2pool: test/kth-jd-e2e
+          # BCH large templates need P2Pool's side of 0x4C54 (P2Pool PR #63).
+          - name: sv2-jd-large-templates
+            branch: test/sv2-jd-large-templates-announce
+            row: "25c"
+            p2pool: feat/jd-large-templates
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -110,9 +117,9 @@ jobs:
       - name: Build SRI's mining_device (sv2-apps, pinned)
         run: cargo build --release --locked --manifest-path sv2-apps/Cargo.toml -p integration_tests_sv2 --bin mining_device
         shell: bash
-      - name: Fetch BCH P2Pool feat/rust-only-tooling
+      - name: Fetch BCH P2Pool ${{ matrix.p2pool }}
         run: |
-          git clone --depth 1 --branch test/kth-jd-e2e https://github.com/CyberAshven/BitcoinCash-p2poolv2.git p2pool
+          git clone --depth 1 --branch "${{ matrix.p2pool }}" https://github.com/CyberAshven/BitcoinCash-p2poolv2.git p2pool
           git -C p2pool log -1 --format='%H %s' | tee p2pool-commit.txt
         shell: bash
       - name: Build BCH P2Pool
