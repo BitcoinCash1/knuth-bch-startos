@@ -176,17 +176,31 @@ jobs:
           echo "kth_network_test exit $rc" | tee -a test-status.txt
         shell: bash
       - name: Restore the package image
+        id: image
         uses: actions/cache/restore@v6
         with:
           path: /tmp/knuth-e2e.tar
           key: knuth-e2e-${{ hashFiles('Dockerfile') }}
       - name: Put this kth into the package image
         run: |
-          docker load -i /tmp/knuth-e2e.tar
           KTH=$(find kth-src/build -name kth -type f -perm -u+x -path '*node-exe*' | head -1)
           echo "node binary: $KTH"
           cp "$KTH" kth-built
-          printf 'FROM knuth-e2e\nCOPY kth-built /usr/local/bin/kth\n' > Dockerfile.built
+          if [ "${{ steps.image.outputs.cache-hit }}" = "true" ]; then
+            docker load -i /tmp/knuth-e2e.tar
+            printf 'FROM knuth-e2e\nCOPY kth-built /usr/local/bin/kth\n' > Dockerfile.built
+          else
+            # The kept image was evicted (each row's compiler cache is about 1 GB).
+            # Build the package's own runtime stage around this kth instead. That
+            # stage takes only the GCC 15 C++ runtime from the build stage, and
+            # the toolchain image already holds it, so nothing compiles twice.
+            echo "package image not cached; building its runtime stage"
+            { echo "FROM --platform=linux/amd64 $IMAGE AS kth-build"
+              awk '/^# ── Runtime/,0' Dockerfile \
+                | sed 's#^COPY --from=kth-build /deploy/direct_deploy/kth/bin/kth /usr/local/bin/kth$#COPY kth-built /usr/local/bin/kth#'
+            } > Dockerfile.built
+            grep -q '^COPY kth-built /usr/local/bin/kth$' Dockerfile.built
+          fi
           docker build --platform linux/amd64 -f Dockerfile.built -t knuth-e2e .
         shell: bash
       - name: Fetch BCHN 29.2.0
