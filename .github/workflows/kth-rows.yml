@@ -27,6 +27,11 @@ jobs:
             sv2: true
             noise: true
             sv2_mining: true
+          - name: sv2-jd-failover
+            branch: test/sv2-jd-failover
+            sv2: true
+            noise: true
+            sv2_mining: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
