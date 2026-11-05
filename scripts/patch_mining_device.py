@@ -10,8 +10,13 @@ keeps hashing.
 kth accepts ntime up to two hours ahead (work.hpp line 38). P2Pool accepts
 ntime up to two hours ahead (mining.rs lines 724-726).
 
-The matched snippet is copied from the pinned sv2-apps tree. It must occur
-once; a changed upstream fails here instead of mining the old loop.
+It also replaces the todo!() in handle_set_extranonce_prefix, which panics
+the device when kth hands it the pool's extranonce prefix after solo work.
+On a standard channel every NewMiningJob carries its merkle root, so the
+device needs nothing from the message; it logs it and keeps mining.
+
+The matched snippets are copied from the pinned sv2-apps tree. Each must
+occur once; a changed upstream fails here instead of mining the old code.
 """
 
 from __future__ import annotations
@@ -108,6 +113,19 @@ REPLACEMENT = """\
 """
 
 
+# TEST ONLY. The pinned handler panics on a message the spec allows on
+# standard channels (sv2-spec 05, SetExtranoncePrefix).
+EXTRANONCE_ORIGINAL = """    fn handle_set_extranonce_prefix(&mut self, _: SetExtranoncePrefixOwned) {
+        todo!()
+    }
+"""
+
+EXTRANONCE_REPLACEMENT = """    fn handle_set_extranonce_prefix(&mut self, _: SetExtranoncePrefixOwned) {
+        info!("Received SetExtranoncePrefix");
+    }
+"""
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit(
@@ -121,7 +139,14 @@ def main() -> None:
         "TEST ONLY mining_device patch: expected the mine() nonce loop once "
         f"in {path}, found {found}. The pinned sv2-apps source changed."
     )
-    path.write_bytes(data.replace(original, REPLACEMENT.encode("utf-8"), 1))
+    data = data.replace(original, REPLACEMENT.encode("utf-8"), 1)
+    extranonce = EXTRANONCE_ORIGINAL.encode("utf-8")
+    found = data.count(extranonce)
+    assert found == 1, (
+        "TEST ONLY mining_device patch: expected handle_set_extranonce_prefix's "
+        f"todo!() once in {path}, found {found}. The pinned sv2-apps source changed."
+    )
+    path.write_bytes(data.replace(extranonce, EXTRANONCE_REPLACEMENT.encode("utf-8"), 1))
 
 
 if __name__ == "__main__":

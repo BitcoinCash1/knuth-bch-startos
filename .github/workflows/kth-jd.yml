@@ -110,8 +110,10 @@ jobs:
       # TEST ONLY. SRI's mining_device searches one 2^32 nonce space per job:
       # mine() never rolls ntime or version. kth accepts ntime up to two hours
       # ahead (work.hpp line 38). P2Pool accepts ntime up to two hours ahead
-      # (mining.rs lines 724-726). Patch the pinned tree, then build it.
-      - name: Patch mining_device ntime roll (test only)
+      # (mining.rs lines 724-726). Its handle_set_extranonce_prefix is a
+      # todo!() that panics when kth hands it the pool's extranonce prefix.
+      # Patch the pinned tree, then build it.
+      - name: Patch mining_device ntime roll and extranonce prefix (test only)
         run: python3 scripts/patch_mining_device.py sv2-apps/integration-tests/lib/mining_device/mod.rs
         shell: bash
       - name: Build SRI's mining_device (sv2-apps, pinned)
