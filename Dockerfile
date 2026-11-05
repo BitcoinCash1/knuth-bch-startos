@@ -81,7 +81,7 @@ RUN conan profile detect --force \
 # TEST ONLY, Job Declaration client (k-nuth/kth#832, #834) on chipnet against the BCH P2Pool pool.
 FROM --platform=linux/amd64 ${TOOLCHAIN} AS kth-jd-build
 
-ARG JD_COMMIT=8d3c72bc
+ARG JD_COMMIT=a2c400bd
 ARG CURRENCY=BCH
 
 RUN pip install --no-cache-dir --upgrade "conan>=2.25,<3" "kthbuild>=4,<5"

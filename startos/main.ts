@@ -72,7 +72,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
     const sv2AuthorityKeyFile = `${dataDir}/sv2-authority.key`
     const sv2MiningAddress =
       'bchtest:qrzq5f9ltv70u4su7d40agd4nlnp8qlgqcma6x2tvp'
-    const sv2PoolEndpoint = '100.118.176.3:3336'
+    const sv2PoolEndpoint = '192.168.0.160:3336'
     const sv2PoolAuthorityPublicKey =
       '9brH2jNuXdHcpaGAHaWmDJno8Zhqbi41u63sSeboEmNuPwpCw8c'
     const sv2UserIdentity =
