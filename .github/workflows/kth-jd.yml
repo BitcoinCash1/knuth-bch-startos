@@ -1,6 +1,8 @@
 name: kth SV2 job declaration against BCH P2Pool
 
-# Row 25 (test/sv2-jd-client) and row 25b (test/sv2-jd-payout-outputs):
+# Row 25 (test/sv2-jd-client) and row 25b (test/sv2-jd-payout-outputs), each
+# with node/announce-blocks merged in (the *-announce branches) so BCHN hears
+# the blocks kth mines; kth master does not announce its own blocks yet:
 # build that kth with kth's toolchain, build BCH P2Pool, and mine on BCHN
 # regtest through Job Declaration. Runs when this file changes, or by hand.
 on:
@@ -18,10 +20,10 @@ jobs:
       matrix:
         include:
           - name: sv2-jd-client
-            branch: test/sv2-jd-client
+            branch: test/sv2-jd-client-announce
             row: "25"
           - name: sv2-jd-payout-outputs
-            branch: test/sv2-jd-payout-outputs
+            branch: test/sv2-jd-payout-outputs-announce
             row: "25b"
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
