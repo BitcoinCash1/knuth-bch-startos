@@ -962,11 +962,19 @@ def row25b(binary: str, pubkey: str, solo: str) -> None:
     if EVIDENCE["row"] == "25c":
         probe_end = caught
         # After the probe, so the probe's blocks cannot take the mempool.
-        accepted_before = kth_log_text().count("Pool accepted local template as job")
         EVIDENCE["large_mempool"] = fill_large_mempool(EVIDENCE["addresses"]["funder"])
-        # Declarations follow tips. One more tip makes kth declare the large template.
-        bitcoin_cli(BCHN_DIR, BCHN[1], ["generatetoaddress", "1", EVIDENCE["addresses"]["funder"]],
-                    timeout=120)
+        # Declarations follow tips. One more tip makes kth declare the large
+        # template. Count acceptances only from here: the setup blocks above
+        # each produced one for a template without the spends.
+        accepted_before = kth_log_text().count("Pool accepted local template as job")
+        tip = json.loads(bitcoin_cli(BCHN_DIR, BCHN[1],
+            ["generatetoaddress", "1", EVIDENCE["addresses"]["funder"]], timeout=120).stdout)[0]
+        tip_block = json.loads(cli("getblock", tip, "1"))
+        if int(tip_block["nTx"]) != 1:
+            # kth relayed the spends to BCHN, which mined them into this tip.
+            fail(f"row 25c: BCHN's extra tip {tip} holds {tip_block['nTx']} transactions; "
+                 "the spends must stay in kth's mempool until the PPLNS block")
+        EVIDENCE["large_mempool"]["declaration_tip"] = tip
         deadline = time.monotonic() + 600
         while kth_log_text().count("Pool accepted local template as job") <= accepted_before:
             ensure_kth()
@@ -1017,7 +1025,9 @@ def row25b(binary: str, pubkey: str, solo: str) -> None:
         for block in blocks:
             verdict = pplns_verdict(block, solo)
             block["pplns"] = verdict
-            if verdict["match"]:
+            # The first PPLNS block is the one that can carry row 25c's mempool;
+            # later ones on that chain find it empty.
+            if verdict["match"] and matched is None:
                 matched = block
         if shares > 0 and matched is not None:
             EVIDENCE["assertions"] = {
@@ -1052,8 +1062,8 @@ LARGE_FANOUT = 2_000
 LARGE_SPENDS = LARGE_FUNDING_BLOCKS * LARGE_FANOUT  # 100,000 > 65,535
 LARGE_FANOUT_SATS = 1_000_000
 LARGE_FEE_SATS = 1_000
-# One 90-byte OP_RETURN per spend makes each about 186 bytes, so the spends
-# total about 18.6 MB: more than 2^24 - 1, within regtest's 32 MB floor.
+# One 90-byte OP_RETURN per spend makes each 187 bytes, so the spends total
+# 18,700,000 bytes: more than 2^24 - 1, within regtest's 32 MB floor.
 LARGE_PADDING = bytes(range(90))
 U24_MAX = (1 << 24) - 1
 SEQ0_64K_MAX = 65_535
@@ -1096,7 +1106,12 @@ def send_to_kth(raws: list[str]) -> int:
             _next_id += 1
             body.append({"id": _next_id, "method": "sendrawtransaction", "params": [raw]})
         reply = post(KTH, json.dumps(body).encode(), timeout=300)
+        if reply["status"] is None:
+            # kth may have applied the batch; resending would read as refusals.
+            fail(f"row 25c: the batch request to kth was lost: {reply.get('transport')}")
         answers = reply["json"]
+        if isinstance(answers, list) and len(answers) != len(chunk):
+            fail(f"row 25c: kth answered {len(answers)} of a {len(chunk)}-transaction batch")
         if not isinstance(answers, list):
             # No batch support: one call per transaction.
             for raw in chunk:
