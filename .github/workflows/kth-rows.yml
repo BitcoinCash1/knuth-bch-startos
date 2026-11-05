@@ -22,40 +22,38 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Today's master merged into the SV2 stack (#804, #807, #817, #832-#835).
-          - name: sv2-template-flow-master
-            branch: test/sv2-template-flow-master
-            sv2: true
+        # Today's master merged into #815, #795, #808, #809 and #805; the #803 coverage;
+        # and the proof-of-work ceiling and reward fixes off master.
+          - name: network-race-free-master
+            branch: test/network-race-free-master
+            network: true
+          - name: bch-size-only-fee-master
+            branch: test/bch-size-only-fee-master
             blockchain: true
-          - name: sv2-noise-master
-            branch: test/sv2-noise-master
-            sv2: true
-            noise: true
-          - name: sv2-mining-channels-master
-            branch: test/sv2-mining-channels-master
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: sv2-jd-client-master
-            branch: test/sv2-jd-client-master
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: sv2-jd-failover-master
-            branch: test/sv2-jd-failover-master
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: sv2-jd-payout-outputs-master
-            branch: test/sv2-jd-payout-outputs-master
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: sv2-jd-large-templates-master
-            branch: test/sv2-jd-large-templates-master
-            sv2: true
-            noise: true
-            sv2_mining: true
+          - name: i2p-sam-master
+            branch: test/i2p-sam-master
+            i2p: true
+            proxy: true
+            network: true
+          - name: serve-headers-master
+            branch: test/serve-headers-master
+            serve: true
+          - name: shv-mmr-master
+            branch: test/shv-mmr-master
+            shv: true
+            blockchain: true
+          - name: socks5-proxy-cover
+            branch: test/socks5-proxy-cover
+            proxy: true
+            network: true
+          - name: pow-limit-per-call
+            branch: test/pow-limit-per-call
+            domain: true
+            capi: true
+          - name: reward-retarget
+            branch: test/reward-retarget
+            domain: true
+            capi: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -85,6 +83,7 @@ jobs:
         run: |
           TARGETS="kth_node_test node-exe"
           if [ "${{ matrix.domain }}" = "true" ]; then TARGETS="$TARGETS kth_domain_test"; fi
+          if [ "${{ matrix.capi }}" = "true" ]; then TARGETS="$TARGETS kth_capi_test"; fi
           if [ "${{ matrix.blockchain }}" = "true" ]; then TARGETS="$TARGETS kth_blockchain_test"; fi
           if [ "${{ matrix.network }}" = "true" ]; then TARGETS="$TARGETS kth_network_test"; fi
           if [ "${{ matrix.infrastructure }}" = "true" ]; then TARGETS="$TARGETS kth_infrastructure_test"; fi
@@ -139,6 +138,18 @@ jobs:
           rc=$?
           tail -n 40 domain-tests.log
           echo "kth_domain_test exit $rc" | tee -a test-status.txt
+        shell: bash
+      - name: Run kth's C API test suite
+        if: matrix.capi
+        run: |
+          TEST=$(find kth-src/build -name kth_capi_test -type f -perm -u+x | head -1)
+          echo "test binary: $TEST"
+          set +e
+          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w "/src/$(dirname "${TEST#kth-src/}")" "$IMAGE" \
+            bash -c "timeout --kill-after=30 1800 ./kth_capi_test --reporter compact" > capi-tests.log 2>&1
+          rc=$?
+          tail -n 40 capi-tests.log
+          echo "kth_capi_test exit $rc" | tee -a test-status.txt
         shell: bash
       - name: Run kth's blockchain test suite
         if: matrix.blockchain
@@ -247,6 +258,7 @@ jobs:
             test-status.txt
             node-tests.log
             domain-tests.log
+            capi-tests.log
             blockchain-tests.log
             network-tests.log
             infrastructure-tests.log
