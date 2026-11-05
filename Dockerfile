@@ -118,12 +118,15 @@ RUN apt-get update && \
 
 # The binary is compiled with GCC 15; ship its matching C++ runtime so the image
 # does not depend on the base distro's older libstdc++ / libgcc ABI.
-COPY --from=kth-build /usr/local/lib64/libstdc++.so.6* /opt/kth/lib/
-COPY --from=kth-build /usr/local/lib64/libgcc_s.so.1*  /opt/kth/lib/
+# TEST ONLY: this package runs kth-jd on chipnet, so it compiles kth once.
+# The released node and the tempnet binary are kth-jd here, which leaves the
+# kth-build and kth-tempnet-build stages unused and skipped.
+COPY --from=kth-jd-build /usr/local/lib64/libstdc++.so.6* /opt/kth/lib/
+COPY --from=kth-jd-build /usr/local/lib64/libgcc_s.so.1*  /opt/kth/lib/
 RUN echo /opt/kth/lib > /etc/ld.so.conf.d/kth.conf && ldconfig
 
-COPY --from=kth-build /deploy/direct_deploy/kth/bin/kth /usr/local/bin/kth
-COPY --from=kth-tempnet-build /out/kth-tempnet /usr/local/bin/kth-tempnet
+COPY --from=kth-jd-build /out/kth-jd /usr/local/bin/kth
+COPY --from=kth-jd-build /out/kth-jd /usr/local/bin/kth-tempnet
 COPY --from=kth-jd-build /out/kth-jd /usr/local/bin/kth-jd
 
 WORKDIR /data

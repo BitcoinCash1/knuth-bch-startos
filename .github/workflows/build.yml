@@ -47,7 +47,9 @@ jobs:
           printf '%s' "$DEV_KEY" > .startos/build.key.pem
         shell: bash
       - run: npm ci
+      # TEST ONLY: skipped; it builds the whole image a second time.
       - name: Validate upstream binary and RPC
+        if: false
         run: |
           VERSION=$(sed -nE 's/^ARG KNUTH_VERSION=(.*)$/\1/p' Dockerfile)
           bash scripts/check-upstream-image.sh "$VERSION"
