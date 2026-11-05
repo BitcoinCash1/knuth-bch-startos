@@ -112,7 +112,7 @@ jobs:
         shell: bash
       - name: Fetch BCH P2Pool feat/rust-only-tooling
         run: |
-          git clone --depth 1 --branch feat/rust-only-tooling https://github.com/CyberAshven/BitcoinCash-p2poolv2.git p2pool
+          git clone --depth 1 --branch test/kth-jd-e2e https://github.com/CyberAshven/BitcoinCash-p2poolv2.git p2pool
           git -C p2pool log -1 --format='%H %s' | tee p2pool-commit.txt
         shell: bash
       - name: Build BCH P2Pool

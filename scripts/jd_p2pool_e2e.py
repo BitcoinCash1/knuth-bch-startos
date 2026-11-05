@@ -318,14 +318,11 @@ def start_bchn() -> None:
     if shutil.which("bitcoind") is None:
         fail("missing bitcoind on PATH (the workflow fetches BCHN 29.2.0)")
     BCHN_DIR.mkdir(parents=True, exist_ok=True)
-    # Test bandage: P2Pool's RPC client reuses a connection BCHN has already
-    # closed. The proper fix is in P2Pool.
     try:
         started = subprocess.run(
             ["bitcoind", "-regtest", f"-datadir={BCHN_DIR}", "-daemon", "-server",
              f"-rpcuser={AUTH}", f"-rpcpassword={AUTH}", f"-rpcport={BCHN[1]}", f"-port={BCHN_P2P}",
              "-listen=1", "-txindex=1", "-fallbackfee=0.0001", "-allowunconnectedmining",
-             "-rpcservertimeout=120",
              f"-zmqpubhashblock={ZMQ}"],
             capture_output=True, text=True, timeout=30,
         )
@@ -340,13 +337,11 @@ def start_bchn_b() -> None:
     # Quickstart section 1: getblocktemplate refuses until the node has a peer.
     # docs/bch-job-declaration.md runs the second node with the wallet disabled.
     BCHN_B_DIR.mkdir(parents=True, exist_ok=True)
-    # Test bandage: P2Pool's RPC client reuses a connection BCHN has already
-    # closed. The proper fix is in P2Pool.
     try:
         started = subprocess.run(
             ["bitcoind", "-regtest", f"-datadir={BCHN_B_DIR}", "-daemon", "-server",
              f"-rpcuser={AUTH}", f"-rpcpassword={AUTH}", f"-rpcport={BCHN_B[1]}", f"-port={BCHN_B_P2P}",
-             "-listen=0", "-dnsseed=0", "-disablewallet=1", "-rpcservertimeout=120",
+             "-listen=0", "-dnsseed=0", "-disablewallet=1",
              f"-connect=127.0.0.1:{BCHN_P2P}"],
             capture_output=True, text=True, timeout=30,
         )
