@@ -524,6 +524,9 @@ def start_kth(image: str, src: Path, binary: str, solo: str, identity: str) -> N
         "--sv2.jd.mode", "full-template",
         "--sv2.jd.response_timeout_seconds", "10",
     ]
+    # The toolchain image has no /data of its own; create the database
+    # directory on the mounted host side so --init_run can open it.
+    (DATA / "e2e").mkdir(parents=True, exist_ok=True)
     EVIDENCE["kth_argv"] = argv
     try:
         subprocess.run(["docker", "rm", "-f", CONTAINER], capture_output=True, timeout=30)
