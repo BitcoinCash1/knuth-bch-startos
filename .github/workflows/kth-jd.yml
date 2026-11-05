@@ -94,12 +94,21 @@ jobs:
           tar xzf "$TARBALL"
           echo "$PWD/bitcoin-cash-node-29.2.0/bin" >> "$GITHUB_PATH"
         shell: bash
-      - name: Build SRI's mining_device (sv2-apps, pinned)
+      - name: Fetch SRI's mining_device (sv2-apps, pinned)
         run: |
           sudo apt-get install -y -qq capnproto libcapnp-dev >/dev/null
           git clone --quiet https://github.com/stratum-mining/sv2-apps.git sv2-apps
           git -C sv2-apps checkout --quiet ffad32eb11128b8e3cf9ff20604480c11e5cbfab
-          cargo build --release --locked --manifest-path sv2-apps/Cargo.toml -p integration_tests_sv2 --bin mining_device
+        shell: bash
+      # TEST ONLY. SRI's mining_device searches one 2^32 nonce space per job:
+      # mine() never rolls ntime or version. kth accepts ntime up to two hours
+      # ahead (work.hpp line 38). P2Pool accepts ntime up to two hours ahead
+      # (mining.rs lines 724-726). Patch the pinned tree, then build it.
+      - name: Patch mining_device ntime roll (test only)
+        run: python3 scripts/patch_mining_device.py sv2-apps/integration-tests/lib/mining_device/mod.rs
+        shell: bash
+      - name: Build SRI's mining_device (sv2-apps, pinned)
+        run: cargo build --release --locked --manifest-path sv2-apps/Cargo.toml -p integration_tests_sv2 --bin mining_device
         shell: bash
       - name: Fetch BCH P2Pool feat/rust-only-tooling
         run: |
