@@ -22,7 +22,54 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Today's master carried up the #809, #795 and #814 stacks (#814, #816, #796, #797); #806's two small fixes.
+        # Plain master as the baseline, and the master merges after their API ports.
+          - name: master-baseline
+            branch: test/master-baseline
+            blockchain: true
+            network: true
+          - name: sv2-mining-channels-master
+            branch: test/sv2-mining-channels-master
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: sv2-jd-client-master
+            branch: test/sv2-jd-client-master
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: sv2-jd-failover-master
+            branch: test/sv2-jd-failover-master
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: sv2-jd-payout-outputs-master
+            branch: test/sv2-jd-payout-outputs-master
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: sv2-jd-large-templates-master
+            branch: test/sv2-jd-large-templates-master
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: bch-size-only-fee-master
+            branch: test/bch-size-only-fee-master
+            blockchain: true
+          - name: receive-transactions-master
+            branch: test/receive-transactions-master
+            blockchain: true
+          - name: announce-transactions-master
+            branch: test/announce-transactions-master
+            blockchain: true
+          - name: i2p-sam-master
+            branch: test/i2p-sam-master
+            i2p: true
+            proxy: true
+            network: true
+          - name: shv-mmr-master
+            branch: test/shv-mmr-master
+            shv: true
+            blockchain: true
           - name: announce-blocks-master
             branch: test/announce-blocks-master
             serve: true
@@ -33,15 +80,6 @@ jobs:
             announce: true
             compact: true
             blockchain: true
-          - name: receive-transactions-master
-            branch: test/receive-transactions-master
-            blockchain: true
-          - name: announce-transactions-master
-            branch: test/announce-transactions-master
-            blockchain: true
-          - name: respawn-idle-workers-nits
-            branch: test/respawn-idle-workers-nits
-            stall: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
