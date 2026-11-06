@@ -37,6 +37,14 @@ jobs:
             blockchain: true
             network: true
             shv: true
+        # #773 row 29: uptime (rpc/uptime, da7179f7), which Fulcrum sends as a
+        # probe, and testmempoolaccept (rpc/testmempoolaccept, 34891053), which
+        # BCH Explorer calls. The master run 42255367221 is the before.
+          - name: uptime
+            branch: rpc/uptime
+          - name: testmempoolaccept
+            branch: rpc/testmempoolaccept
+            blockchain: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
