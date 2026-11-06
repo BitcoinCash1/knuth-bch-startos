@@ -1555,6 +1555,24 @@ def row10_relay_in(s: dict) -> None:
         time.sleep(1)
     row(10, client, "a wallet transaction BCHN makes later reaches kth's mempool", reached,
         {"txid": late, "in kth's mempool": reached})
+    # The same at a fee kth's own admission price is met by (5 satoshis per
+    # byte covers its per-byte and per-signature-operation price), so that
+    # what is checked is the relay itself, whatever the node's fee policy.
+    cli("settxfee", "0.00005")
+    try:
+        priced = cli("sendtoaddress", s["others"][2], "0.1")
+    finally:
+        cli("settxfee", "0")
+    arrived = False
+    for _ in range(30):
+        if priced in (call(KTH, "getrawmempool")[0] or []):
+            arrived = True
+            break
+        time.sleep(1)
+    entry = (call(BCHN, "getmempoolentry", priced)[0] or {}) if priced else {}
+    row(10, client, "a wallet transaction BCHN makes later, paying kth's price, reaches kth's mempool",
+        arrived, {"txid": priced, "in kth's mempool": arrived, "size": entry.get("size"),
+                  "fee": (entry.get("fees") or {}).get("base")})
 
 
 def row11_relay_out(s: dict) -> None:
