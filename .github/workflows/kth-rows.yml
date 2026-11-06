@@ -22,29 +22,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #793 rebuilt on #846's local admission (test/793-on-846, 8d72bac3):
-        # a block kth accepts through submitblocklight must reach BCHN from
-        # kth alone (#773 row 2). The master run 42255367221 is the before.
-          - name: announce-on-846
-            branch: test/793-on-846
-            blockchain: true
-        # #805 (SHV) with master de9f1b6c merged in and the message points
-        # agreed in the CHIP-2026-02 review: a status per request, CompactSize
-        # heights, one shv per getshv (test/805-shv-statuses, 950f409f).
-          - name: shv-statuses
-            branch: test/805-shv-statuses
-            domain: true
-            blockchain: true
+        # #796 and #797 on master a661a143, with #795's policy changes taken
+        # out after #795 was closed (policy stays as master has it):
+        # test/796-on-master (592fdcf3) asks peers for the transactions they
+        # announce (#773 row 10); test/797-on-master (63610849) announces
+        # admitted ones and answers their getdata from the served handler
+        # (row 11). The master run 42255367221 is the before.
+          - name: relay-in-on-master
+            branch: test/796-on-master
             network: true
-            shv: true
-        # #773 row 29: uptime (rpc/uptime, da7179f7), which Fulcrum sends as a
-        # probe, and testmempoolaccept (rpc/testmempoolaccept, 34891053), which
-        # BCH Explorer calls. The master run 42255367221 is the before.
-          - name: uptime
-            branch: rpc/uptime
-          - name: testmempoolaccept
-            branch: rpc/testmempoolaccept
-            blockchain: true
+          - name: relay-out-on-master
+            branch: test/797-on-master
+            network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
