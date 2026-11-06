@@ -26,11 +26,7 @@ jobs:
           - name: sv2-jd-payout-outputs
             branch: test/sv2-jd-payout-outputs-announce
             row: "25b"
-            # P2Pool alpha gives a regtest SV2 channel a difficulty-1 target, so
-            # the CPU device (about 1.2 MH/s here) needs over an hour a share, and
-            # 25b needs two. The test branch's easier regtest target proves the
-            # same 0x5052 path in about 20 minutes.
-            p2pool: test/kth-jd-e2e
+            p2pool: alpha
           # BCH large templates need P2Pool's side of 0x4C54 (P2Pool #63, on alpha).
           - name: sv2-jd-large-templates
             branch: test/sv2-jd-large-templates-announce

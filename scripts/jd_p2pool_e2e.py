@@ -79,6 +79,8 @@ SHARE_INTERVAL = 20
 FLOOR_MARGIN = 1.1
 MAX_MARGIN = 2.0
 MINE_BUDGET = 1200
+# P(no credited share) is about e^-CREDIT_TAIL, 0.25% at 6.
+CREDIT_TAIL = 6
 EASY_BLOCK_LIMIT = 8
 
 BCHN_DIR = Path("/tmp/bchn-jd-a")
@@ -863,6 +865,29 @@ def plan_multiplier(printed_mh: int) -> tuple[float, float, float]:
     return multiplier, expected, margin
 
 
+def mine_budget(printed_mh: int) -> tuple[int, float]:
+    # A downstream share enters P2Pool's PPLNS window only when it also meets
+    # the share chain's difficulty, which /metrics reports as pool_difficulty.
+    # On P2Pool alpha the regtest mini chain starts at its anchor, about 4.5
+    # (MINI_ANCHOR_TARGET 0x1c384bd7), which is also the easiest target that
+    # chain allows. At about 20 MH/s one credited share then takes about 16
+    # minutes on average, so 1200 s missed it in about one run in three. The
+    # budget covers CREDIT_TAIL average waits for a credited share and one more
+    # block to pay the split.
+    status, body = http_get("/metrics")
+    parsed = parse_metrics(body) if status == 200 else {}
+    try:
+        difficulty = float(parsed.get("pool_difficulty", "0"))
+    except ValueError:
+        difficulty = 0.0
+    if difficulty <= 1:
+        return MINE_BUDGET, difficulty
+    hps = (printed_mh - 0.5) * 1_000_000
+    credit = difficulty * DIFF1_HASHES / hps
+    block = FLOOR_MARGIN * DIFF1_HASHES / hps
+    return max(MINE_BUDGET, int(CREDIT_TAIL * credit + block)), difficulty
+
+
 def probe_hashrate(binary: str, pubkey: str, before: int) -> int:
     log_path = OUT / "mining-device-probe.log"
     proc = start_device(device_command(binary, pubkey, None, None), log_path)
@@ -1043,13 +1068,17 @@ def row25b(binary: str, pubkey: str, solo: str) -> None:
     if before is None:
         fail("kth RPC stopped answering after the hashrate probe")
     EVIDENCE["heights"]["before_device"] = before
+    budget, pool_difficulty = mine_budget(printed)
+    EVIDENCE["hashrate"]["pool_difficulty"] = pool_difficulty
+    EVIDENCE["hashrate"]["mine_budget_s"] = budget
+    progress(f"row {EVIDENCE['row']}: pool difficulty {pool_difficulty:g}, mining budget {budget}s")
     proc = start_device(
         device_command(binary, pubkey, None, multiplier),
         OUT / "mining-device.log",
     )
     cursor = before
     matched = None
-    deadline = time.monotonic() + MINE_BUDGET
+    deadline = time.monotonic() + budget
     while time.monotonic() < deadline:
         ensure_kth()
         ensure_p2pool()
@@ -1098,8 +1127,8 @@ def row25b(binary: str, pubkey: str, solo: str) -> None:
         time.sleep(2)
     line = fallback_line(kth_log_text())
     fail(
-        "row 25b: no credited share and PPLNS block within "
-        f"{MINE_BUDGET}s (shares_accepted_total={EVIDENCE['p2pool']['shares_accepted_total']}, "
+        f"row {EVIDENCE['row']}: no credited share and PPLNS block within "
+        f"{budget}s (shares_accepted_total={EVIDENCE['p2pool']['shares_accepted_total']}, "
         f"accepted_work={EVIDENCE['p2pool']['accepted_work']}). "
         + (f"fallback: {line}. " if line else "")
         + "blocks:\n" + json.dumps(EVIDENCE["blocks"], indent=2)[:3000]
