@@ -999,7 +999,7 @@ def row25(binary: str, pubkey: str, solo: str) -> None:
 
 
 def row25b(binary: str, pubkey: str, solo: str) -> None:
-    progress("row 25b: waiting for P2Pool to accept the custom job")
+    progress(f"row {EVIDENCE['row']}: waiting for P2Pool to accept the custom job")
     deadline = time.monotonic() + 120
     accepted = False
     while time.monotonic() < deadline:
@@ -1012,7 +1012,8 @@ def row25b(binary: str, pubkey: str, solo: str) -> None:
     if not accepted:
         line = fallback_line(kth_log_text())
         fail(
-            "row 25b: kth did not log 'Pool accepted local template as job' within 120s. "
+            f"row {EVIDENCE['row']}: kth did not log 'Pool accepted local template as job' "
+            "within 120s. "
             + (f"fallback: {line}" if line else "no 'continuing solo mining' line either")
         )
     before_probe = int(cli("getblockcount"))
@@ -1025,7 +1026,7 @@ def row25b(binary: str, pubkey: str, solo: str) -> None:
         "expected_seconds": round(expected, 1),
     }
     progress(
-        f"row 25b: measured {printed} MH/s, multiplier {multiplier:.4f}, "
+        f"row {EVIDENCE['row']}: measured {printed} MH/s, multiplier {multiplier:.4f}, "
         f"expected share about {expected:.0f}s"
     )
     # A block the probe connected has to be on BCHN before the next one can extend it.
