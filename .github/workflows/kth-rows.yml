@@ -22,13 +22,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Tests-only branches on master: #838's regtest subsidy case, and
-        # #815's message-wait cases ported to #830's receive(deadline).
-          - name: template-subsidy-regtest-test
-            branch: blockchain/template-subsidy-regtest-test
-            blockchain: true
-          - name: message-wait-tests
-            branch: network/message-wait-tests
+        # Tests-only branch on master: #815's message-wait cases ported to
+        # #830's receive(deadline), matched to stop() emptying the channel.
+          - name: inbound-message-wait-tests
+            branch: network/inbound-message-wait-tests
             network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
