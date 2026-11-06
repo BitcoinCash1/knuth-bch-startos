@@ -1959,12 +1959,51 @@ def walk_proof(leaf: bytes, index: int, siblings: list[bytes]) -> bytes:
     return node
 
 
+SHV_BY_HASH = 1 << 1
+
+
+def shv_request(kind: int, commitment: int, block: int | bytes) -> bytes:
+    """One getshv request as bchd 846c6aeb writes it: the type, the commitment
+    height as a CompactSize, then the block's 32-byte hash (type bit 1 set) or
+    its height as a CompactSize."""
+    if kind & SHV_BY_HASH:
+        return bytes([kind]) + compact_size(commitment) + block
+    return bytes([kind]) + compact_size(commitment) + compact_size(block)
+
+
+def parse_shv(payload: bytes) -> list[dict]:
+    """The entries of an shv message: a status byte each, and for status 0
+    (found) the type, both heights, the header, the proof and the target."""
+    count, o = read_compact(payload, 0)
+    entries = []
+    for _ in range(count):
+        status = payload[o]; o += 1
+        if status != 0:
+            entries.append({"status": status})
+            continue
+        kind = payload[o]; o += 1
+        commitment, o = read_compact(payload, o)
+        block_height, o = read_compact(payload, o)
+        header = payload[o:o + 80]; o += 80
+        size, o = read_compact(payload, o)
+        proof = [payload[o + 32 * i:o + 32 * (i + 1)] for i in range(size)]; o += 32 * size
+        target = payload[o:o + 32]; o += 32
+        entries.append({"status": 0, "type": kind, "commitment": commitment, "height": block_height,
+                        "header": header, "proof": proof, "target": target})
+    if o != len(payload):
+        raise ValueError(f"shv payload has {len(payload) - o} bytes after its entries")
+    return entries
+
+
 def shv_light_client(s: dict) -> None:
-    """An SHV light client (CHIP-2026-02) over P2P, with the wire formats of
-    BCHN's implementation: kth advertises NODE_SHV, answers getshv with a proof
-    to the root and a proof to a peak for a block, the header is the block at
-    that height, and both proofs lead to roots computed here from BCHN's own
-    block hashes."""
+    """An SHV light client (CHIP-2026-02) over P2P, with the message format
+    agreed on gcash/bchd#769 (bchd 846c6aeb): one shv answers one getshv with a
+    status per request, and heights in requests are CompactSize. kth
+    advertises NODE_SHV and answers a proof to the root and a proof to a peak
+    for a block; the header is the block at that height, and both proofs lead
+    to roots computed here from BCHN's own block hashes. Every refused request
+    gets its status byte, in order, an empty getshv gets an shv with no
+    entries, and so does one of 101 requests."""
     client = "SHV light client (getshv over P2P)"
     if not SHV:
         return
@@ -1973,6 +2012,16 @@ def shv_light_client(s: dict) -> None:
     hashes = [bytes.fromhex(call(BCHN, "getblockhash", h)[0])[::-1] for h in range(tip + 1)]
     height = 5
     seen: dict = {"commitment height": tip, "height": height}
+    statuses: dict = {}
+    # Each refusal, and the reason bchd gives for it, in the order sent.
+    refused = [
+        (shv_request(4, tip, height), 4),                          # reserved type bit
+        (shv_request(0, height - 1, height), 2),                   # block above the commitment
+        (shv_request(0, tip + 1, height), 3),                      # commitment above the tip
+        (shv_request(0, tip + 5, tip + 5), 1),                     # no such block, and the commitment too
+        (shv_request(SHV_BY_HASH, tip, b"\x11" * 32), 1),          # unknown hash
+        (shv_request(SHV_BY_HASH, height - 1, hashes[height]), 2),  # hash of a block above the commitment
+    ]
     try:
         with socket.create_connection(("127.0.0.1", KTH_P2P_PORT), timeout=20) as sock:
             reader = LineReader(sock)
@@ -1981,7 +2030,6 @@ def shv_light_client(s: dict) -> None:
                        + struct.pack("<Q", 0x5348565f) + b"\x0dknuth-rpc-e2e" + struct.pack("<i", 0) + b"\x00")
             sock.sendall(p2p_message(b"version", version))
             services = None
-            replies: list = []
             deadline = time.time() + 30
             while time.time() < deadline:
                 message = p2p_read(reader)
@@ -1991,41 +2039,76 @@ def shv_light_client(s: dict) -> None:
                 if command == b"version":
                     services, = struct.unpack("<Q", payload[4:12])
                     sock.sendall(p2p_message(b"verack", b""))
-                    request = lambda kind: bytes([kind]) + compact_size(tip) + height.to_bytes(32, "little")
-                    sock.sendall(p2p_message(b"getshv", b"\x02" + request(SHV_TO_ROOT) + request(0)))
-                elif command == b"ping":
-                    sock.sendall(p2p_message(b"pong", payload))
-                elif command == b"shv":
-                    count, o = read_compact(payload, 0)
-                    for _ in range(count):
-                        kind = payload[o]; o += 1
-                        commitment, o = read_compact(payload, o)
-                        block_height, o = read_compact(payload, o)
-                        header = payload[o:o + 80]; o += 80
-                        size, o = read_compact(payload, o)
-                        proof = [payload[o + 32 * i:o + 32 * (i + 1)] for i in range(size)]; o += 32 * size
-                        target = payload[o:o + 32]; o += 32
-                        replies.append((kind, commitment, block_height, header, proof, target))
                     break
+                if command == b"ping":
+                    sock.sendall(p2p_message(b"pong", payload))
+
+            def exchange(payload: bytes) -> bytes | None:
+                """Send one getshv and return the payload of the shv that answers it."""
+                sock.sendall(p2p_message(b"getshv", payload))
+                until = time.time() + 30
+                while time.time() < until:
+                    message = p2p_read(reader)
+                    if message is None:
+                        return None
+                    command, body = message
+                    if command == b"ping":
+                        sock.sendall(p2p_message(b"pong", body))
+                    elif command == b"shv":
+                        return body
+                return None
+
             seen["NODE_SHV advertised"] = services is not None and bool(services & NODE_SHV)
+            proofs = exchange(b"\x02" + shv_request(SHV_TO_ROOT, tip, height) + shv_request(0, tip, height))
+            replies = parse_shv(proofs) if proofs is not None else []
             leaf = hashes[height]
             root = merkle_root(hashes[:tip + 1])
             checks = []
-            for kind, commitment, block_height, header, proof, target in replies:
-                entry = {"type": kind, "commitment": commitment, "height": block_height,
-                         "header is the block": sha256d(header) == leaf,
-                         "proof leads to target": walk_proof(leaf, block_height, proof) == target}
-                if kind & SHV_TO_ROOT:
-                    entry["target is the Merkle root of BCHN's hashes"] = target == root
-                checks.append(entry)
+            for entry in replies:
+                if entry["status"] != 0:
+                    checks.append({"status": entry["status"]})
+                    continue
+                check = {"type": entry["type"], "commitment": entry["commitment"], "height": entry["height"],
+                         "header is the block": sha256d(entry["header"]) == leaf,
+                         "proof leads to target": walk_proof(leaf, entry["height"], entry["proof"]) == entry["target"]}
+                if entry["type"] & SHV_TO_ROOT:
+                    check["target is the Merkle root of BCHN's hashes"] = entry["target"] == root
+                checks.append(check)
             seen["replies"] = checks
-    except OSError as error:
+
+            # The refusals, then a proof by hash, all in one getshv: one entry
+            # each, in order, the refusals one status byte each.
+            batch = (compact_size(len(refused) + 1) + b"".join(r for r, _ in refused)
+                     + shv_request(SHV_BY_HASH | SHV_TO_ROOT, tip, hashes[height]))
+            answer = exchange(batch)
+            statuses["answered"] = answer is not None
+            if answer is not None:
+                expected = compact_size(len(refused) + 1) + bytes(status for _, status in refused)
+                statuses["refusals byte for byte"] = answer.startswith(expected)
+                entries = parse_shv(answer)
+                statuses["statuses"] = [e["status"] for e in entries]
+                last = entries[-1] if entries else {}
+                statuses["proof by hash"] = (last.get("status") == 0 and last.get("height") == height
+                                             and sha256d(last.get("header", b"")) == leaf
+                                             and last.get("target") == root
+                                             and walk_proof(leaf, height, last.get("proof", [])) == root)
+            statuses["empty getshv, empty shv"] = exchange(b"\x00") == b"\x00"
+            oversized = compact_size(101) + shv_request(0, tip, height) * 101
+            statuses["101 requests, empty shv"] = exchange(oversized) == b"\x00"
+    except (OSError, ValueError, IndexError) as error:
         seen["error"] = f"{type(error).__name__}: {error}"
-    replies_ok = len(seen.get("replies", [])) == 2 and all(all(v for k, v in e.items() if isinstance(v, bool))
-                                                          for e in seen["replies"])
-    to_root = [e for e in seen.get("replies", []) if e["type"] & SHV_TO_ROOT]
+    replies_ok = len(seen.get("replies", [])) == 2 and all(
+        "status" not in e and all(v for k, v in e.items() if isinstance(v, bool)) for e in seen["replies"])
+    to_root = [e for e in seen.get("replies", []) if e.get("type", 0) & SHV_TO_ROOT]
     row(1001, client, "kth advertises NODE_SHV; both proofs verify and the root equals the Merkle root "
         "of BCHN's block hashes", bool(seen.get("NODE_SHV advertised")) and replies_ok and len(to_root) == 1, seen)
+    statuses_ok = (statuses.get("refusals byte for byte") is True and statuses.get("proof by hash") is True
+                   and statuses.get("statuses") == [status for _, status in refused] + [0]
+                   and statuses.get("empty getshv, empty shv") is True
+                   and statuses.get("101 requests, empty shv") is True)
+    row(1006, client, "one shv answers each getshv: refused requests get bchd's status bytes in order, "
+        "an empty or oversized getshv gets an shv with no entries", statuses_ok,
+        statuses if "error" not in seen else {**statuses, "error": seen["error"]})
 
 
 def kth_log_lines(container: str, pattern: str, limit: int = 12) -> list[str]:
