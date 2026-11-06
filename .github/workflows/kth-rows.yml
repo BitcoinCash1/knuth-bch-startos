@@ -22,10 +22,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Upstream master de9f1b6c as it is, to see which of the four
-        # clients kth now serves after the #773 rows that merged.
-          - name: master
-            branch: master
+        # #793 rebuilt on #846's local admission (test/793-on-846, 0622863e):
+        # a block kth accepts through submitblocklight must reach BCHN from
+        # kth alone (#773 row 2). The master run 42255367221 is the before.
+          - name: announce-on-846
+            branch: test/793-on-846
+            blockchain: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
