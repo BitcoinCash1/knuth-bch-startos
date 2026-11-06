@@ -113,7 +113,7 @@ jobs:
                 exit 1
               fi
               ldd ./kth_network_test | grep libasan
-              # Linked is not enough: kth's own code must be instrumented.
+              # Linked is not enough: the kth code itself must be instrumented.
               # The image has no binutils; grep the binary for the check calls.
               checks=$(grep -aoE "__asan_report_(load|store)[0-9]+" ./kth_network_test | wc -l)
               echo "instrumented: $checks __asan_report_ references"
