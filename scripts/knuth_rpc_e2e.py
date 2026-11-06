@@ -1963,9 +1963,9 @@ SHV_BY_HASH = 1 << 1
 
 
 def shv_request(kind: int, commitment: int, block: int | bytes) -> bytes:
-    """One getshv request as bchd 846c6aeb writes it: the type, the commitment
-    height as a CompactSize, then the block's 32-byte hash (type bit 1 set) or
-    its height as a CompactSize."""
+    """One getshv request: the type, the commitment height as a CompactSize,
+    then the block's 32-byte hash (type bit 1 set) or its height as a
+    CompactSize."""
     if kind & SHV_BY_HASH:
         return bytes([kind]) + compact_size(commitment) + block
     return bytes([kind]) + compact_size(commitment) + compact_size(block)
@@ -1996,9 +1996,11 @@ def parse_shv(payload: bytes) -> list[dict]:
 
 
 def shv_light_client(s: dict) -> None:
-    """An SHV light client (CHIP-2026-02) over P2P, with the message format
-    agreed on gcash/bchd#769 (bchd 846c6aeb): one shv answers one getshv with a
-    status per request, and heights in requests are CompactSize. kth
+    """An SHV light client (CHIP-2026-02) over P2P, with the message points
+    agreed in the CHIP review: one shv answers one getshv with a status per
+    request, and heights in requests are CompactSize. The bytes are the ones
+    another SHV server sends for the same requests, so one client works
+    against either. kth
     advertises NODE_SHV and answers a proof to the root and a proof to a peak
     for a block; the header is the block at that height, and both proofs lead
     to roots computed here from BCHN's own block hashes. Every refused request
@@ -2013,7 +2015,7 @@ def shv_light_client(s: dict) -> None:
     height = 5
     seen: dict = {"commitment height": tip, "height": height}
     statuses: dict = {}
-    # Each refusal, and the reason bchd gives for it, in the order sent.
+    # Each refusal, and its status, in the order sent.
     refused = [
         (shv_request(4, tip, height), 4),                          # reserved type bit
         (shv_request(0, height - 1, height), 2),                   # block above the commitment
@@ -2106,7 +2108,7 @@ def shv_light_client(s: dict) -> None:
                    and statuses.get("statuses") == [status for _, status in refused] + [0]
                    and statuses.get("empty getshv, empty shv") is True
                    and statuses.get("101 requests, empty shv") is True)
-    row(1006, client, "one shv answers each getshv: refused requests get bchd's status bytes in order, "
+    row(1006, client, "one shv answers each getshv: refused requests get their status bytes in order, "
         "an empty or oversized getshv gets an shv with no entries", statuses_ok,
         statuses if "error" not in seen else {**statuses, "error": seen["error"]})
 

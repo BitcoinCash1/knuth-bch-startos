@@ -28,11 +28,11 @@ jobs:
           - name: announce-on-846
             branch: test/793-on-846
             blockchain: true
-        # #805 (SHV) with master de9f1b6c merged in and the message format
-        # agreed on gcash/bchd#769 (bchd 846c6aeb): a status per request,
-        # CompactSize heights, one shv per getshv (test/805-bchd-format).
-          - name: shv-bchd-format
-            branch: test/805-bchd-format
+        # #805 (SHV) with master de9f1b6c merged in and the message points
+        # agreed in the CHIP-2026-02 review: a status per request, CompactSize
+        # heights, one shv per getshv (test/805-shv-statuses, 950f409f).
+          - name: shv-statuses
+            branch: test/805-shv-statuses
             domain: true
             blockchain: true
             network: true
