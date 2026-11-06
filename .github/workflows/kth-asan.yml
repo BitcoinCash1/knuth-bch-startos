@@ -1,4 +1,4 @@
-name: kth AddressSanitizer runs for #772 and the message-wait tests
+name: "kth AddressSanitizer runs for #772 and the message-wait tests"
 
 # TEST ONLY branch, never merged. Builds kth_network_test with
 # AddressSanitizer in kth's toolchain image for three fork branches of
@@ -6,7 +6,7 @@ name: kth AddressSanitizer runs for #772 and the message-wait tests
 # - test/772-probe-before: the parent of k-nuth/kth#830 (cc8860ed) with the
 #   #772 deadline-race probe (src/network/test/stress_772.cpp);
 # - test/772-probe-master: master with the same probe;
-# - network/message-wait-tests: the tests-only branch on master.
+# - network/inbound-message-wait-tests: the tests-only branch on master.
 # The probe runs five times; the message-wait cases ten times, then the whole
 # suite once. Leak checking is off: the runs look for the use-after-free of
 # #772, not for leaks. A run that fails is recorded, not fatal, so the before
@@ -34,8 +34,8 @@ jobs:
             branch: test/772-probe-master
             filter: "[stress772]"
             repeats: 5
-          - name: message-wait-tests
-            branch: network/message-wait-tests
+          - name: inbound-message-wait-tests
+            branch: network/inbound-message-wait-tests
             filter: "[#message_waits]"
             repeats: 10
             full: true
@@ -114,7 +114,8 @@ jobs:
               fi
               ldd ./kth_network_test | grep libasan
               # Linked is not enough: kth's own code must be instrumented.
-              checks=$(nm ./kth_network_test | grep -c "__asan_report_")
+              # The image has no binutils; grep the binary for the check calls.
+              checks=$(grep -aoE "__asan_report_(load|store)[0-9]+" ./kth_network_test | wc -l)
               echo "instrumented: $checks __asan_report_ references"
               if [ "$checks" -eq 0 ]; then
                 echo "kth_network_test has no AddressSanitizer checks" | tee /logs/summary.txt
