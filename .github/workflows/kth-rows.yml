@@ -22,11 +22,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Tests-only branch on master: #815's message-wait cases ported to
-        # #830's receive(deadline), matched to stop() emptying the channel.
-          - name: inbound-message-wait-tests
-            branch: network/inbound-message-wait-tests
-            network: true
+        # Upstream master de9f1b6c as it is, to see which of the four
+        # clients kth now serves after the #773 rows that merged.
+          - name: master
+            branch: master
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
