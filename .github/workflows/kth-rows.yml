@@ -22,18 +22,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #816 with its test teardown fix, and #793 on the fixed #791.
-          - name: compact-blocks-master
-            branch: test/compact-blocks-master
-            serve: true
-            announce: true
-            compact: true
+        # Tests-only branches on master: #838's regtest subsidy case, and
+        # #815's message-wait cases ported to #830's receive(deadline).
+          - name: template-subsidy-regtest-test
+            branch: blockchain/template-subsidy-regtest-test
             blockchain: true
-          - name: announce-found-block-master
-            branch: test/announce-found-block-master
-            blockchain: true
-            serve: true
-            announce: true
+          - name: message-wait-tests
+            branch: network/message-wait-tests
+            network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
