@@ -1,0 +1,152 @@
+name: kth AddressSanitizer runs for #772 and the message-wait tests
+
+# TEST ONLY branch, never merged. Builds kth_network_test with
+# AddressSanitizer in kth's toolchain image for three fork branches of
+# CyberAshven/kth:
+# - test/772-probe-before: the parent of k-nuth/kth#830 (cc8860ed) with the
+#   #772 deadline-race probe (src/network/test/stress_772.cpp);
+# - test/772-probe-master: master with the same probe;
+# - network/message-wait-tests: the tests-only branch on master.
+# The probe runs five times; the message-wait cases ten times, then the whole
+# suite once. Leak checking is off: the runs look for the use-after-free of
+# #772, not for leaks. A run that fails is recorded, not fatal, so the before
+# tree's crashes show up in the summary. Runs when this file changes, or by hand.
+on:
+  push:
+    branches: [test/kth-asan-772]
+    paths: [.github/workflows/kth-asan.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  asan:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: probe-before-830
+            branch: test/772-probe-before
+            filter: "[stress772]"
+            repeats: 5
+          - name: probe-master
+            branch: test/772-probe-master
+            filter: "[stress772]"
+            repeats: 5
+          - name: message-wait-tests
+            branch: network/message-wait-tests
+            filter: "[#message_waits]"
+            repeats: 10
+            full: true
+    name: asan ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      IMAGE: kthnode/gcc15-ubuntu24.04@sha256:4988fdeb3654c2b5ea591ffa4454f67e1a631549449c62e35060ba69da79eb67
+    steps:
+      - name: Make room for the build
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        shell: bash
+      - name: Fetch kth ${{ matrix.branch }}
+        run: |
+          git clone --depth 1 --branch "${{ matrix.branch }}" https://github.com/CyberAshven/kth.git kth-src
+          git -C kth-src log -1 --format='%H %s' | tee kth-commit.txt
+        shell: bash
+      - name: Restore the compiler cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ccache
+          key: kth-asan-ccache-${{ matrix.name }}-${{ github.run_id }}
+          restore-keys: |
+            kth-asan-ccache-${{ matrix.name }}-
+            kth-asan-ccache-
+      - name: Build kth_network_test with AddressSanitizer in the kth toolchain
+        run: |
+          mkdir -p ccache
+          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -v "$PWD/ccache:/ccache" -w /src \
+            -e CCACHE_DIR=/ccache -e CCACHE_MAXSIZE=1200M -e CCACHE_BASEDIR=/src "$IMAGE" \
+            bash -euo pipefail -c '
+              LAUNCH=""
+              if command -v ccache >/dev/null || (apt-get update -qq && apt-get install -y -qq ccache >/dev/null); then
+                LAUNCH="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+                ccache -z
+              fi
+              pip install --no-cache-dir --upgrade "conan>=2.25,<3" "kthbuild>=4,<5"
+              conan profile detect --force
+              conan remote add kth https://packages.kth.cash/api/ --force
+              time conan install conanfile.py --version 1.5.2 -of build --build=missing \
+                -o currency=BCH -o rpc=True -o tests=True \
+                -o "utxoz/*:with_tests=False" -o "utxoz/*:with_benchmarks=False" \
+                -o "utxoz/*:with_large_benchmarks=False" \
+                -s compiler.cppstd=23 -s build_type=Release
+              # Only kth is instrumented; the Conan dependencies stay prebuilt.
+              # CMake starts CMAKE_<LANG>_FLAGS from these variables and appends
+              # the toolchain flags, so both apply.
+              export CFLAGS="-fsanitize=address -fno-omit-frame-pointer -g1"
+              export CXXFLAGS="-fsanitize=address -fno-omit-frame-pointer -g1"
+              export LDFLAGS="-fsanitize=address"
+              cmake --preset conan-release -DGLOBAL_BUILD=ON -DENABLE_TEST=ON -DCMAKE_BUILD_TYPE=Release $LAUNCH
+              time cmake --build --preset conan-release -j"$(nproc)" --target kth_network_test
+              if [ -n "$LAUNCH" ]; then ccache -s; fi
+              chmod -R a+rwX /ccache
+            '
+        shell: bash
+      - name: Save the compiler cache
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: ccache
+          key: kth-asan-ccache-${{ matrix.name }}-${{ github.run_id }}
+      - name: Run the cases under AddressSanitizer
+        run: |
+          TEST=$(find kth-src/build -name kth_network_test -type f -perm -u+x | head -1)
+          echo "test binary: $TEST"
+          mkdir -p logs
+          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -v "$PWD/logs:/logs" \
+            -w "/src/$(dirname "${TEST#kth-src/}")" \
+            -e ASAN_OPTIONS=detect_leaks=0 -e FILTER="${{ matrix.filter }}" \
+            -e REPEATS="${{ matrix.repeats }}" -e FULL="${{ matrix.full && '1' || '0' }}" "$IMAGE" \
+            bash -uo pipefail -c '
+              if ! ldd ./kth_network_test | grep -q libasan; then
+                echo "kth_network_test is not linked with AddressSanitizer" | tee /logs/summary.txt
+                exit 1
+              fi
+              ldd ./kth_network_test | grep libasan
+              # Linked is not enough: kth's own code must be instrumented.
+              checks=$(nm ./kth_network_test | grep -c "__asan_report_")
+              echo "instrumented: $checks __asan_report_ references"
+              if [ "$checks" -eq 0 ]; then
+                echo "kth_network_test has no AddressSanitizer checks" | tee /logs/summary.txt
+                exit 1
+              fi
+              echo "cases matching $FILTER:" > /logs/summary.txt
+              ./kth_network_test "$FILTER" --filenames-as-tags --list-tests | tail -n 3 >> /logs/summary.txt
+              for i in $(seq 1 "$REPEATS"); do
+                timeout --kill-after=30 900 ./kth_network_test "$FILTER" --filenames-as-tags --reporter compact > "/logs/run-$i.log" 2>&1
+                rc=$?
+                reports=$(grep -c "ERROR: AddressSanitizer" "/logs/run-$i.log")
+                kind=$(grep -m1 -oE "ERROR: AddressSanitizer: [a-z-]+" "/logs/run-$i.log" | sed "s/ERROR: AddressSanitizer: //")
+                last=$(grep -E "stress772: waits|test cases|All tests passed" "/logs/run-$i.log" | tail -n 1)
+                echo "run $i: exit $rc, asan reports $reports ${kind:+($kind)} | $last" | tee -a /logs/summary.txt
+              done
+              if [ "$FULL" = "1" ]; then
+                timeout --kill-after=30 1500 ./kth_network_test --reporter compact > /logs/full.log 2>&1
+                rc=$?
+                reports=$(grep -c "ERROR: AddressSanitizer" /logs/full.log)
+                echo "whole suite: exit $rc, asan reports $reports | $(tail -n 2 /logs/full.log | tr "\n" " ")" | tee -a /logs/summary.txt
+              fi
+              true
+            '
+          echo "## ${{ matrix.name }}" >> "$GITHUB_STEP_SUMMARY"
+          cat kth-commit.txt >> "$GITHUB_STEP_SUMMARY"
+          sed 's/^/    /' logs/summary.txt >> "$GITHUB_STEP_SUMMARY"
+        shell: bash
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: kth-asan-${{ matrix.name }}
+          path: |
+            kth-commit.txt
+            logs
+          if-no-files-found: error
