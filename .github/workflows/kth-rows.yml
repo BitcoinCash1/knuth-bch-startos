@@ -22,11 +22,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #867 (testmempoolaccept) on #870 (the mempool's size limit and its
-        # raised minimum fee), with test acceptance asking that minimum too
-        # (2533bd42). Run 42360026909 covers #809 and #814 against master.
-          - name: 867-on-870
-            branch: test/867-on-870
+        # #804 (the Template Provider) rebuilt on master a661a143: #791 taken
+        # out (433d813a), master merged with #846 (9358c930), and solutions
+        # submitted through block_chain::submit_block (961b4f69). Rows 21
+        # and 23. #867 on #870 runs in the run before this one.
+          - name: sv2-template-flow-rebuilt
+            branch: test/804-on-master
+            sv2: true
             blockchain: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
