@@ -22,17 +22,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #816 with its header check (b9f37b58): a cmpctblock whose header
-        # fails proof of work or asks other work goes to the header ingest
-        # before any mempool pass. Merged with master a6717f81, on GCC 16.2.
-          - name: 816-header-check-gcc16
-            branch: test/816-check-on-a6717f81
+        # #872 with #796's handshake test (2da4c5de): the version message's
+        # relay bit read from a real handshake, relay on and off; and the
+        # same test with the relay bit hard-coded false (RED).
+          - name: 872-relay-handshake
+            branch: network/relay-handshake-test
             gcc: "16"
-            domain: true
-            blockchain: true
-            serve: true
-            announce: true
-            compact: true
+            network: true
+          - name: 872-relay-handshake-red
+            branch: test/872-relay-handshake-red
+            gcc: "16"
             network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
