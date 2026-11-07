@@ -22,15 +22,33 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #797 rebuilt on #872 (02dd69db): admitted transactions owed to
-        # the peers that asked for them and sent by each peer's service as
-        # one inv; getdata answered from the mempool. RED: nothing is owed.
-          - name: 797-on-872
-            branch: test/797-on-872
+        # #872's new head (44e5d007, organize(transaction) renamed
+        # submit_transaction) under three rebuilds: the relay-bit handshake
+        # test (7da419e8; RED: the bit hard-coded false), #816 (7bde5af1) and
+        # #797 (8dc9b3d9; RED: nothing owed to any peer).
+          - name: 872b-relay-handshake
+            branch: test/872b-relay-handshake
             gcc: "16"
             network: true
-          - name: 797-on-872-red
-            branch: test/797-on-872-red
+          - name: 872b-relay-handshake-red
+            branch: test/872b-relay-handshake-red
+            gcc: "16"
+            network: true
+          - name: 816-on-872b
+            branch: test/816-on-872b
+            gcc: "16"
+            domain: true
+            blockchain: true
+            serve: true
+            announce: true
+            compact: true
+            network: true
+          - name: 797-on-872b
+            branch: test/797-on-872b
+            gcc: "16"
+            network: true
+          - name: 797-on-872b-red
+            branch: test/797-on-872b-red
             gcc: "16"
             network: true
     name: kth ${{ matrix.name }}
