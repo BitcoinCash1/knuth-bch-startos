@@ -22,11 +22,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #816 with its header check (d454904e): a cmpctblock whose header
+        # #816 with its header check (b9f37b58): a cmpctblock whose header
         # fails proof of work or asks other work goes to the header ingest
         # before any mempool pass. Merged with master a6717f81, on GCC 16.2.
           - name: 816-header-check-gcc16
-            branch: test/816-on-a6717f81
+            branch: test/816-check-on-a6717f81
             gcc: "16"
             domain: true
             blockchain: true
