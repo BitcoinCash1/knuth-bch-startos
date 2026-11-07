@@ -2250,6 +2250,9 @@ def announce_second_node(s: dict) -> None:
     client = "nodes whose peer is kth"
     if not ANNOUNCE:
         return
+    # B connects only now, after kth has synced: the height kth gives B in its
+    # version message must be kth's tip, not the height kth started at.
+    height_at_connect = call(KTH, "getblockcount")[0]
     BCHN_B_DIR.mkdir(parents=True, exist_ok=True)
     subprocess.run(["bitcoind", "-regtest", f"-datadir={BCHN_B_DIR}", "-daemon", "-server",
                     "-rpcuser=e2e", "-rpcpassword=e2e", f"-rpcport={BCHN_B[1]}", "-port=18454",
@@ -2294,6 +2297,13 @@ def announce_second_node(s: dict) -> None:
           and "knuth" in (peers[0].get("subver") or "").lower()
           and sum(seen["announcements B received"].values()) > 0)
     row(1004, client, "a BCHN whose only peer is kth hears of each new block from kth", ok, seen)
+
+    start = {"kth's height when B connected": height_at_connect,
+             "startingheight B has for kth": peers[0].get("startingheight") if peers else None,
+             "kth's start heights": kth_log_lines("kth", r"Node start heights", 2)}
+    row(1007, "nodes and light wallets that connect to kth later",
+        "kth's version message gives its height at the time of connection",
+        height_at_connect is not None and start["startingheight B has for kth"] == height_at_connect, start)
 
 
 def start_bchn_b() -> None:

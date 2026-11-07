@@ -22,17 +22,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #796 and #797 on master a661a143, with #795's policy changes taken
-        # out after #795 was closed (policy stays as master has it):
-        # test/796-on-master (592fdcf3) asks peers for the transactions they
-        # announce (#773 row 10); test/797-on-master (63610849) announces
-        # admitted ones and answers their getdata from the served handler
-        # (row 11). The master run 42255367221 is the before.
-          - name: relay-in-on-master
-            branch: test/796-on-master
+        # Master a661a143, with #861 (serving headers and blocks) and #862
+        # (announcing new tips), against #809 and #814: a second kth syncs
+        # from kth (1003), a BCHN whose only peer is kth hears of each new
+        # block (1004), and the height kth gives a peer that connects later
+        # (1007). node/announce-blocks (8dd584aa) is #814 on #809.
+          - name: master-serve-announce
+            branch: test/master-a661a143
+            serve: true
+            announce: true
             network: true
-          - name: relay-out-on-master
-            branch: test/797-on-master
+          - name: announce-814
+            branch: node/announce-blocks
+            serve: true
+            announce: true
             network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
