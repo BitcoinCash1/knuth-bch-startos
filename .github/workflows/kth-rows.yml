@@ -22,14 +22,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # kth master needs GCC 16.2 since #865 (a6717f81). #867 on #870 as
-        # Fernando rebased it onto that master (828e0a64), and #816 rebuilt
-        # merged with that master, through the same rows as before.
-          - name: 867-on-870-gcc16
-            branch: test/867-on-870
-            gcc: "16"
-            blockchain: true
-          - name: 816-on-a6717f81-gcc16
+        # #816 with its header check (d454904e): a cmpctblock whose header
+        # fails proof of work or asks other work goes to the header ingest
+        # before any mempool pass. Merged with master a6717f81, on GCC 16.2.
+          - name: 816-header-check-gcc16
             branch: test/816-on-a6717f81
             gcc: "16"
             domain: true
