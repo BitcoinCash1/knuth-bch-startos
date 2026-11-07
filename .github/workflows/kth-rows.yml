@@ -22,19 +22,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #816 (compact blocks, BIP152) rebuilt on master a661a143 and #796
-        # (592fdcf3): serving through #861's chain_data, announcing through
-        # #862's announce_tip, reconstructions submitted through #846's
-        # submit_block (d2d6b538). Rows 1003, 1004 and 1005 (blocks move as
-        # cmpctblock both ways). #814 runs in the run before this one.
-          - name: compact-blocks-rebuilt
-            branch: test/816-on-master
-            serve: true
-            announce: true
-            compact: true
-            domain: true
+        # #867 on #870 again, now answering vsize as the mempool's virtual size
+        # and the fee rate per kB of it (ae39ed67). #816 runs in the run
+        # before this one.
+          - name: 867-on-870
+            branch: test/867-on-870
             blockchain: true
-            network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
