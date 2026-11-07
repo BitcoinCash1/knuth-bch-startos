@@ -22,10 +22,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #816's "before": master at a661a143, the base #816 was rebuilt on,
-        # through the same serve, announce and compact-block rows.
-          - name: master-a661a143-compact
-            branch: test/master-a661a143
+        # kth master needs GCC 16.2 since #865 (a6717f81). #867 on #870 as
+        # Fernando rebased it onto that master (828e0a64), and #816 rebuilt
+        # merged with that master, through the same rows as before.
+          - name: 867-on-870-gcc16
+            branch: test/867-on-870
+            gcc: "16"
+            blockchain: true
+          - name: 816-on-a6717f81-gcc16
+            branch: test/816-on-a6717f81
+            gcc: "16"
+            domain: true
+            blockchain: true
             serve: true
             announce: true
             compact: true
@@ -34,7 +42,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 330
     env:
-      IMAGE: kthnode/gcc15-ubuntu24.04@sha256:4988fdeb3654c2b5ea591ffa4454f67e1a631549449c62e35060ba69da79eb67
+      # GCC 15 for branches on master before #865; GCC 16.2 from it on.
+      IMAGE: ${{ matrix.gcc == '16' && 'kthnode/gcc16-ubuntu24.04@sha256:cde0d8a8b911ba290e4019fa4fac81723c7cae93cd864e509fd93a7c05d25dfe' || 'kthnode/gcc15-ubuntu24.04@sha256:4988fdeb3654c2b5ea591ffa4454f67e1a631549449c62e35060ba69da79eb67' }}
+      GCC: ${{ matrix.gcc || '15' }}
+      CCACHE_PREFIX: kth-ccache-${{ matrix.gcc == '16' && 'gcc16-' || '' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -54,19 +65,19 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: conan2
-          key: kth-conan2-gcc15-${{ hashFiles('kth-src/conan.lock', 'kth-src/conanfile.py') }}
+          key: kth-conan2-gcc${{ env.GCC }}-${{ hashFiles('kth-src/conan.lock', 'kth-src/conanfile.py') }}
           restore-keys: |
-            kth-conan2-gcc15-
+            kth-conan2-gcc${{ env.GCC }}-
       # Per branch, so a re-run of the same branch finds its own objects; any
       # branch's cache otherwise, which is mostly master's code.
       - name: Restore the compiler cache
         uses: actions/cache/restore@v6
         with:
           path: ccache
-          key: kth-ccache-${{ matrix.branch }}-${{ github.run_id }}
+          key: ${{ env.CCACHE_PREFIX }}${{ matrix.branch }}-${{ github.run_id }}
           restore-keys: |
-            kth-ccache-${{ matrix.branch }}-
-            kth-ccache-
+            ${{ env.CCACHE_PREFIX }}${{ matrix.branch }}-
+            ${{ env.CCACHE_PREFIX }}
       - name: Build kth and its tests in the kth toolchain
         run: |
           TARGETS="kth_node_test node-exe"
@@ -111,13 +122,13 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: conan2
-          key: kth-conan2-gcc15-${{ hashFiles('kth-src/conan.lock', 'kth-src/conanfile.py') }}
+          key: kth-conan2-gcc${{ env.GCC }}-${{ hashFiles('kth-src/conan.lock', 'kth-src/conanfile.py') }}
       - name: Save the compiler cache
         if: always()
         uses: actions/cache/save@v6
         with:
           path: ccache
-          key: kth-ccache-${{ matrix.branch }}-${{ github.run_id }}
+          key: ${{ env.CCACHE_PREFIX }}${{ matrix.branch }}-${{ github.run_id }}
       - name: Run kth's node test suite
         run: |
           TEST=$(find kth-src/build -name kth_node_test -type f -perm -u+x | head -1)
@@ -199,15 +210,16 @@ jobs:
           KTH=$(find kth-src/build -name kth -type f -perm -u+x -path '*node-exe*' | head -1)
           echo "node binary: $KTH"
           cp "$KTH" kth-built
-          if [ "${{ steps.image.outputs.cache-hit }}" = "true" ]; then
+          # The kept image carries GCC 15's C++ runtime; a GCC 16 kth needs its own.
+          if [ "${{ steps.image.outputs.cache-hit }}" = "true" ] && [ "$GCC" = "15" ]; then
             docker load -i /tmp/knuth-e2e.tar
             printf 'FROM knuth-e2e\nCOPY kth-built /usr/local/bin/kth\n' > Dockerfile.built
           else
             # The kept image was evicted (each row's compiler cache is about 1 GB).
             # Build the package's own runtime stage around this kth instead. That
-            # stage takes only the GCC 15 C++ runtime from the build stage, and
+            # stage takes only the C++ runtime from the build stage, and
             # the toolchain image already holds it, so nothing compiles twice.
-            echo "package image not cached; building its runtime stage"
+            echo "building the package's runtime stage on the GCC $GCC toolchain"
             { echo "FROM --platform=linux/amd64 $IMAGE AS kth-build"
               awk '/^# ── Runtime/,0' Dockerfile \
                 | sed 's#^COPY --from=kth-build /deploy/direct_deploy/kth/bin/kth /usr/local/bin/kth$#COPY kth-built /usr/local/bin/kth#'
