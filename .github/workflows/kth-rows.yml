@@ -22,34 +22,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #872 at ab37b8d4 (44e5d007 did not compile) under three rebuilds:
-        # the relay-bit handshake test (3ffa895e; RED: the bit hard-coded
-        # false), #816 (24a11e0d) and #797 (1921152f; RED: nothing owed).
-          - name: 872c-relay-handshake
-            branch: test/872c-relay-handshake
-            gcc: "16"
-            network: true
-          - name: 872c-relay-handshake-red
-            branch: test/872c-relay-handshake-red
-            gcc: "16"
-            network: true
-          - name: 816-on-872c
-            branch: test/816-on-872c
-            gcc: "16"
-            domain: true
-            blockchain: true
-            serve: true
-            announce: true
-            compact: true
-            network: true
-          - name: 797-on-872c
-            branch: test/797-on-872c
-            gcc: "16"
-            network: true
-          - name: 797-on-872c-red
-            branch: test/797-on-872c-red
-            gcc: "16"
-            network: true
+        # #833 with Reconnect and ChannelEndpointChanged (6a791dbc), and RED:
+        # the same with that handling taken out and its tests kept (d15e6c20).
+          - name: 833-reconnect
+            branch: test/833-reconnect
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: 833-reconnect-red
+            branch: test/833-reconnect-red
+            sv2: true
+            noise: true
+            sv2_mining: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
