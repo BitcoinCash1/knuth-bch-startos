@@ -22,16 +22,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #872 with #796's handshake test (2da4c5de): the version message's
-        # relay bit read from a real handshake, relay on and off; and the
-        # same test with the relay bit hard-coded false (RED).
-          - name: 872-relay-handshake
-            branch: network/relay-handshake-test
+        # #816 rebuilt on #872 (df803aa1): #796 out, compact blocks on
+        # #872's transaction relay and master 12c249f0.
+          - name: 816-on-872
+            branch: test/816-rebuilt-on-872
             gcc: "16"
-            network: true
-          - name: 872-relay-handshake-red
-            branch: test/872-relay-handshake-red
-            gcc: "16"
+            domain: true
+            blockchain: true
+            serve: true
+            announce: true
+            compact: true
             network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
