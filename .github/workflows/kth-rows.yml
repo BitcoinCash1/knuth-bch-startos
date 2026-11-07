@@ -22,14 +22,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #816 rebuilt (d2d6b538) again, with row 1005's transactions paying
-        # 1.1 sat/B so they are in kth's mempool before mining, and row 1004
-        # counting cmpctblock announcements to a high-bandwidth peer.
-          - name: compact-blocks-rebuilt
-            branch: test/816-on-master
-            serve: true
+        # Build time with the Conan packages kept and a 4 GB compiler cache:
+        # #814's branch, built twice; the first run fills both caches, the
+        # second (dispatched by hand) shows the warm build.
+          - name: 814-version-height
+            branch: test/814-version-height
             announce: true
-            compact: true
             network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -48,13 +46,25 @@ jobs:
           git clone --depth 1 --branch "${{ matrix.branch }}" https://github.com/CyberAshven/kth.git kth-src
           git -C kth-src log -1 --format='%H %s' | tee kth-commit.txt
         shell: bash
+      # The packages kth depends on (boost alone took 9 of the 13 minutes),
+      # kept between runs and keyed on kth's lock file, as kth's own CI does.
+      - name: Restore the Conan packages
+        id: restore-conan
+        uses: actions/cache/restore@v6
+        with:
+          path: conan2
+          key: kth-conan2-gcc15-${{ hashFiles('kth-src/conan.lock', 'kth-src/conanfile.py') }}
+          restore-keys: |
+            kth-conan2-gcc15-
+      # Per branch, so a re-run of the same branch finds its own objects; any
+      # branch's cache otherwise, which is mostly master's code.
       - name: Restore the compiler cache
         uses: actions/cache/restore@v6
         with:
           path: ccache
-          key: kth-ccache-${{ matrix.name }}-${{ github.run_id }}
+          key: kth-ccache-${{ matrix.branch }}-${{ github.run_id }}
           restore-keys: |
-            kth-ccache-${{ matrix.name }}-
+            kth-ccache-${{ matrix.branch }}-
             kth-ccache-
       - name: Build kth and its tests in the kth toolchain
         run: |
@@ -64,9 +74,14 @@ jobs:
           if [ "${{ matrix.blockchain }}" = "true" ]; then TARGETS="$TARGETS kth_blockchain_test"; fi
           if [ "${{ matrix.network }}" = "true" ]; then TARGETS="$TARGETS kth_network_test"; fi
           if [ "${{ matrix.infrastructure }}" = "true" ]; then TARGETS="$TARGETS kth_infrastructure_test"; fi
-          mkdir -p ccache
-          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -v "$PWD/ccache:/ccache" -w /src \
-            -e TARGETS="$TARGETS" -e CCACHE_DIR=/ccache -e CCACHE_MAXSIZE=1200M -e CCACHE_BASEDIR=/src "$IMAGE" \
+          mkdir -p ccache conan2
+          # 4 GB: the whole build with its tests overflowed 1.2 GB (65 of 545
+          # hits). The sources are cloned fresh, so their times are new and
+          # only their contents can be trusted.
+          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -v "$PWD/ccache:/ccache" \
+            -v "$PWD/conan2:/root/.conan2" -w /src \
+            -e TARGETS="$TARGETS" -e CCACHE_DIR=/ccache -e CCACHE_MAXSIZE=4G -e CCACHE_BASEDIR=/src \
+            -e CCACHE_SLOPPINESS=include_file_mtime,include_file_ctime,time_macros "$IMAGE" \
             bash -euo pipefail -c '
               LAUNCH=""
               if command -v ccache >/dev/null || (apt-get update -qq && apt-get install -y -qq ccache >/dev/null); then
@@ -84,15 +99,24 @@ jobs:
               cmake --preset conan-release -DGLOBAL_BUILD=ON -DENABLE_TEST=ON -DCMAKE_BUILD_TYPE=Release $LAUNCH
               time cmake --build --preset conan-release -j"$(nproc)" --target $TARGETS
               if [ -n "$LAUNCH" ]; then ccache -s; fi
-              chmod -R a+rwX /ccache
+              # Only the built packages are worth keeping, not their build trees.
+              conan cache clean "*" --source --build --download --temp || true
+              du -sh /root/.conan2 /ccache || true
+              chmod -R a+rwX /ccache /root/.conan2
             '
         shell: bash
+      - name: Save the Conan packages
+        if: always() && steps.restore-conan.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: conan2
+          key: kth-conan2-gcc15-${{ hashFiles('kth-src/conan.lock', 'kth-src/conanfile.py') }}
       - name: Save the compiler cache
         if: always()
         uses: actions/cache/save@v6
         with:
           path: ccache
-          key: kth-ccache-${{ matrix.name }}-${{ github.run_id }}
+          key: kth-ccache-${{ matrix.branch }}-${{ github.run_id }}
       - name: Run kth's node test suite
         run: |
           TEST=$(find kth-src/build -name kth_node_test -type f -perm -u+x | head -1)
