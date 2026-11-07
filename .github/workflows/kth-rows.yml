@@ -22,12 +22,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Build time with the Conan packages kept and a 4 GB compiler cache:
-        # #814's branch, built twice; the first run fills both caches, the
-        # second (dispatched by hand) shows the warm build.
-          - name: 814-version-height
-            branch: test/814-version-height
+        # #816's "before": master at a661a143, the base #816 was rebuilt on,
+        # through the same serve, announce and compact-block rows.
+          - name: master-a661a143-compact
+            branch: test/master-a661a143
+            serve: true
             announce: true
+            compact: true
             network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
