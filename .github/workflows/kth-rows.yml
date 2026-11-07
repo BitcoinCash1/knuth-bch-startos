@@ -22,20 +22,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #872's new head (44e5d007, organize(transaction) renamed
-        # submit_transaction) under three rebuilds: the relay-bit handshake
-        # test (7da419e8; RED: the bit hard-coded false), #816 (7bde5af1) and
-        # #797 (8dc9b3d9; RED: nothing owed to any peer).
-          - name: 872b-relay-handshake
-            branch: test/872b-relay-handshake
+        # #872 at ab37b8d4 (44e5d007 did not compile) under three rebuilds:
+        # the relay-bit handshake test (3ffa895e; RED: the bit hard-coded
+        # false), #816 (24a11e0d) and #797 (1921152f; RED: nothing owed).
+          - name: 872c-relay-handshake
+            branch: test/872c-relay-handshake
             gcc: "16"
             network: true
-          - name: 872b-relay-handshake-red
-            branch: test/872b-relay-handshake-red
+          - name: 872c-relay-handshake-red
+            branch: test/872c-relay-handshake-red
             gcc: "16"
             network: true
-          - name: 816-on-872b
-            branch: test/816-on-872b
+          - name: 816-on-872c
+            branch: test/816-on-872c
             gcc: "16"
             domain: true
             blockchain: true
@@ -43,12 +42,12 @@ jobs:
             announce: true
             compact: true
             network: true
-          - name: 797-on-872b
-            branch: test/797-on-872b
+          - name: 797-on-872c
+            branch: test/797-on-872c
             gcc: "16"
             network: true
-          - name: 797-on-872b-red
-            branch: test/797-on-872b-red
+          - name: 797-on-872c-red
+            branch: test/797-on-872c-red
             gcc: "16"
             network: true
     name: kth ${{ matrix.name }}
