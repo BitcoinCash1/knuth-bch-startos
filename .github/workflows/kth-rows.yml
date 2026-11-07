@@ -22,12 +22,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #867 on #870 again, now answering vsize as the mempool's virtual size
-        # and the fee rate per kB of it (ae39ed67). #816 runs in the run
-        # before this one.
-          - name: 867-on-870
-            branch: test/867-on-870
-            blockchain: true
+        # #816 rebuilt (d2d6b538) again, with row 1005's transactions paying
+        # 1.1 sat/B so they are in kth's mempool before mining, and row 1004
+        # counting cmpctblock announcements to a high-bandwidth peer.
+          - name: compact-blocks-rebuilt
+            branch: test/816-on-master
+            serve: true
+            announce: true
+            compact: true
+            network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330

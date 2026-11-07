@@ -2290,7 +2290,9 @@ def announce_second_node(s: dict) -> None:
     text = log.read_text(errors="replace")[offset:] if log.exists() else ""
     seen["announcements B received"] = {
         "headers": len(re.findall(r"received: headers ", text)),
-        "inv of a block": len(re.findall(r"got inv: block ", text))}
+        "inv of a block": len(re.findall(r"got inv: block ", text)),
+        # A high-bandwidth BIP152 peer is announced to with the block itself.
+        "cmpctblock": len(re.findall(r"received: cmpctblock ", text))}
     peers = json.loads(bchn_b_cli("getpeerinfo"))
     seen["B's peers"] = [p.get("subver") for p in peers]
     ok = (synced and all(d is not None for d in delays) and len(peers) == 1
@@ -2349,6 +2351,9 @@ def compact_blocks_both_ways(s: dict) -> None:
     addr = wallet_address()
     keys = ("cmpctblock", "getblocktxn", "blocktxn", "block", "getdata")
     rounds: list = []
+    # Paying kth's own admission price, so that the block's transactions are
+    # in kth's mempool before it is mined, whatever kth's fee policy.
+    cli("settxfee", "0.000011")
     for _ in range(3):
         txids = [cli("sendtoaddress", a, "0.01") for a in s["others"][:2]]
         waited = time.monotonic()
@@ -2378,6 +2383,7 @@ def compact_blocks_both_ways(s: dict) -> None:
             "seconds to kth": kth_at, "seconds to B": b_at,
             "bytes BCHN sent kth": {k: a1.get(k, 0) - a0.get(k, 0) for k in keys},
             "bytes B received from kth": {k: b1.get(k, 0) - b0.get(k, 0) for k in keys}})
+    cli("settxfee", "0")
     seen["rounds"] = rounds
     ok = synced and all(
         r["transactions in kth's mempool before mining"] and r["seconds to kth"] is not None
