@@ -22,21 +22,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Master a661a143, with #861 (serving headers and blocks) and #862
-        # (announcing new tips), against #809 and #814: a second kth syncs
-        # from kth (1003), a BCHN whose only peer is kth hears of each new
-        # block (1004), and the height kth gives a peer that connects later
-        # (1007). node/announce-blocks (8dd584aa) is #814 on #809.
-          - name: master-serve-announce
-            branch: test/master-a661a143
-            serve: true
-            announce: true
-            network: true
-          - name: announce-814
-            branch: node/announce-blocks
-            serve: true
-            announce: true
-            network: true
+        # #867 (testmempoolaccept) on #870 (the mempool's size limit and its
+        # raised minimum fee), with test acceptance asking that minimum too
+        # (2533bd42). Run 42360026909 covers #809 and #814 against master.
+          - name: 867-on-870
+            branch: test/867-on-870
+            blockchain: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
