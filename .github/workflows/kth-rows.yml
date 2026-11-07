@@ -22,18 +22,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #814 rebuilt on master a661a143 with only what #862 does not cover:
-        # the sync coordinator records each connected tip for the version
-        # message's height (3564cfbd). Row 1007, and the new integrated test;
-        # test/814-version-height-red is the same test without the fix. The
-        # SV2 stack runs in the run before this one.
-          - name: 814-version-height
-            branch: test/814-version-height
+        # #816 (compact blocks, BIP152) rebuilt on master a661a143 and #796
+        # (592fdcf3): serving through #861's chain_data, announcing through
+        # #862's announce_tip, reconstructions submitted through #846's
+        # submit_block (d2d6b538). Rows 1003, 1004 and 1005 (blocks move as
+        # cmpctblock both ways). #814 runs in the run before this one.
+          - name: compact-blocks-rebuilt
+            branch: test/816-on-master
+            serve: true
             announce: true
+            compact: true
+            domain: true
+            blockchain: true
             network: true
-          - name: 814-version-height-red
-            branch: test/814-version-height-red
-            announce: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
