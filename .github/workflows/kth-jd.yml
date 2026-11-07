@@ -19,17 +19,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: sv2-jd-client
-            branch: test/sv2-jd-client-announce
+          # The heads of 2026-11-08, each with #814 (3564cfbd) merged in:
+          # #832 061cfd60, #833 6a791dbc (Reconnect and ChannelEndpointChanged),
+          # #834 24f53129, #835 bd3fdb6b.
+          - name: sv2-jd-client-r3
+            branch: test/832-jd-r3
             row: "25"
             p2pool: alpha
-          - name: sv2-jd-payout-outputs
-            branch: test/sv2-jd-payout-outputs-announce
+          - name: sv2-jd-failover-r3
+            branch: test/833-jd-r3
+            row: "25"
+            p2pool: alpha
+          - name: sv2-jd-payout-outputs-r3
+            branch: test/834-jd-r3
             row: "25b"
             p2pool: alpha
           # BCH large templates need P2Pool's side of 0x4C54 (P2Pool #63, on alpha).
-          - name: sv2-jd-large-templates
-            branch: test/sv2-jd-large-templates-announce
+          - name: sv2-jd-large-templates-r3
+            branch: test/835-jd-r3
             row: "25c"
             p2pool: alpha
     name: kth ${{ matrix.name }}
