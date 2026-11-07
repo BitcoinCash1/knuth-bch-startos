@@ -22,14 +22,40 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #804 (the Template Provider) rebuilt on master a661a143: #791 taken
-        # out (433d813a), master merged with #846 (9358c930), and solutions
-        # submitted through block_chain::submit_block (961b4f69). Rows 21
-        # and 23. #867 on #870 runs in the run before this one.
-          - name: sv2-template-flow-rebuilt
-            branch: test/804-on-master
+        # The rest of the SV2 stack, each PR merging its rebuilt parent: #807
+        # on #804 (test/804-on-master, 961b4f69, in the run before this one),
+        # #817 on #807, #832 on #817, #833 and #834 on #832, #835 on #834.
+        # The tests whose solutions connect run the coordinator with the
+        # submission endpoint bound (c7a2c238, 061cfd60).
+          - name: sv2-noise-rebuilt
+            branch: test/807-on-master
             sv2: true
-            blockchain: true
+            noise: true
+          - name: sv2-mining-channels-rebuilt
+            branch: test/817-on-master
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: sv2-jd-client-rebuilt
+            branch: test/832-on-master
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: sv2-jd-failover-rebuilt
+            branch: test/833-on-master
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: sv2-jd-payout-outputs-rebuilt
+            branch: test/834-on-master
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: sv2-jd-large-templates-rebuilt
+            branch: test/835-on-master
+            sv2: true
+            noise: true
+            sv2_mining: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
