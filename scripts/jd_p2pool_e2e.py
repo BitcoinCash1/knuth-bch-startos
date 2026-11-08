@@ -1611,7 +1611,9 @@ def row_tdp(binary: str, identity: str, solo: str) -> None:
         ensure_kth()
         verdict = kth_verdict(block_hash)
         kth_hash, _ = call(KTH, "getblockhash", height)
-        if verdict is not None or kth_hash == block_hash:
+        # kth's getblockhash already names a block whose header is in, while
+        # its body is still being validated; wait for the tip to reach it too.
+        if verdict is not None or (kth_hash == block_hash and (kth_height() or 0) >= height):
             break
         if time.monotonic() > deadline:
             fail(f"row {row}: kth logged no '[sv2] Submitted block {block_hash}' and has no such "
