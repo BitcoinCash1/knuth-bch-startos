@@ -22,16 +22,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Long polling for getblocktemplate (#874, rpc/longpoll at f555007d), and
-        # master (12c249f0) as the baseline, both with the long-polling row.
-          - name: 874-longpoll
-            branch: test/874-longpoll
-            gcc: "16"
-            longpoll: true
-          - name: 874-baseline
-            branch: test/874-baseline
-            gcc: "16"
-            longpoll: true
+        # BCH large templates on Template Distribution (sv2/tdp-large-templates at
+        # f9daa50b, on #835), and RED: its Template Provider changes taken out,
+        # the tests kept.
+          - name: tdp-lt
+            branch: test/tdp-lt
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: tdp-lt-red
+            branch: test/tdp-lt-red
+            sv2: true
+            noise: true
+            sv2_mining: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
