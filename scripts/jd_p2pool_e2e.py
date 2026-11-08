@@ -14,6 +14,18 @@ BCH large templates (0x4C54) and a mempool that standard Job Declaration
 cannot carry: more than 65,535 transactions and more than one U24 frame of
 transaction data. The PPLNS block must hold that whole mempool.
 
+Row tdp (KTH_JD_ROW=tdp, branch test/tdp-lt-jd) has no Job Declaration.
+kth runs only its Template Provider, and P2Pool takes its templates from it
+(template_source = "sv2", over Noise pinned to the authority key kth prints).
+SRI's mining_device mines on P2Pool's own SV2 port. kth's mempool is row
+25c's, beyond what standard Template Distribution carries, so P2Pool must be
+granted BCH large templates (0x4C54) and take kth's push. A block found on
+that template goes back to kth with SubmitSolution, and BCHN must accept it
+with more than 65,535 transactions and more than 16 MiB. A kth without
+Template Distribution paging answers RequestTransactionData with
+template-too-large, and the row fails when no large block comes within the
+budget. The row records each block's PPLNS verdict but does not require one.
+
 How a PPLNS block is proven (P2Pool BCH v2, read before changing a row):
 - P2Pool BCH takes the donation and fee per share ("cuts-per-share" in its
   protocol string). Each share in the PPLNS window gives its own cut off its
@@ -337,11 +349,12 @@ def wallet_address() -> str:
 
 
 def bchn_relay_floor() -> list[str]:
-    # Row 25c: kth announces the spends it accepts, and BCHN A is its only peer.
-    # A floor above the spends' fee rate keeps them out of A's mempool, so A's
-    # next tip cannot confirm them. The fan-outs pay more and still get in.
-    # kth connects to its configured peer once, at start, so A stays online.
-    if EVIDENCE.get("row") != "25c":
+    # Rows 25c and tdp: kth announces the spends it accepts, and BCHN A is its
+    # only peer. A floor above the spends' fee rate keeps them out of A's
+    # mempool, so A's next tip cannot confirm them. The fan-outs pay more and
+    # still get in. kth connects to its configured peer once, at start, so A
+    # stays online.
+    if EVIDENCE.get("row") not in LARGE_ROWS:
         return []
     return [f"-minrelaytxfee={LARGE_RELAY_FLOOR_SATS_PER_KB / 100_000_000:.8f}"]
 
@@ -398,12 +411,20 @@ def toml_string(value: str) -> str:
     return f'"{value}"'
 
 
-def write_p2pool_config(payout: str) -> dict:
+def write_p2pool_config(payout: str, provider_key: str | None = None) -> dict:
+    """With provider_key (row tdp), P2Pool takes its templates from kth's
+    Template Provider on SV2_PORT over Noise, pinned to that authority key."""
     store = OUT / "p2pool-store"
     log_file = OUT / "p2pool-file.log"
     stats = OUT / "p2pool-stats"
     stats.mkdir(parents=True, exist_ok=True)
     config = OUT / "p2pool.toml"
+    source = "rpc" if provider_key is None else "sv2"
+    provider_address = f"127.0.0.1:{SV2_PORT}"
+    provider = "" if provider_key is None else (
+        f"template_provider_address = {toml_string(provider_address)}\n"
+        f"template_provider_authority_public_key = {toml_string(provider_key)}\n"
+    )
     # Keys are the fields Config::load accepts. Values and the reasons are in the report.
     text = f"""# Regtest config for the kth Job Declaration check.
 [network]
@@ -440,8 +461,8 @@ bch_share_chain = "mini"
 sv2_port = {P2POOL_SV2}
 sv2_authority_public_key = {toml_string(SV2_PUBLIC)}
 sv2_authority_secret_key = {toml_string(SV2_SECRET)}
-template_source = "rpc"
-network = "regtest"
+template_source = {toml_string(source)}
+{provider}network = "regtest"
 version_mask = "1fffffe0"
 pool_signature = "P2Poolv2"
 wait_for_chain_sync = false
@@ -462,7 +483,7 @@ hostname = "127.0.0.1"
 port = {API_PORT}
 """
     config.write_text(text, encoding="utf-8")
-    return {
+    settings = {
         "config": str(config),
         "sv2_port": P2POOL_SV2,
         "sv2_authority_public_key": SV2_PUBLIC,
@@ -471,7 +492,7 @@ port = {API_PORT}
         "chain": "bitcoin-cash",
         "bitcoin_cash_network": "regtest",
         "bch_share_chain": "mini",
-        "template_source": "rpc",
+        "template_source": source,
         "start_difficulty": 1,
         "minimum_difficulty": 1,
         "maximum_difficulty": 1,
@@ -482,6 +503,10 @@ port = {API_PORT}
         "donation_address": DONATION,
         "miner_address": None,
     }
+    if provider_key is not None:
+        settings["template_provider_address"] = provider_address
+        settings["template_provider_authority_public_key"] = provider_key
+    return settings
 
 
 def share_address(cli_bin: str, cashaddr: str) -> str:
@@ -527,7 +552,10 @@ def start_p2pool(binary: str, config: Path) -> None:
     )
 
 
-def start_kth(image: str, src: Path, binary: str, solo: str, identity: str) -> None:
+def start_kth(image: str, src: Path, binary: str, solo: str, identity: str | None) -> None:
+    """Without identity (row tdp) kth runs only its Template Provider: no
+    Mining Protocol and no JD client. Block announcements need no setting;
+    the branch has #814 merged, so kth announces its blocks to BCHN A."""
     DATA.mkdir(parents=True, exist_ok=True)
     # kth creates and initializes its database only when the directory is
     # absent; a directory that exists is opened as an existing database.
@@ -549,16 +577,19 @@ def start_kth(image: str, src: Path, binary: str, solo: str, identity: str) -> N
         "--sv2.noise", "true",
         "--sv2.static_key_file", "/data/sv2-static.key",
         "--sv2.authority_key_file", "/data/sv2-authority.key",
-        "--sv2.mining.enabled", "true", "--sv2.mining.address", solo,
-        "--sv2.jd.enabled", "true",
-        "--sv2.jd.mining_address", f"127.0.0.1:{P2POOL_SV2}",
-        "--sv2.jd.mining_authority_public_key", SV2_PUBLIC,
-        "--sv2.jd.jds_address", f"127.0.0.1:{P2POOL_SV2}",
-        "--sv2.jd.jds_authority_public_key", SV2_PUBLIC,
-        "--sv2.jd.user_identity", identity,
-        "--sv2.jd.mode", "full-template",
-        "--sv2.jd.response_timeout_seconds", "10",
     ]
+    if identity is not None:
+        argv += [
+            "--sv2.mining.enabled", "true", "--sv2.mining.address", solo,
+            "--sv2.jd.enabled", "true",
+            "--sv2.jd.mining_address", f"127.0.0.1:{P2POOL_SV2}",
+            "--sv2.jd.mining_authority_public_key", SV2_PUBLIC,
+            "--sv2.jd.jds_address", f"127.0.0.1:{P2POOL_SV2}",
+            "--sv2.jd.jds_authority_public_key", SV2_PUBLIC,
+            "--sv2.jd.user_identity", identity,
+            "--sv2.jd.mode", "full-template",
+            "--sv2.jd.response_timeout_seconds", "10",
+        ]
     EVIDENCE["kth_argv"] = argv
     try:
         subprocess.run(["docker", "rm", "-f", CONTAINER], capture_output=True, timeout=30)
@@ -773,19 +804,19 @@ def pplns_verdict(block: dict, solo: str) -> dict:
     }
 
 
-def ensure_on_bchn(height: int) -> dict:
+def ensure_on_bchn(height: int, wait: int = 20) -> dict:
     kth_hash, error = call(KTH, "getblockhash", height)
     if error or not kth_hash:
         fail(f"kth has no block at height {height}: {error}")
-    deadline = time.monotonic() + 20
+    deadline = time.monotonic() + wait
     while time.monotonic() < deadline:
         if bchn_hash(height) == kth_hash:
             return {"height": height, "hash": kth_hash, "path": "already on BCHN"}
         time.sleep(1)
-    raw, error = call(KTH, "getblock", kth_hash, 0)
+    raw, error = call(KTH, "getblock", kth_hash, 0, timeout=max(60, wait))
     if error or not isinstance(raw, str) or not raw:
         fail(f"kth getblock {kth_hash} did not return raw hex: {error}")
-    accepted, submit_error = call(BCHN, "submitblock", raw)
+    accepted, submit_error = call(BCHN, "submitblock", raw, timeout=max(60, wait))
     got = bchn_hash(height)
     if got != kth_hash:
         fail(
@@ -800,14 +831,15 @@ def ensure_on_bchn(height: int) -> dict:
     }
 
 
-def pull_blocks(cursor: int, stop_at: int, phase: str = "mine") -> tuple[int, list[dict]]:
+def pull_blocks(cursor: int, stop_at: int, phase: str = "mine",
+                wait: int = 20) -> tuple[int, list[dict]]:
     height = kth_height()
     if height is None:
         return cursor, []
     found = []
     while cursor < min(height, stop_at):
         cursor += 1
-        landed = ensure_on_bchn(cursor)
+        landed = ensure_on_bchn(cursor, wait)
         block = describe_block(cursor)
         block["landed"] = landed
         block["phase"] = phase
@@ -816,10 +848,13 @@ def pull_blocks(cursor: int, stop_at: int, phase: str = "mine") -> tuple[int, li
     return cursor, found
 
 
-def device_command(binary: str, pubkey: str, cores: int | None, multiplier: float | None) -> list[str]:
+def device_command(binary: str, pubkey: str, cores: int | None, multiplier: float | None,
+                   port: int = SV2_PORT, user: str = "kth-jd-e2e") -> list[str]:
+    # Rows 25, 25b and 25c mine on kth's SV2 port; row tdp on P2Pool's, with
+    # P2Pool's authority key and a P2Pool username.
     command = [
-        binary, "--address-pool", f"127.0.0.1:{SV2_PORT}",
-        "--pubkey-pool", pubkey, "--id-user", "kth-jd-e2e",
+        binary, "--address-pool", f"127.0.0.1:{port}",
+        "--pubkey-pool", pubkey, "--id-user", user,
     ]
     if cores is not None:
         command += ["--cores", str(cores)]
@@ -888,10 +923,13 @@ def mine_budget(printed_mh: int) -> tuple[int, float]:
     return max(MINE_BUDGET, int(CREDIT_TAIL * credit + block)), difficulty
 
 
+HASHRATE_LINE = re.compile(r"Measured CPU hashrate ≈ ([0-9][0-9,]*) MH/s")
+
+
 def probe_hashrate(binary: str, pubkey: str, before: int) -> int:
     log_path = OUT / "mining-device-probe.log"
     proc = start_device(device_command(binary, pubkey, None, None), log_path)
-    pattern = re.compile(r"Measured CPU hashrate ≈ ([0-9][0-9,]*) MH/s")
+    pattern = HASHRATE_LINE
     deadline = time.monotonic() + 45
     printed = None
     while time.monotonic() < deadline:
@@ -1048,14 +1086,7 @@ def row25b(binary: str, pubkey: str, solo: str) -> None:
         # template. Count acceptances only from here: the setup blocks above
         # each produced one for a template without the spends.
         accepted_before = kth_log_text().count("Pool accepted local template as job")
-        tip = json.loads(bitcoin_cli(BCHN_DIR, BCHN[1],
-            ["generatetoaddress", "1", EVIDENCE["addresses"]["funder"]], timeout=120).stdout)[0]
-        tip_block = json.loads(cli("getblock", tip, "1"))
-        if int(tip_block["nTx"]) != 1:
-            # kth relayed the spends to BCHN, which mined them into this tip.
-            fail(f"row 25c: BCHN's extra tip {tip} holds {tip_block['nTx']} transactions; "
-                 "the spends must stay in kth's mempool until the PPLNS block")
-        EVIDENCE["large_mempool"]["declaration_tip"] = tip
+        EVIDENCE["large_mempool"]["declaration_tip"] = empty_tip("the PPLNS block")
         deadline = time.monotonic() + 600
         while kth_log_text().count("Pool accepted local template as job") <= accepted_before:
             ensure_kth()
@@ -1141,9 +1172,10 @@ def row25b(binary: str, pubkey: str, solo: str) -> None:
     )
 
 
-# TEST ONLY: row 25c's mempool. Every output is P2SH(OP_TRUE), which regtest
-# relays as nonstandard and anyone can spend with the scriptSig 01 51 (a push
-# of the redeem script OP_1), so the harness signs nothing.
+# TEST ONLY: the mempool of rows 25c and tdp. Every output is P2SH(OP_TRUE),
+# which regtest relays as nonstandard and anyone can spend with the scriptSig
+# 01 51 (a push of the redeem script OP_1), so the harness signs nothing.
+LARGE_ROWS = ("25c", "tdp")
 LARGE_FUNDING_BLOCKS = 50
 LARGE_FANOUT = 2_000
 LARGE_SPENDS = LARGE_FUNDING_BLOCKS * LARGE_FANOUT  # 100,000 > 65,535
@@ -1200,24 +1232,24 @@ def send_to_kth(raws: list[str]) -> int:
         reply = post(KTH, json.dumps(body).encode(), timeout=300)
         if reply["status"] is None:
             # kth may have applied the batch; resending would read as refusals.
-            fail(f"row 25c: the batch request to kth was lost: {reply.get('transport')}")
+            fail(f"row {EVIDENCE['row']}: the batch request to kth was lost: {reply.get('transport')}")
         answers = reply["json"]
         if isinstance(answers, list) and len(answers) != len(chunk):
-            fail(f"row 25c: kth answered {len(answers)} of a {len(chunk)}-transaction batch")
+            fail(f"row {EVIDENCE['row']}: kth answered {len(answers)} of a {len(chunk)}-transaction batch")
         if not isinstance(answers, list):
             # No batch support: one call per transaction.
             for raw in chunk:
                 result, error = call(KTH, "sendrawtransaction", raw, timeout=60)
                 if error is not None:
-                    fail(f"row 25c: kth refused a spend: {error}")
+                    fail(f"row {EVIDENCE['row']}: kth refused a spend: {error}")
                 taken += 1
             continue
         for answer in answers:
             if not isinstance(answer, dict) or answer.get("error") is not None:
-                fail(f"row 25c: kth refused a spend in a batch: {str(answer)[:300]}")
+                fail(f"row {EVIDENCE['row']}: kth refused a spend in a batch: {str(answer)[:300]}")
             taken += 1
         if start % 20_000 == 0:
-            progress(f"row 25c: kth took {taken} of {len(raws)} spends")
+            progress(f"row {EVIDENCE['row']}: kth took {taken} of {len(raws)} spends")
     return taken
 
 
@@ -1225,14 +1257,15 @@ LARGE_FUNDING: dict = {}
 
 
 def fund_large_mempool(funder: str) -> None:
-    """Mine row 25c's P2SH(OP_TRUE) coinbases and their maturity during setup.
+    """Mine the P2SH(OP_TRUE) coinbases of rows 25c and tdp, and their
+    maturity, during setup.
 
     This runs before P2Pool and kth start. Mining 150 tips in a second while
     Job Declaration runs would race each declared job against the next tip.
     """
     decoded = json.loads(cli("decodescript", "51"))
     address = decoded["p2sh"]
-    progress(f"row 25c: mining {LARGE_FUNDING_BLOCKS} coinbases to P2SH(OP_TRUE) {address}")
+    progress(f"row {EVIDENCE['row']}: mining {LARGE_FUNDING_BLOCKS} coinbases to P2SH(OP_TRUE) {address}")
     hashes = json.loads(cli("generatetoaddress", str(LARGE_FUNDING_BLOCKS), address))
     bitcoin_cli(BCHN_DIR, BCHN[1], ["generatetoaddress", "100", funder], timeout=300)
     LARGE_FUNDING.update(address=address, hashes=hashes)
@@ -1250,7 +1283,8 @@ def fill_large_mempool(funder: str) -> dict:
         value = sats(coinbase["vout"][0]["value"])
         change = value - LARGE_FANOUT * LARGE_FANOUT_SATS - LARGE_FANOUT_FEE_SATS
         if change < 0:
-            fail(f"row 25c: coinbase {coinbase['txid']} pays {value} sats, too little for the fan-out")
+            fail(f"row {EVIDENCE['row']}: coinbase {coinbase['txid']} pays {value} sats, "
+                 "too little for the fan-out")
         outs = [output(LARGE_FANOUT_SATS, script) for _ in range(LARGE_FANOUT)]
         if change > 0:
             outs.append(output(change, script))
@@ -1263,7 +1297,7 @@ def fill_large_mempool(funder: str) -> dict:
     while (kth_height() or 0) < target:
         ensure_kth()
         if time.monotonic() > deadline:
-            fail(f"row 25c: kth did not reach height {target} after the fan-out")
+            fail(f"row {EVIDENCE['row']}: kth did not reach height {target} after the fan-out")
         time.sleep(1)
     padding = bytes([0x6A, 0x4C, len(LARGE_PADDING)]) + LARGE_PADDING
     raws = []
@@ -1274,17 +1308,18 @@ def fill_large_mempool(funder: str) -> dict:
                 output(0, padding),
             ]))
     total = sum(len(raw) // 2 for raw in raws)
-    progress(f"row 25c: sending {len(raws)} spends, {total} bytes, to kth")
+    progress(f"row {EVIDENCE['row']}: sending {len(raws)} spends, {total} bytes, to kth")
     taken = send_to_kth(raws)
     relayed = json.loads(cli("getmempoolinfo"))
     if int(relayed.get("size", 0)) != 0:
-        fail(f"row 25c: BCHN A took {relayed.get('size')} of the spends kth relayed; "
+        fail(f"row {EVIDENCE['row']}: BCHN A took {relayed.get('size')} of the spends kth relayed; "
              "the relay floor did not keep them out")
     info, error = call(KTH, "getmempoolinfo")
     if error is not None or not info or int(info.get("size", 0)) < LARGE_SPENDS:
-        fail(f"row 25c: kth mempool after the spends: {info!r} {error!r}")
+        fail(f"row {EVIDENCE['row']}: kth mempool after the spends: {info!r} {error!r}")
     if total <= U24_MAX or len(raws) <= SEQ0_64K_MAX:
-        fail(f"row 25c: the spends are not beyond the standard limits ({len(raws)} txs, {total} bytes)")
+        fail(f"row {EVIDENCE['row']}: the spends are not beyond the standard limits "
+             f"({len(raws)} txs, {total} bytes)")
     return {
         "address": address,
         "funding_blocks": LARGE_FUNDING_BLOCKS,
@@ -1300,9 +1335,321 @@ def require_large_block(height: int) -> dict:
     block = json.loads(cli("getblock", cli("getblockhash", str(height)), "1"))
     count, size = int(block["nTx"]), int(block["size"])
     if count <= SEQ0_64K_MAX + 1 or size <= U24_MAX:
-        fail(f"row 25c: PPLNS block {height} has {count} transactions and {size} bytes; "
+        fail(f"row {EVIDENCE['row']}: block {height} has {count} transactions and {size} bytes; "
              "the large template was not mined")
     return {"height": height, "transactions": count, "bytes": size}
+
+
+def empty_tip(until: str) -> str:
+    """Mine one BCHN tip, which must confirm none of kth's spends. kth builds
+    its declarations and templates on tips, so the next one holds the spends."""
+    tip = json.loads(bitcoin_cli(BCHN_DIR, BCHN[1],
+        ["generatetoaddress", "1", EVIDENCE["addresses"]["funder"]], timeout=120).stdout)[0]
+    tip_block = json.loads(cli("getblock", tip, "1"))
+    if int(tip_block["nTx"]) != 1:
+        # kth relayed the spends to BCHN, which mined them into this tip.
+        fail(f"row {EVIDENCE['row']}: BCHN's extra tip {tip} holds {tip_block['nTx']} transactions; "
+             f"the spends must stay in kth's mempool until {until}")
+    return tip
+
+
+# TEST ONLY: row tdp. P2Pool's Template Distribution client
+# (p2poolv2_lib/src/stratum/sv2/template_distribution.rs on P2Pool's
+# feat/tdp-large-templates) logs, among others:
+#   "Template Provider at {address} granted the large templates extension
+#    (0x4C54); it pushes each template's transactions"
+#   "Template Provider at {address} did not grant the large templates
+#    extension (0x4C54); asking for each template's transactions"
+#   "Template Provider at {address} did not answer RequestExtensions within
+#    {seconds}s; asking for each template's transactions"
+#   "Template Provider refused transactions for template {id}: {error_code}"
+#   "Template Provider template {id} at height {height} with {count} transactions"
+#   "Sent block {hash} to the Template Provider for template {id}"
+#   "Block {hash} does not fit SubmitSolution; submitting it over RPC"
+#   "Block {hash} could not reach the Template Provider; submitting it over RPC"
+#   "Template Provider connection to {address} ended: {reason}; reconnecting
+#    to {address} in {seconds}s"
+# A template is published only after its list gives its merkle path. A
+# connection granted the extension never sends RequestTransactionData, and
+# one core Success carries at most 65,535 transactions, so a published
+# template with more came in kth's push.
+TDP_GRANTED = "granted the large templates extension (0x4C54)"
+TDP_NOT_GRANTED = (
+    "did not grant the large templates extension (0x4C54)",
+    "did not answer RequestExtensions within",
+)
+TDP_PUBLISHED = re.compile(r"Template Provider template (\d+) at height (\d+) with (\d+) transactions")
+TDP_REFUSED = re.compile(r"Template Provider refused transactions for template (\d+): (\S+)")
+TDP_SENT = re.compile(r"Sent block ([0-9a-f]{64}) to the Template Provider for template (\d+)")
+TDP_OVER_RPC = (
+    "does not fit SubmitSolution; submitting it over RPC",
+    "could not reach the Template Provider; submitting it over RPC",
+)
+TDP_ENDED = "Template Provider connection to"
+TOO_LARGE = "template-too-large"
+# kth's Template Provider (src/node/src/sv2/template_provider.cpp) logs
+#   "[sv2] Submitted block {hash}: accepted"
+#   "[sv2] Refusing transaction data for template {id}: too large for
+#    RequestTransactionData.Success"
+KTH_SUBMITTED = re.compile(r"\[sv2\] Submitted block ([0-9a-f]{64}): (.+)")
+KTH_TOO_LARGE = "[sv2] Refusing transaction data for template"
+# Seconds for P2Pool to log kth's answer to RequestExtensions (P2Pool itself
+# waits 10 s for it), for kth's large template to reach P2Pool (row 25c's wait
+# for its declaration), and for kth and then BCHN to take a large block.
+TDP_SETUP_WAIT = 60
+TDP_TEMPLATE_WAIT = 600
+TDP_LANDING_WAIT = 180
+
+
+def published_templates(text: str) -> dict[int, dict]:
+    """The templates P2Pool published, by id. The console and file logs both
+    hold each line."""
+    found: dict[int, dict] = {}
+    for match in TDP_PUBLISHED.finditer(text):
+        template_id = int(match.group(1))
+        found[template_id] = {
+            "template_id": template_id,
+            "height": int(match.group(2)),
+            "transactions": int(match.group(3)),
+        }
+    return found
+
+
+def large_templates(text: str) -> dict[int, dict]:
+    """Published templates with more transactions than one core Success carries."""
+    return {template_id: item for template_id, item in published_templates(text).items()
+            if item["transactions"] > SEQ0_64K_MAX}
+
+
+def too_large_refusals(text: str) -> list[int]:
+    return sorted({int(match.group(1)) for match in TDP_REFUSED.finditer(text)
+                   if match.group(2) == TOO_LARGE})
+
+
+def kth_verdict(block_hash: str) -> str | None:
+    """What kth's Template Provider logged for a solution's block, if anything."""
+    verdict = None
+    for match in KTH_SUBMITTED.finditer(kth_log_text()):
+        if match.group(1) == block_hash:
+            verdict = match.group(2).strip()
+    return verdict
+
+
+def device_hashrate(proc: subprocess.Popen, log_path: Path) -> int:
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline:
+        ensure_kth()
+        ensure_p2pool()
+        match = HASHRATE_LINE.search(read_text(log_path))
+        if match:
+            return int(match.group(1).replace(",", ""))
+        if proc.poll() is not None:
+            fail(f"mining_device exited {proc.returncode} before it measured its hashrate. log:\n"
+                 + read_text(log_path)[-2000:])
+        time.sleep(0.2)
+    fail("mining_device did not print 'Measured CPU hashrate' within 45s. log:\n"
+         + read_text(log_path)[-2000:])
+
+
+def block_budget(printed_mh: int) -> tuple[int, float]:
+    # Row tdp: the device mines on P2Pool's own SV2 port. P2Pool opens a
+    # channel at the difficulty its nominal hashrate asks for, held between
+    # minimum_difficulty and maximum_difficulty (initial_difficulty in
+    # stratum/sv2/mining.rs), both 1 here, and a regtest block needs far less,
+    # so every share the device finds is a block. One takes DIFF1_HASHES
+    # hashes on average, and CREDIT_TAIL such waits miss a block about
+    # e^-CREDIT_TAIL of the time.
+    if printed_mh <= 0:
+        fail("mining_device reported 0 MH/s, so the time to a difficulty-1 block cannot be derived")
+    hps = (printed_mh - 0.5) * 1_000_000
+    expected = DIFF1_HASHES / hps
+    if FLOOR_MARGIN * expected > MINE_BUDGET - 30:
+        fail(f"mining_device measured about {printed_mh} MH/s. A block at difficulty 1 "
+             f"would take about {expected:.0f}s, past the {MINE_BUDGET}s budget")
+    return max(MINE_BUDGET, int(CREDIT_TAIL * expected)), expected
+
+
+def no_large_block(budget: int, answer: str) -> NoReturn:
+    """Row tdp's failure when the budget ends with no large block: what kth
+    answered P2Pool, and why P2Pool had no large template to mine."""
+    row = EVIDENCE["row"]
+    text = p2pool_log_text()
+    refused = too_large_refusals(text)
+    kth_refusal = matching_lines(kth_log_text(), (KTH_TOO_LARGE,), 1)
+    largest = max(published_templates(text).values(),
+                  key=lambda item: item["transactions"], default=None)
+    ended = matching_lines(text, (TDP_ENDED,), 1)
+    parts = [
+        f"row {row}: no block of more than {SEQ0_64K_MAX:,} transactions and {U24_MAX:,} bytes "
+        f"went back to kth through SubmitSolution within the {budget}s budget."
+    ]
+    if TDP_GRANTED not in answer:
+        parts.append(f"kth did not grant 0x4C54 on Template Distribution (P2Pool: {answer.strip()}).")
+    if refused:
+        parts.append(
+            f"kth answered RequestTransactionData for template(s) {refused} with {TOO_LARGE}"
+            + (f" ({kth_refusal[-1].strip()})" if kth_refusal else "")
+            + ": this kth has no Template Distribution paging, so P2Pool never had the "
+            "large template to mine."
+        )
+    if largest:
+        parts.append(f"The largest template P2Pool published held {largest['transactions']:,} "
+                     f"transactions (template {largest['template_id']}, height {largest['height']}).")
+    if ended:
+        parts.append(f"Last provider connection end: {ended[-1].strip()}")
+    fail(" ".join(parts) + " blocks:\n" + json.dumps(EVIDENCE["blocks"], indent=2)[:3000])
+
+
+def row_tdp(binary: str, identity: str, solo: str) -> None:
+    row = EVIDENCE["row"]
+    tdp: dict = {}
+    EVIDENCE["template_distribution"] = tdp
+    progress(f"row {row}: waiting for kth's answer to P2Pool's RequestExtensions (0x4C54)")
+    deadline = time.monotonic() + TDP_SETUP_WAIT
+    while True:
+        ensure_kth()
+        ensure_p2pool()
+        answers = matching_lines(p2pool_log_text(), (TDP_GRANTED, *TDP_NOT_GRANTED))
+        if answers:
+            break
+        if time.monotonic() > deadline:
+            fail(f"row {row}: P2Pool logged no answer from kth's Template Provider to "
+                 f"RequestExtensions within {TDP_SETUP_WAIT}s, so its Template Distribution "
+                 "client never set up. P2Pool tail:\n" + tail(p2pool_log_text(), 40))
+        time.sleep(1)
+    answer = answers[-1]
+    tdp["extension_answer"] = answer
+    tdp["granted"] = TDP_GRANTED in answer
+    # Not a failure yet: a kth without the extension goes on to answer
+    # template-too-large, which the failure at the end of the budget names.
+    progress(f"row {row}: kth {'granted' if tdp['granted'] else 'did not grant'} 0x4C54")
+
+    EVIDENCE["large_mempool"] = fill_large_mempool(EVIDENCE["addresses"]["funder"])
+    # kth's Template Provider builds a template on each tip, never on a
+    # mempool change, so one more tip makes it build one from the spends.
+    EVIDENCE["large_mempool"]["template_tip"] = empty_tip("the large block")
+    progress(f"row {row}: waiting for kth's template of the spends to reach P2Pool")
+    deadline = time.monotonic() + TDP_TEMPLATE_WAIT
+    while True:
+        ensure_kth()
+        ensure_p2pool()
+        text = p2pool_log_text()
+        large, refused = large_templates(text), too_large_refusals(text)
+        if large or refused:
+            break
+        if time.monotonic() > deadline:
+            ended = matching_lines(text, (TDP_ENDED,), 3)
+            fail(f"row {row}: within {TDP_TEMPLATE_WAIT}s of the tip, P2Pool published no template "
+                 f"of more than {SEQ0_64K_MAX:,} transactions and logged no {TOO_LARGE} refusal. "
+                 + (f"Provider connection: {' | '.join(ended)}. " if ended else "")
+                 + "P2Pool tail:\n" + tail(text, 40))
+        time.sleep(2)
+    tdp["large_templates"] = list(large.values())
+    tdp["refused_templates"] = refused
+    if large:
+        progress(f"row {row}: P2Pool published kth's pushed templates {tdp['large_templates']}")
+    else:
+        progress(f"row {row}: kth answered {TOO_LARGE} for template(s) {refused}; "
+                 "mining the budget anyway")
+
+    before = kth_height()
+    if before is None:
+        fail("kth RPC stopped answering after the large template")
+    EVIDENCE["heights"]["before_device"] = before
+    log_path = OUT / "mining-device.log"
+    proc = start_device(
+        device_command(binary, SV2_PUBLIC, None, None, port=P2POOL_SV2, user=identity),
+        log_path,
+    )
+    printed = device_hashrate(proc, log_path)
+    budget, expected = block_budget(printed)
+    EVIDENCE["hashrate"] = {
+        "printed_mh_s": printed,
+        "channel_difficulty": 1,
+        "expected_block_seconds": round(expected, 1),
+        "mine_budget_s": budget,
+    }
+    progress(f"row {row}: measured {printed} MH/s, a block about every {expected:.0f}s, "
+             f"mining budget {budget}s")
+    cursor = before
+    sent = None
+    deadline = time.monotonic() + budget
+    while sent is None:
+        ensure_kth()
+        ensure_p2pool()
+        if proc.poll() is not None:
+            fail("mining_device exited before a block on the large template. log:\n"
+                 + read_text(log_path)[-2000:])
+        if time.monotonic() > deadline:
+            no_large_block(budget, answer)
+        share_credit()
+        text = p2pool_log_text()
+        large = large_templates(text)
+        over_rpc = matching_lines(text, TDP_OVER_RPC, 1)
+        if over_rpc:
+            fail(f"row {row}: P2Pool sent a found block over RPC instead of SubmitSolution: "
+                 f"{over_rpc[-1].strip()}")
+        for match in TDP_SENT.finditer(text):
+            if int(match.group(2)) in large:
+                sent = (match.group(1), int(match.group(2)))
+                break
+        cursor, blocks = pull_blocks(cursor, cursor + EASY_BLOCK_LIMIT, wait=TDP_LANDING_WAIT)
+        for block in blocks:
+            block["pplns"] = pplns_verdict(block, solo)
+        if sent is None:
+            time.sleep(2)
+    stop_device()
+
+    block_hash, template_id = sent
+    template = large[template_id]
+    height = template["height"]
+    tdp["p2pool_sent"] = matching_lines(text, (f"Sent block {block_hash}",), 1)[-1].strip()
+    progress(f"row {row}: P2Pool sent block {block_hash} on template {template_id} to kth")
+    # kth logs its verdict once the block is connected or refused.
+    deadline = time.monotonic() + TDP_LANDING_WAIT
+    while True:
+        ensure_kth()
+        verdict = kth_verdict(block_hash)
+        kth_hash, _ = call(KTH, "getblockhash", height)
+        if verdict is not None or kth_hash == block_hash:
+            break
+        if time.monotonic() > deadline:
+            fail(f"row {row}: kth logged no '[sv2] Submitted block {block_hash}' and has no such "
+                 f"block at height {height} {TDP_LANDING_WAIT}s after P2Pool's SubmitSolution. "
+                 "kth tail:\n" + tail(kth_log_text(), 30))
+        time.sleep(1)
+    tdp["kth_submitted"] = verdict
+    if verdict is not None and not verdict.startswith("accepted"):
+        fail(f"row {row}: kth refused block {block_hash} from P2Pool's SubmitSolution: {verdict}")
+    cursor, _ = pull_blocks(cursor, height, wait=TDP_LANDING_WAIT)
+    block = next((item for item in EVIDENCE["blocks"] if item["hash"] == block_hash), None)
+    if block is None:
+        fail(f"row {row}: kth's block at height {height} is not {block_hash}, the block P2Pool sent")
+    block.setdefault("pplns", pplns_verdict(block, solo))
+    # BCHN accepted it: ensure_on_bchn found it at its height, or submitted it.
+    shape = require_large_block(height)
+    if shape["transactions"] != template["transactions"] + 1:
+        fail(f"row {row}: block {height} has {shape['transactions']} transactions, but P2Pool's "
+             f"template {template_id} had {template['transactions']} and the coinbase")
+    if TDP_GRANTED not in p2pool_log_text():
+        fail(f"row {row}: block {height} is large, but P2Pool never logged '{TDP_GRANTED}'")
+    tip = cli("getbestblockhash")
+    EVIDENCE["large_template"] = shape
+    EVIDENCE["assertions"] = {
+        "extension_granted": True,
+        "large_template": template,
+        "large_block": {**shape, "hash": block_hash},
+        "p2pool_submit_solution": tdp["p2pool_sent"],
+        "kth_submitted": verdict or "(not in kth's log; kth's chain has the block)",
+        "bchn_path": block["landed"]["path"],
+        "bchn_tip": tip,
+        "bchn_tip_is_block": tip == block_hash,
+        "pplns_match": block["pplns"]["match"],
+    }
+    tdp["p2pool_lines"] = matching_lines(
+        p2pool_log_text(), ("Template Provider", "Submitting BCH block candidate"), 40)
+    progress(f"row {row}: block {height} {block_hash}, {shape['transactions']:,} transactions and "
+             f"{shape['bytes']:,} bytes, went through SubmitSolution to kth and BCHN accepted it")
 
 
 def record_p2pool_api() -> None:
@@ -1327,12 +1674,14 @@ def copy_tail(src: Path, dest: Path, limit: int = 400_000) -> None:
 def attach_logs() -> None:
     EVIDENCE["kth_log_lines"] = matching_lines(
         kth_log_text(),
-        ("[sv2 jd]", "Noise authority public key", "[sv2] Cannot start", "[sv2] failed"),
+        ("[sv2 jd]", "Noise authority public key", "[sv2] Cannot start", "[sv2] failed",
+         "[sv2] Submitted block", KTH_TOO_LARGE),
     )
     EVIDENCE["p2pool_log_lines"] = matching_lines(
         p2pool_log_text(),
         ("SV2 share", "Rejected SV2 custom job", "Block submitted", "invalid-custom-job",
-         "Stratum V2 listening", "Error polling block template", "Failed to load"),
+         "Stratum V2 listening", "Error polling block template", "Failed to load",
+         "Template Provider", "Submitting BCH block candidate"),
     )
 
 
@@ -1429,8 +1778,8 @@ def run() -> None:
         fail("missing docker")
     image = require_env("KTH_IMAGE")
     row = require_env("KTH_JD_ROW")
-    if row not in ("25", "25b", "25c"):
-        fail(f"KTH_JD_ROW must be 25, 25b or 25c, got {row!r}")
+    if row not in ("25", "25b", "25c", "tdp"):
+        fail(f"KTH_JD_ROW must be 25, 25b, 25c or tdp, got {row!r}")
     EVIDENCE["row"] = row
     src = Path(require_env("KTH_SRC")).resolve()
     if not src.is_dir():
@@ -1455,7 +1804,7 @@ def run() -> None:
     }
     progress("mining 101 blocks")
     bitcoin_cli(BCHN_DIR, BCHN[1], ["generatetoaddress", "101", funder], timeout=180)
-    if row == "25c":
+    if row in LARGE_ROWS:
         fund_large_mempool(funder)
     EVIDENCE["heights"]["after_funding"] = int(cli("getblockcount"))
     start_bchn_b()
@@ -1466,23 +1815,39 @@ def run() -> None:
         fail(f"user identity does not fit kth's 255 bytes or P2Pool's 128-byte username: {identity}")
     EVIDENCE["addresses"]["share"] = share
     EVIDENCE["addresses"]["user_identity"] = identity
-    EVIDENCE["settings"] = write_p2pool_config(payout)
-    EVIDENCE["settings"]["user_identity"] = identity
-    EVIDENCE["settings"]["sv2_mining_address"] = solo
 
-    progress("starting P2Pool")
-    start_p2pool(p2pool_bin, OUT / "p2pool.toml")
-    progress("starting kth")
-    start_kth(image, src, binary, solo, identity)
-    pubkey = authority_key()
-    EVIDENCE["kth_authority_public_key"] = pubkey
-    if not port_open(SV2_PORT):
-        fail(f"kth SV2 port {SV2_PORT} is not accepting connections")
-
-    if row == "25":
-        row25(device_bin, pubkey, solo)
+    if row == "tdp":
+        # P2Pool pins the authority key kth prints, so kth starts first. Its
+        # JD client is off, so nothing in kth waits for P2Pool.
+        progress("starting kth")
+        start_kth(image, src, binary, solo, None)
+        pubkey = authority_key()
+        EVIDENCE["kth_authority_public_key"] = pubkey
+        if not port_open(SV2_PORT):
+            fail(f"kth SV2 port {SV2_PORT} is not accepting connections")
+        EVIDENCE["settings"] = write_p2pool_config(payout, pubkey)
+        EVIDENCE["settings"]["user_identity"] = identity
+        progress("starting P2Pool")
+        start_p2pool(p2pool_bin, OUT / "p2pool.toml")
+        row_tdp(device_bin, identity, solo)
     else:
-        row25b(device_bin, pubkey, solo)
+        EVIDENCE["settings"] = write_p2pool_config(payout)
+        EVIDENCE["settings"]["user_identity"] = identity
+        EVIDENCE["settings"]["sv2_mining_address"] = solo
+
+        progress("starting P2Pool")
+        start_p2pool(p2pool_bin, OUT / "p2pool.toml")
+        progress("starting kth")
+        start_kth(image, src, binary, solo, identity)
+        pubkey = authority_key()
+        EVIDENCE["kth_authority_public_key"] = pubkey
+        if not port_open(SV2_PORT):
+            fail(f"kth SV2 port {SV2_PORT} is not accepting connections")
+
+        if row == "25":
+            row25(device_bin, pubkey, solo)
+        else:
+            row25b(device_bin, pubkey, solo)
     record_p2pool_api()
     EVIDENCE["heights"]["bchn_after"] = int(cli("getblockcount"))
     EVIDENCE["heights"]["kth_after"] = kth_height()
