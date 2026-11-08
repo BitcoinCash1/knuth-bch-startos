@@ -970,6 +970,9 @@ def probe_hashrate(binary: str, pubkey: str, before: int) -> int:
 # The single-pool client (#832) logs the first; the failover client (#833),
 # with one configured entry, logs the second when it falls back to solo.
 SOLO_LINES = ("continuing solo mining", "Active entry: solo")
+# kth logs "Pool accepted local template as job N", or with failover (#833)
+# "Entry E accepted local template as job N".
+ACCEPTED = re.compile(r"(?:Pool|Entry \d+) accepted local template as job")
 
 
 def fallback_line(text: str) -> str:
@@ -986,8 +989,8 @@ def refused(text: str) -> bool:
 def row25(binary: str, pubkey: str, solo: str) -> None:
     progress("row 25: waiting for P2Pool to refuse the plain coinbase")
     text = wait_kth_line(refused, 90, "kth to log the pool's refusal and continue solo mining")
-    if "Pool accepted local template as job" in text:
-        fail("row 25: kth logged 'Pool accepted local template as job' without the payout extension")
+    if ACCEPTED.search(text):
+        fail("row 25: kth logged the pool accepting its local template without the payout extension")
     # P2Pool refuses a plain coinbase either at its JDS, answering
     # DeclareMiningJob.Error with its own code (it logs nothing then), or at
     # the pool, which logs "Rejected SV2 custom job" before it answers through
@@ -1022,8 +1025,8 @@ def row25(binary: str, pubkey: str, solo: str) -> None:
         if not alive:
             fail("mining_device exited before a block paying sv2.mining.address. log:\n"
                  + read_text(OUT / "mining-device.log")[-2000:])
-        if "Pool accepted local template as job" in kth_log_text():
-            fail("row 25: kth logged 'Pool accepted local template as job' after the refusal")
+        if ACCEPTED.search(kth_log_text()):
+            fail("row 25: kth logged the pool accepting its local template after the refusal")
         cursor, blocks = pull_blocks(cursor, before + 12)
         for block in blocks:
             if pays(block["coinbase_outputs"], solo) and not pays(block["coinbase_outputs"], DONATION):
@@ -1054,14 +1057,14 @@ def row25b(binary: str, pubkey: str, solo: str) -> None:
     while time.monotonic() < deadline:
         ensure_kth()
         ensure_p2pool()
-        if "Pool accepted local template as job" in kth_log_text():
+        if ACCEPTED.search(kth_log_text()):
             accepted = True
             break
         time.sleep(1)
     if not accepted:
         line = fallback_line(kth_log_text())
         fail(
-            f"row {EVIDENCE['row']}: kth did not log 'Pool accepted local template as job' "
+            f"row {EVIDENCE['row']}: kth did not log the pool accepting its local template "
             "within 120s. "
             + (f"fallback: {line}" if line else "no 'continuing solo mining' line either")
         )
@@ -1091,10 +1094,10 @@ def row25b(binary: str, pubkey: str, solo: str) -> None:
         # Declarations follow tips. One more tip makes kth declare the large
         # template. Count acceptances only from here: the setup blocks above
         # each produced one for a template without the spends.
-        accepted_before = kth_log_text().count("Pool accepted local template as job")
+        accepted_before = len(ACCEPTED.findall(kth_log_text()))
         EVIDENCE["large_mempool"]["declaration_tip"] = empty_tip("the PPLNS block")
         deadline = time.monotonic() + 600
-        while kth_log_text().count("Pool accepted local template as job") <= accepted_before:
+        while len(ACCEPTED.findall(kth_log_text())) <= accepted_before:
             ensure_kth()
             ensure_p2pool()
             line = fallback_line(kth_log_text())
