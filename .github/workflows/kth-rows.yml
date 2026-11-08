@@ -23,14 +23,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # getblockhash and getbestblockhash from the connected chain, and its
-        # tests alone on master (expected to fail).
-          - name: getblockhash
-            branch: rpc/getblockhash-connected
-            gcc: '16'
-          - name: getblockhash-red
-            branch: test/getblockhash-red
-            gcc: '16'
+        # #881 merged into #834's JD test head: the node suite on the merge
+        # that row 25w of kth-jd.yml mines on.
+          - name: pr881-on-834
+            branch: test/881-jd-r6
+            sv2: true
+            noise: true
+            sv2_mining: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
