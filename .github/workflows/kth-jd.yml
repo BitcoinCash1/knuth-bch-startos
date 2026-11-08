@@ -22,25 +22,34 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # P2Pool's Template Distribution client on kth's BCH large templates
-          # (0x4C54), and RED: a kth without them (#835).
-          - name: sv2-tdp-large-templates
-            branch: test/tdp-lt-jd
-            row: "tdp"
-            p2pool: feat/tdp-large-templates
-            p2pool_tests: true
-          - name: sv2-tdp-large-templates-red
-            branch: test/835-jd-r4
-            row: "tdp"
-            p2pool: feat/tdp-large-templates
-          # P2Pool's SV2 worker names (0x0002, feat/sv2-worker-names): its unit
-          # tests, and row 25b to check that its RequestExtensions answers still
-          # serve kth's Job Declaration client (#834).
-          - name: p2pool-worker-names-25b
-            branch: test/834-jd-r4
+          # The open PR heads with #814 (3564cfbd) merged in so BCHN hears kth's
+          # blocks: #832, #833, #834, #835 and #879, against P2Pool's branches.
+          - name: pr832-row25
+            branch: test/832-jd-r5
+            row: "25"
+            p2pool: alpha
+          - name: pr833-row25
+            branch: test/833-jd-r5
+            row: "25"
+            p2pool: alpha
+          - name: pr834-row25b-p2pool77
+            branch: test/834-jd-r5
             row: "25b"
             p2pool: feat/sv2-worker-names
             p2pool_tests: true
+          - name: pr835-row25c
+            branch: test/835-jd-r5
+            row: "25c"
+            p2pool: alpha
+          - name: pr879-tdp-p2pool76
+            branch: test/879-jd-r5
+            row: "tdp"
+            p2pool: feat/tdp-large-templates
+            p2pool_tests: true
+          - name: pr879-tdp-red
+            branch: test/835-jd-r5
+            row: "tdp"
+            p2pool: feat/tdp-large-templates
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
