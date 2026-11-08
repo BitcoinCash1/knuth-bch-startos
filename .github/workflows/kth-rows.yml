@@ -26,9 +26,11 @@ jobs:
         # master (12c249f0) as the baseline, both with the long-polling row.
           - name: 874-longpoll
             branch: test/874-longpoll
+            gcc: "16"
             longpoll: true
           - name: 874-baseline
             branch: test/874-baseline
+            gcc: "16"
             longpoll: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
