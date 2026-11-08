@@ -42,6 +42,8 @@ jobs:
             gcc: '16'
             network: true
             i2p: true
+            domain: true
+            infrastructure: true
           - name: 816-m7bdd807d
             branch: test/816-m7bdd807d
             gcc: '16'
