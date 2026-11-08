@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   row:
@@ -44,7 +45,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
-      IMAGE: kthnode/gcc15-ubuntu24.04@sha256:4988fdeb3654c2b5ea591ffa4454f67e1a631549449c62e35060ba69da79eb67
+      # The toolchain is this Docker Hub digest; the steps take the repo's copy
+      # of it (ci-deps.yml) when that copy's label carries the same digest, and
+      # set IMAGE to the one they use.
+      HUB_IMAGE: kthnode/gcc15-ubuntu24.04@sha256:4988fdeb3654c2b5ea591ffa4454f67e1a631549449c62e35060ba69da79eb67
+      # Copies of BCHN, the toolchains and kth's Conan packages (ci-deps.yml).
+      CI_DEPS: ghcr.io/bitcoincash1/knuth-ci-deps
     steps:
       - uses: actions/checkout@v7
         with:
@@ -52,10 +58,53 @@ jobs:
       - name: Make room for the build
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         shell: bash
+      # Without it every copy below is missing, and each falls back.
+      - name: Log in to GHCR
+        continue-on-error: true
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pick the toolchain image
+        run: |
+          COPY="$CI_DEPS:toolchain-gcc15"
+          IMAGE="$HUB_IMAGE"
+          if docker pull --quiet --platform linux/amd64 "$COPY" \
+            && [ "$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.base.digest" }}' "$COPY")" = "${HUB_IMAGE#*@}" ]; then
+            IMAGE="$COPY"
+          else
+            echo "no copy of $HUB_IMAGE in $CI_DEPS; using Docker Hub's"
+            docker rmi "$COPY" >/dev/null 2>&1 || true
+          fi
+          echo "toolchain image: $IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+        shell: bash
       - name: Fetch kth ${{ matrix.branch }}
         run: |
           git clone --depth 1 --branch "${{ matrix.branch }}" https://github.com/CyberAshven/kth.git kth-src
           git -C kth-src log -1 --format='%H %s' | tee kth-commit.txt
+        shell: bash
+      # The packages ci-deps.yml keeps for this lock file and compiler: the
+      # build restores them into the Conan cache, and conan install then finds
+      # everything there without the package registry. Without them the build
+      # goes on as before, from the actions cache below and the registry.
+      - name: Fetch the kept Conan packages
+        run: |
+          mkdir -p conan2
+          if HASH=$(cat kth-src/conan.lock kth-src/conanfile.py | sha256sum | cut -d' ' -f1); then
+            REF="$CI_DEPS:conan-gcc15-$HASH"
+            if docker pull --quiet "$REF" && id=$(docker create "$REF" /x); then
+              docker cp "$id:/kth-conan.tgz" conan2/kth-conan.tgz || rm -f conan2/kth-conan.tgz
+              docker rm "$id" >/dev/null || true
+            fi
+            docker rmi "$REF" >/dev/null 2>&1 || true
+          fi
+          if [ -f conan2/kth-conan.tgz ]; then
+            echo "Conan packages from $REF"
+          else
+            echo "no kept Conan packages for this lock file; using the actions cache and the registry"
+          fi
         shell: bash
       # The Conan packages kth-rows saves for the same lock file and compiler, so
       # a run needs the package registry only when the lock file changes.
@@ -97,6 +146,12 @@ jobs:
               # The package registry has short outages; retry instead of failing the run.
               printf "core.net.http:max_retries=8\ncore.net.http:timeout=60\n" >> "$(conan config home)/global.conf"
               conan remote add kth https://packages.kth.cash/api/ --force
+              # The kept packages, when the step above found them.
+              if [ -f /root/.conan2/kth-conan.tgz ]; then
+                conan cache restore /root/.conan2/kth-conan.tgz >/dev/null \
+                  || echo "restoring the kept Conan packages failed; conan install uses the registry"
+                rm -f /root/.conan2/kth-conan.tgz
+              fi
               time conan install conanfile.py --version 1.5.2 -of build --build=missing \
                 -o currency=BCH -o rpc=True -o tests=True \
                 -o "utxoz/*:with_tests=False" -o "utxoz/*:with_benchmarks=False" \
@@ -124,8 +179,18 @@ jobs:
       - name: Fetch BCHN 29.2.0
         run: |
           TARBALL=bitcoin-cash-node-29.2.0-x86_64-linux-gnu.tar.gz
-          curl -fsSLO --retry 6 --retry-delay 10 --retry-all-errors "https://github.com/bitcoin-cash-node/bitcoin-cash-node/releases/download/v29.2.0/$TARBALL"
-          echo "23bbe9ff749136a9b832a2a59023ce76a5391322c1ea2f4f24b5b91f035081bc  $TARBALL" | sha256sum -c
+          SHA256=23bbe9ff749136a9b832a2a59023ce76a5391322c1ea2f4f24b5b91f035081bc
+          # The repo's copy (ci-deps.yml) first, then BCHN's release.
+          if docker pull --quiet "$CI_DEPS:bchn-29.2.0" && id=$(docker create "$CI_DEPS:bchn-29.2.0" /x); then
+            docker cp "$id:/$TARBALL" . || true
+            docker rm "$id" >/dev/null || true
+          fi
+          if ! echo "$SHA256  $TARBALL" | sha256sum -c; then
+            echo "no good copy in $CI_DEPS; fetching BCHN's release"
+            rm -f "$TARBALL"
+            curl -fsSLO --retry 6 --retry-delay 10 --retry-all-errors "https://github.com/bitcoin-cash-node/bitcoin-cash-node/releases/download/v29.2.0/$TARBALL"
+            echo "$SHA256  $TARBALL" | sha256sum -c
+          fi
           tar xzf "$TARBALL"
           echo "$PWD/bitcoin-cash-node-29.2.0/bin" >> "$GITHUB_PATH"
         shell: bash
