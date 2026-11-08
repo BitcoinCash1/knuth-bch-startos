@@ -80,9 +80,9 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: conan2
-          key: kth-conan2-gcc${{ env.GCC }}-${{ hashFiles('kth-src/conan.lock', 'kth-src/conanfile.py') }}
+          key: kth-conan2v2-gcc${{ env.GCC }}-${{ hashFiles('kth-src/conan.lock', 'kth-src/conanfile.py') }}
           restore-keys: |
-            kth-conan2-gcc${{ env.GCC }}-
+            kth-conan2v2-gcc${{ env.GCC }}-
       # Per branch, so a re-run of the same branch finds its own objects; any
       # branch's cache otherwise, which is mostly master's code.
       - name: Restore the compiler cache
@@ -135,11 +135,11 @@ jobs:
             '
         shell: bash
       - name: Save the Conan packages
-        if: always() && steps.restore-conan.outputs.cache-hit != 'true'
+        if: success() && steps.restore-conan.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: conan2
-          key: kth-conan2-gcc${{ env.GCC }}-${{ hashFiles('kth-src/conan.lock', 'kth-src/conanfile.py') }}
+          key: kth-conan2v2-gcc${{ env.GCC }}-${{ hashFiles('kth-src/conan.lock', 'kth-src/conanfile.py') }}
       - name: Save the compiler cache
         if: always()
         uses: actions/cache/save@v6
