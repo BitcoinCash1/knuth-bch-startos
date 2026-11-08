@@ -1,10 +1,12 @@
 name: kth SV2 job declaration against BCH P2Pool
 
-# Row 25 (test/sv2-jd-client) and row 25b (test/sv2-jd-payout-outputs), each
-# with node/announce-blocks merged in (the *-announce branches) so BCHN hears
-# the blocks kth mines; kth master does not announce its own blocks yet:
-# build that kth with kth's toolchain, build BCH P2Pool, and mine on BCHN
-# regtest through Job Declaration. Runs when this file changes, or by hand.
+# Rows 25, 25b and 25c mine on BCHN regtest through kth's Job Declaration
+# client against BCH P2Pool. Row tdp has no Job Declaration: P2Pool takes its
+# templates from kth's Template Provider, and SRI's mining_device mines on
+# P2Pool. Each kth branch has node/announce-blocks (#814) merged in so BCHN
+# hears the blocks kth mines; kth master does not announce its own blocks yet.
+# Build that kth with kth's toolchain, build BCH P2Pool, and run the row.
+# Runs when this file changes, or by hand.
 on:
   push:
     paths: [.github/workflows/kth-jd.yml]
@@ -19,25 +21,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # The stack with the spec fixes merged up, each with #814 (3564cfbd)
-          # merged in: #832 4d14ddab, #833 77ac4fb5, #834 0b146e97, #835 584efa20.
-          - name: sv2-jd-client-r4
-            branch: test/832-jd-r4
-            row: "25"
-            p2pool: alpha
-          - name: sv2-jd-failover-r4
-            branch: test/833-jd-r4
-            row: "25"
-            p2pool: alpha
-          - name: sv2-jd-payout-outputs-r4
-            branch: test/834-jd-r4
-            row: "25b"
-            p2pool: alpha
-          # BCH large templates need P2Pool's side of 0x4C54 (P2Pool #63, on alpha).
-          - name: sv2-jd-large-templates-r4
+          # BCH large templates (0x4C54) on Template Distribution: kth's
+          # Template Provider pushes each template's transactions
+          # (sv2/tdp-large-templates f9daa50b, with #814 3564cfbd merged in),
+          # and P2Pool's client takes them (feat/tdp-large-templates). This
+          # entry also runs P2Pool's SV2 unit tests.
+          - name: sv2-tdp-large-templates
+            branch: test/tdp-lt-jd
+            row: "tdp"
+            p2pool: feat/tdp-large-templates
+            p2pool_tests: true
+          # RED: #835 with #814 (e8fe62f8) pages Job Declaration only. Its
+          # Template Provider answers template-too-large, so the row must fail.
+          - name: sv2-tdp-large-templates-red
             branch: test/835-jd-r4
-            row: "25c"
-            p2pool: alpha
+            row: "tdp"
+            p2pool: feat/tdp-large-templates
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -152,6 +151,21 @@ jobs:
           cd p2pool
           cargo build --release --locked -p p2poolv2_node
         shell: bash
+      # P2Pool's library tests under stratum::sv2: the Template Distribution
+      # client's, which also cover large_templates' messages, and the rest of
+      # its SV2 server's. Line tables only, as P2Pool's rust.yml builds its
+      # tests, so the debug build fits the runner's disk. A failure lets the
+      # row run, and fails the job at the end.
+      - name: Run BCH P2Pool's SV2 unit tests
+        id: p2pool_tests
+        if: matrix.p2pool_tests
+        continue-on-error: true
+        env:
+          CARGO_PROFILE_DEV_DEBUG: line-tables-only
+        run: |
+          cd p2pool
+          cargo test --locked -p p2poolv2_lib --lib -- stratum::sv2:: 2>&1 | tee ../p2pool-tests.log
+        shell: bash
       - name: Run the Job Declaration check
         run: |
           KTH_BIN=$(find "$PWD/kth-src/build" -name kth -type f -perm -u+x -path '*node-exe*' -print -quit)
@@ -182,5 +196,12 @@ jobs:
           path: |
             kth-commit.txt
             p2pool-commit.txt
+            p2pool-tests.log
             e2e-out
           if-no-files-found: error
+      - name: Fail on BCH P2Pool's SV2 unit tests
+        if: always() && steps.p2pool_tests.outcome == 'failure'
+        run: |
+          echo "BCH P2Pool's SV2 unit tests failed; see p2pool-tests.log in the artifact"
+          exit 1
+        shell: bash
