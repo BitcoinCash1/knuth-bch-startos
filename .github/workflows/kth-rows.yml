@@ -22,15 +22,57 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #833 with Reconnect and ChannelEndpointChanged (6a791dbc), and RED:
-        # the same with that handling taken out and its tests kept (d15e6c20).
-          - name: 833-reconnect
-            branch: test/833-reconnect
+        # The SV2 stack with the spec fixes merged up: #804 (880853af), #807,
+        # #817 (fixes 112ea11d), #832 (fixes a696162c), #833 (Reconnect,
+        # ChannelEndpointChanged, hash rate from the active pair), #834, #835.
+        # RED: each fix's code taken out, its tests kept.
+          - name: 804-r4
+            branch: test/804-r4
+            sv2: true
+          - name: 804-r4-red
+            branch: test/804-r4-red
+            sv2: true
+          - name: 807-r4
+            branch: test/807-r4
+            sv2: true
+            noise: true
+          - name: 817-r4
+            branch: test/817-r4
             sv2: true
             noise: true
             sv2_mining: true
-          - name: 833-reconnect-red
-            branch: test/833-reconnect-red
+          - name: 817-r4-red
+            branch: test/817-r4-red
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: 832-r4
+            branch: test/832-r4
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: 832-r4-red
+            branch: test/832-r4-red
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: 833-r4
+            branch: test/833-r4
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: 833-r4-red
+            branch: test/833-r4-red
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: 834-r4
+            branch: test/834-r4
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: 835-r4
+            branch: test/835-r4
             sv2: true
             noise: true
             sv2_mining: true
@@ -134,6 +176,8 @@ jobs:
             bash -c "timeout --kill-after=30 1200 ./kth_node_test --reporter compact" > node-tests.log 2>&1
           rc=$?
           tail -n 40 node-tests.log
+          # The failed assertions themselves, so they read in the job log.
+          grep -n "failed:" node-tests.log | head -40 || true
           echo "kth_node_test exit $rc" | tee -a test-status.txt
         shell: bash
       - name: Run kth's domain test suite
