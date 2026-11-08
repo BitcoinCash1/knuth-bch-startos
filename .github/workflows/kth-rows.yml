@@ -23,9 +23,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Chunk results kept while the coordinator is busy, on master.
-          - name: chunk-bridge
-            branch: sync/coordinator-bridges-keep-results
+        # k-nuth/kth#884 (announce admitted transactions, on #873) for row 11,
+        # with master 28bd0598 as the control.
+          - name: pr884-announce
+            branch: test/884-announce
+            gcc: '16'
+          - name: master-control
+            branch: test/master-28bd0598
             gcc: '16'
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
