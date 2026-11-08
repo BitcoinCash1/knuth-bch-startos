@@ -85,6 +85,10 @@ COMPACT = os.environ.get("KTH_COMPACT") == "1"
 # KTH_SV2_MINING=1 (#773 row 24, the Mining Protocol server): SRI's own CPU
 # mining_device mines on kth over Noise, and BCHN must accept its blocks.
 SV2_MINING = os.environ.get("KTH_SV2_MINING") == "1"
+# KTH_LONGPOLL=1 (k-nuth/kth#874): a getblocktemplate that sends its template's
+# longpollid back is held until BCHN mines a block. It mines one more block, so
+# it runs last and only when asked.
+LONGPOLL = os.environ.get("KTH_LONGPOLL") == "1"
 MINING_DEVICE = os.environ.get("KTH_MINING_DEVICE") or "sv2-apps/target/release/mining_device"
 MINING_ADDRESS = ""
 BCHN_B_DIR = Path("/tmp/bchn-b-regtest")
@@ -584,6 +588,7 @@ def make_mempool(s: dict) -> dict:
     s["fresh_tx_send"], s["fresh_tx_test"], s["fresh_tx_row5"] = fresh_tx(), fresh_tx(), fresh_tx()
     s["fresh_tx_row4"] = fresh_tx()
     s["fresh_tx_row11"] = fresh_tx()
+    s["fresh_tx_pr874"] = fresh_tx()
     s["tip"] = cli("getbestblockhash")
     return s
 
@@ -2469,6 +2474,70 @@ def row24_mining_protocol(s: dict) -> None:
         ok, seen)
 
 
+# The fields BCH P2Pool's BlockTemplate reads without a serde default, and their
+# JSON types (p2poolv2_lib/src/stratum/work/block_template.rs).
+P2POOL_TEMPLATE = {"version": int, "previousblockhash": str, "transactions": list, "coinbaseaux": dict,
+                   "coinbasevalue": int, "longpollid": str, "target": str, "mintime": int, "mutable": list,
+                   "noncerange": str, "sigoplimit": int, "sizelimit": int, "curtime": int, "bits": str,
+                   "height": int}
+P2POOL_TEMPLATE_TX = ("data", "txid", "fee", "sigops")
+
+
+def pr874_long_polling(s: dict) -> None:
+    """Pools that wait on long polling (BIP22), and BCH P2Pool, whose template
+    type requires longpollid: the template carries it, a request sending it
+    back is held until BCHN mines a block and then answered with that block's
+    template, and a request naming the replaced tip is answered at once."""
+    if not LONGPOLL:
+        return
+    client = "pools on long polling, BCH P2Pool"
+    call(KTH, "sendrawtransaction", s["fresh_tx_pr874"])  # a transaction whose fields are checked too
+    time.sleep(7)  # past kth's template refresh window under mempool change
+    template, error = call(KTH, "getblocktemplate", {})
+    template = template if isinstance(template, dict) else {}
+    wrong = [k for k, kind in P2POOL_TEMPLATE.items()
+             if not isinstance(template.get(k), kind) or isinstance(template.get(k), bool)]
+    tx_missing = sorted({k for t in template.get("transactions", []) for k in P2POOL_TEMPLATE_TX if k not in t})
+    row(874, client, "getblocktemplate carries longpollid and every field P2Pool's template type requires",
+        error is None and not wrong and not tx_missing,
+        {"missing or mistyped": wrong, "transaction fields missing": tx_missing,
+         "transactions": len(template.get("transactions", [])), "longpollid": template.get("longpollid"),
+         "error": error})
+    if error is not None or not isinstance(template.get("longpollid"), str):
+        return row(874, client, "a request with the template's longpollid is held until a block, then answered",
+                   False, "no longpollid to send back")
+
+    answer: dict = {}
+
+    def hold() -> None:
+        started = time.monotonic()
+        answer["template"], answer["error"] = call(KTH, "getblocktemplate", {"longpollid": template["longpollid"]})
+        answer["seconds"] = round(time.monotonic() - started, 1)
+
+    waiter = threading.Thread(target=hold, daemon=True)
+    waiter.start()
+    waiter.join(5)
+    held = waiter.is_alive()  # kth's tip does not change in these 5 s
+    mined = time.monotonic()
+    new_tip = json.loads(cli("generatetoaddress", "1", wallet_address()))[0]
+    waiter.join(60)
+    reply = answer.get("template") if isinstance(answer.get("template"), dict) else {}
+    after = round(time.monotonic() - mined, 1) if not waiter.is_alive() else None
+    row(874, client, "a request with the template's longpollid is held until a block, then answered with its template",
+        held and after is not None and answer.get("error") is None and reply.get("previousblockhash") == new_tip
+        and reply.get("longpollid") != template["longpollid"],
+        {"held for 5 s before the block": held, "seconds from BCHN's block to the answer": after,
+         "answer's previousblockhash is the new block": reply.get("previousblockhash") == new_tip,
+         "new longpollid": reply.get("longpollid"), "error": answer.get("error")})
+
+    started = time.monotonic()
+    stale, error = call(KTH, "getblocktemplate", {"longpollid": template["longpollid"]})
+    seconds = round(time.monotonic() - started, 1)
+    row(874, client, "a request naming the replaced tip is answered at once",
+        error is None and isinstance(stale, dict) and seconds < 5,
+        {"seconds": seconds, "previousblockhash": (stale or {}).get("previousblockhash") if error is None else error})
+
+
 def rows(s: dict) -> None:
     for check in (row10_relay_in, row17_rawmempool_verbose, row11_relay_out, pr795_fee_filter,
                   row6_validateaddress, row7_decoderawtransaction, row8_blockchaininfo, row9_chain,
@@ -2477,7 +2546,7 @@ def rows(s: dict) -> None:
                   row1_accept_found_block, row2_found_block_reaches_peers, row3_submitblock,
                   row21_template_provider, row23_template_flow, row22_noise, pr803_outbound_proxy,
                   shv_light_client, i2p_second_node, serve_second_node, announce_second_node,
-                  compact_blocks_both_ways, row24_mining_protocol):
+                  compact_blocks_both_ways, row24_mining_protocol, pr874_long_polling):
         try:
             check(s)
         except Exception as error:  # one broken check must not hide the others

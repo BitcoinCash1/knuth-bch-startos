@@ -22,60 +22,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # The SV2 stack with the spec fixes merged up: #804 (880853af), #807,
-        # #817 (fixes 112ea11d), #832 (fixes a696162c), #833 (Reconnect,
-        # ChannelEndpointChanged, hash rate from the active pair), #834, #835.
-        # RED: each fix's code taken out, its tests kept.
-          - name: 804-r4
-            branch: test/804-r4
-            sv2: true
-          - name: 804-r4-red
-            branch: test/804-r4-red
-            sv2: true
-          - name: 807-r4
-            branch: test/807-r4
-            sv2: true
-            noise: true
-          - name: 817-r4
-            branch: test/817-r4
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: 817-r4-red
-            branch: test/817-r4-red
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: 832-r4
-            branch: test/832-r4
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: 832-r4-red
-            branch: test/832-r4-red
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: 833-r4
-            branch: test/833-r4
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: 833-r4-red
-            branch: test/833-r4-red
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: 834-r4
-            branch: test/834-r4
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: 835-r4
-            branch: test/835-r4
-            sv2: true
-            noise: true
-            sv2_mining: true
+        # Long polling for getblocktemplate (#874, rpc/longpoll at f555007d), and
+        # master (12c249f0) as the baseline, both with the long-polling row.
+          - name: 874-longpoll
+            branch: test/874-longpoll
+            longpoll: true
+          - name: 874-baseline
+            branch: test/874-baseline
+            longpoll: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -298,6 +252,7 @@ jobs:
           KTH_ANNOUNCE: ${{ matrix.announce && '1' || '0' }}
           KTH_COMPACT: ${{ matrix.compact && '1' || '0' }}
           KTH_SV2_MINING: ${{ matrix.sv2_mining && '1' || '0' }}
+          KTH_LONGPOLL: ${{ matrix.longpoll && '1' || '0' }}
           KTH_PROXY: ${{ matrix.proxy && '1' || '0' }}
           KTH_SHV: ${{ matrix.shv && '1' || '0' }}
           KTH_STALL: ${{ matrix.stall && '1' || '0' }}
