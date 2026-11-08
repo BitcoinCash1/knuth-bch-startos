@@ -14,6 +14,12 @@ BCH large templates (0x4C54) and a mempool that standard Job Declaration
 cannot carry: more than 65,535 transactions and more than one U24 frame of
 transaction data. The PPLNS block must hold that whole mempool.
 
+Row 25w (KTH_JD_ROW=25w, branch test/sv2-jd-worker-names) is row 25b with
+Worker-Specific Hashrate Tracking (0x0002). P2Pool is on the same machine, so
+kth asks for the extension on its own and tags each forwarded share with the
+device's user identity. P2Pool's /miners must then list the device's name as
+a worker of the payout address, which only that tag can put there.
+
 Row tdp (KTH_JD_ROW=tdp, branch test/tdp-lt-jd) has no Job Declaration.
 kth runs only its Template Provider, and P2Pool takes its templates from it
 (template_source = "sv2", over Noise pinned to the authority key kth prints).
@@ -1110,7 +1116,8 @@ def row25b(binary: str, pubkey: str, solo: str) -> None:
     EVIDENCE["hashrate"]["mine_budget_s"] = budget
     progress(f"row {EVIDENCE['row']}: pool difficulty {pool_difficulty:g}, mining budget {budget}s")
     proc = start_device(
-        device_command(binary, pubkey, None, multiplier),
+        device_command(binary, pubkey, None, multiplier,
+                       user=WORKER_NAME if EVIDENCE["row"] == "25w" else "kth-jd-e2e"),
         OUT / "mining-device.log",
     )
     cursor = before
@@ -1158,6 +1165,8 @@ def row25b(binary: str, pubkey: str, solo: str) -> None:
             }
             if EVIDENCE["row"] == "25c":
                 EVIDENCE["assertions"]["large_template"] = EVIDENCE["large_template"]
+            if EVIDENCE["row"] == "25w":
+                EVIDENCE["assertions"]["worker_name"] = require_worker_name()
             progress(f"row {EVIDENCE['row']}: share credited and block {matched['height']} "
                      "pays the PPLNS split")
             return
@@ -1170,6 +1179,36 @@ def row25b(binary: str, pubkey: str, solo: str) -> None:
         + (f"fallback: {line}. " if line else "")
         + "blocks:\n" + json.dumps(EVIDENCE["blocks"], indent=2)[:3000]
     )
+
+
+# Row 25w: the name the device opens its channel with. kth's own upstream
+# identity carries no worker part, so P2Pool can only learn this name from the
+# 0x0002 field on the shares kth forwards.
+WORKER_NAME = "rig-7"
+
+
+def require_worker_name() -> dict:
+    payout = EVIDENCE["addresses"]["payout"]
+    deadline = time.monotonic() + 30
+    body = None
+    while True:
+        _, body = http_json("/miners")
+        miners = body.get("miners") if isinstance(body, dict) else None
+        for miner in miners or []:
+            names = [worker.get("name") for worker in miner.get("workers") or []]
+            if WORKER_NAME in names:
+                if not same_address(str(miner.get("address", "")), payout):
+                    fail(f"row 25w: P2Pool lists worker {WORKER_NAME!r} under "
+                         f"{miner.get('address')!r}, not the payout address {payout}")
+                progress(f"row 25w: P2Pool lists worker {WORKER_NAME!r} for the payout address")
+                return {"name": WORKER_NAME, "address": miner.get("address"), "workers": names}
+        if time.monotonic() > deadline:
+            break
+        time.sleep(2)
+    granted = "0x0002" in kth_log_text() or "Worker-Specific" in kth_log_text()
+    fail(f"row 25w: P2Pool's /miners has no worker {WORKER_NAME!r} after a credited share "
+         f"(kth log mentions the extension: {granted}). /miners:\n"
+         + json.dumps(body, indent=2)[:3000])
 
 
 # TEST ONLY: the mempool of rows 25c and tdp. Every output is P2SH(OP_TRUE),
@@ -1780,8 +1819,8 @@ def run() -> None:
         fail("missing docker")
     image = require_env("KTH_IMAGE")
     row = require_env("KTH_JD_ROW")
-    if row not in ("25", "25b", "25c", "tdp"):
-        fail(f"KTH_JD_ROW must be 25, 25b, 25c or tdp, got {row!r}")
+    if row not in ("25", "25b", "25c", "25w", "tdp"):
+        fail(f"KTH_JD_ROW must be 25, 25b, 25c, 25w or tdp, got {row!r}")
     EVIDENCE["row"] = row
     src = Path(require_env("KTH_SRC")).resolve()
     if not src.is_dir():
