@@ -156,8 +156,12 @@ jobs:
                   || echo "restoring the kept Conan packages failed; conan install uses the registry"
                 rm -f /root/.conan2/kth-conan.tgz
               fi
+              # Since k-nuth/kth#794 the rpc option names a backend; older
+              # branches still take True.
+              RPC=True
+              if grep -q -F "\"rpc\": [\"jsonrpc\"" conanfile.py; then RPC=jsonrpc; fi
               time conan install conanfile.py --version 1.5.2 -of build --build=missing \
-                -o currency=BCH -o rpc=True -o tests=True \
+                -o currency=BCH -o rpc=$RPC -o tests=True \
                 -o "utxoz/*:with_tests=False" -o "utxoz/*:with_benchmarks=False" \
                 -o "utxoz/*:with_large_benchmarks=False" \
                 -s compiler.cppstd=23 -s build_type=Release
