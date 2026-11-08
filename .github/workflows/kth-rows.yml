@@ -22,15 +22,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #832's JD client takes a SetTarget that crosses SetCustomMiningJob
-        # (sv2/jd-settarget at 7575477a), and RED: the fix taken out.
-          - name: 832-settarget
-            branch: test/832-settarget
+        # #817's engine keeps the tip's recent jobs valid (sv2/keep-tip-jobs at
+        # 55de65a0), and the fee refresh on top (sv2/fee-refresh at 4881e578),
+        # each with RED: its change taken out, the tests kept.
+          - name: 817-keep-tip-jobs
+            branch: test/817-keep-tip-jobs
             sv2: true
             noise: true
             sv2_mining: true
-          - name: 832-settarget-red
-            branch: test/832-settarget-red
+          - name: 817-keep-tip-jobs-red
+            branch: test/817-keep-tip-jobs-red
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: fee-refresh
+            branch: test/fee-refresh
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: fee-refresh-red
+            branch: test/fee-refresh-red
             sv2: true
             noise: true
             sv2_mining: true
