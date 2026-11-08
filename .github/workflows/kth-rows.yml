@@ -23,19 +23,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Every open PR branch as pushed, the SV2 stack and long polling.
-          - name: pr804
-            branch: sv2/template-flow
-            sv2: true
-          - name: pr807
-            branch: sv2/noise
-            sv2: true
-            noise: true
-          - name: pr817
-            branch: sv2/mining-channels
-            sv2: true
-            noise: true
-            sv2_mining: true
+        # The six PR branches that took the two job-retention fixes.
           - name: pr832
             branch: sv2/jd-client
             sv2: true
@@ -61,20 +49,11 @@ jobs:
             sv2: true
             noise: true
             sv2_mining: true
-          - name: pr880
-            branch: sv2/fee-refresh
-            sv2: true
-            noise: true
-            sv2_mining: true
           - name: pr881
             branch: sv2/worker-hashrate
             sv2: true
             noise: true
             sv2_mining: true
-          - name: pr877
-            branch: rpc/longpoll
-            gcc: "16"
-            longpoll: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
