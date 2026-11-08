@@ -23,14 +23,34 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # k-nuth/kth#884 (announce admitted transactions, on #873) for row 11,
-        # with master 28bd0598 as the control.
-          - name: pr884-announce
-            branch: test/884-announce
+        # Master 7bdd807d (#873, #876, #884, #886) merged into five PRs:
+        # #885, #803, #867, #808 and #816.
+          - name: 885-m7bdd807d
+            branch: test/885-m7bdd807d
             gcc: '16'
-          - name: master-control
-            branch: test/master-28bd0598
+          - name: 803-m7bdd807d
+            branch: test/803-m7bdd807d
             gcc: '16'
+            network: true
+            proxy: true
+          - name: 867-m7bdd807d
+            branch: test/867-m7bdd807d
+            gcc: '16'
+            blockchain: true
+          - name: 808-m7bdd807d
+            branch: test/808-m7bdd807d
+            gcc: '16'
+            network: true
+            i2p: true
+          - name: 816-m7bdd807d
+            branch: test/816-m7bdd807d
+            gcc: '16'
+            domain: true
+            blockchain: true
+            serve: true
+            announce: true
+            compact: true
+            network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
