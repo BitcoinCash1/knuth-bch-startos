@@ -23,37 +23,58 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #817's engine keeps the tip's recent jobs valid (sv2/keep-tip-jobs at
-        # 04c27bce), and the fee refresh on top (sv2/fee-refresh at b8a53b95),
-        # each with RED: its change taken out, the tests kept.
-          - name: 817-keep-tip-jobs
-            branch: test/817-keep-tip-jobs
+        # Every open PR branch as pushed, the SV2 stack and long polling.
+          - name: pr804
+            branch: sv2/template-flow
+            sv2: true
+          - name: pr807
+            branch: sv2/noise
+            sv2: true
+            noise: true
+          - name: pr817
+            branch: sv2/mining-channels
             sv2: true
             noise: true
             sv2_mining: true
-          - name: 817-keep-tip-jobs-red
-            branch: test/817-keep-tip-jobs-red3
+          - name: pr832
+            branch: sv2/jd-client
             sv2: true
             noise: true
             sv2_mining: true
-          - name: fee-refresh
-            branch: test/fee-refresh
+          - name: pr833
+            branch: sv2/jd-failover
             sv2: true
             noise: true
             sv2_mining: true
-          - name: fee-refresh-red
-            branch: test/fee-refresh-red3
+          - name: pr834
+            branch: sv2/jd-payout-outputs
             sv2: true
             noise: true
             sv2_mining: true
-        # SV2 extension 0x0002 on #833 (sv2/worker-hashrate at a253a4e4): the
-        # Mining server reads worker names; the JD client sends them only to
-        # upstreams on the same machine or marked as the operator's own.
-          - name: sv2-0002
-            branch: test/sv2-0002
+          - name: pr835
+            branch: sv2/jd-large-templates
             sv2: true
             noise: true
             sv2_mining: true
+          - name: pr879
+            branch: sv2/tdp-large-templates
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: pr880
+            branch: sv2/fee-refresh
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: pr881
+            branch: sv2/worker-hashrate
+            sv2: true
+            noise: true
+            sv2_mining: true
+          - name: pr877
+            branch: rpc/longpoll
+            gcc: "16"
+            longpoll: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
