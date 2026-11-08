@@ -22,16 +22,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # BCH large templates on Template Distribution (sv2/tdp-large-templates at
-        # f9daa50b, on #835), and RED: its Template Provider changes taken out,
-        # the tests kept.
-          - name: tdp-lt
-            branch: test/tdp-lt
+        # #832's JD client takes a SetTarget that crosses SetCustomMiningJob
+        # (sv2/jd-settarget at 7575477a), and RED: the fix taken out.
+          - name: 832-settarget
+            branch: test/832-settarget
             sv2: true
             noise: true
             sv2_mining: true
-          - name: tdp-lt-red
-            branch: test/tdp-lt-red
+          - name: 832-settarget-red
+            branch: test/832-settarget-red
             sv2: true
             noise: true
             sv2_mining: true
