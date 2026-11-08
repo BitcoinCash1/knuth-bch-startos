@@ -21,22 +21,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # BCH large templates (0x4C54) on Template Distribution: kth's
-          # Template Provider pushes each template's transactions
-          # (sv2/tdp-large-templates f9daa50b, with #814 3564cfbd merged in),
-          # and P2Pool's client takes them (feat/tdp-large-templates). This
-          # entry also runs P2Pool's SV2 unit tests.
-          - name: sv2-tdp-large-templates
-            branch: test/tdp-lt-jd
-            row: "tdp"
-            p2pool: feat/tdp-large-templates
+          # P2Pool's SV2 worker names (0x0002, feat/sv2-worker-names): its unit
+          # tests, and row 25b to check that its RequestExtensions answers still
+          # serve kth's Job Declaration client (#834).
+          - name: p2pool-worker-names-25b
+            branch: test/834-jd-r4
+            row: "25b"
+            p2pool: feat/sv2-worker-names
             p2pool_tests: true
-          # RED: #835 with #814 (e8fe62f8) pages Job Declaration only. Its
-          # Template Provider answers template-too-large, so the row must fail.
-          - name: sv2-tdp-large-templates-red
-            branch: test/835-jd-r4
-            row: "tdp"
-            p2pool: feat/tdp-large-templates
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
