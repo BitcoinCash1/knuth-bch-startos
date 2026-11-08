@@ -923,13 +923,18 @@ def probe_hashrate(binary: str, pubkey: str, before: int) -> int:
     return printed
 
 
+# The single-pool client (#832) logs the first; the failover client (#833),
+# with one configured entry, logs the second when it falls back to solo.
+SOLO_LINES = ("continuing solo mining", "Active entry: solo")
+
+
 def fallback_line(text: str) -> str:
-    lines = [line for line in text.splitlines() if "continuing solo mining" in line]
+    lines = [line for line in text.splitlines() if any(solo in line for solo in SOLO_LINES)]
     return redact(lines[-1]) if lines else ""
 
 
 def refused(text: str) -> bool:
-    return "continuing solo mining" in text and (
+    return any(solo in text for solo in SOLO_LINES) and (
         "pool refused the local custom job" in text or "JDS refused the local template" in text
     )
 
