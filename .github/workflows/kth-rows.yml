@@ -23,13 +23,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #881 merged into #834's JD test head: the node suite on the merge
-        # that row 25w of kth-jd.yml mines on.
-          - name: pr881-on-834
-            branch: test/881-jd-r6
-            sv2: true
-            noise: true
-            sv2_mining: true
+        # Chunk results kept while the coordinator is busy, on master.
+          - name: chunk-bridge
+            branch: sync/coordinator-bridges-keep-results
+            gcc: '16'
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
