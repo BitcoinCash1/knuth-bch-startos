@@ -23,37 +23,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # The six PR branches that took the two job-retention fixes.
-          - name: pr832
-            branch: sv2/jd-client
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: pr833
-            branch: sv2/jd-failover
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: pr834
-            branch: sv2/jd-payout-outputs
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: pr835
-            branch: sv2/jd-large-templates
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: pr879
-            branch: sv2/tdp-large-templates
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: pr881
-            branch: sv2/worker-hashrate
-            sv2: true
-            noise: true
-            sv2_mining: true
+        # getblockhash and getbestblockhash from the connected chain, and its
+        # tests alone on master (expected to fail).
+          - name: getblockhash
+            branch: rpc/getblockhash-connected
+            gcc: '16'
+          - name: getblockhash-red
+            branch: test/getblockhash-red
+            gcc: '16'
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
