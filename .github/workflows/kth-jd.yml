@@ -25,29 +25,29 @@ jobs:
           # The open PR heads with #814 (3564cfbd) merged in so BCHN hears kth's
           # blocks: #832, #833, #834, #835 and #879, against P2Pool's branches.
           - name: pr832-row25
-            branch: test/832-jd-r5
+            branch: test/832-jd-r6
             row: "25"
             p2pool: alpha
           - name: pr833-row25
-            branch: test/833-jd-r5
+            branch: test/833-jd-r6
             row: "25"
             p2pool: alpha
           - name: pr834-row25b-p2pool77
-            branch: test/834-jd-r5
+            branch: test/834-jd-r6
             row: "25b"
             p2pool: feat/sv2-worker-names
             p2pool_tests: true
           - name: pr835-row25c
-            branch: test/835-jd-r5
+            branch: test/835-jd-r6
             row: "25c"
             p2pool: alpha
           - name: pr879-tdp-p2pool76
-            branch: test/879-jd-r5
+            branch: test/879-jd-r6
             row: "tdp"
             p2pool: feat/tdp-large-templates
             p2pool_tests: true
           - name: pr879-tdp-red
-            branch: test/835-jd-r5
+            branch: test/835-jd-r6
             row: "tdp"
             p2pool: feat/tdp-large-templates
     name: kth ${{ matrix.name }}
