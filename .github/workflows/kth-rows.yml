@@ -1,15 +1,13 @@
-name: kth rows from #773, build, tests and client checks
+name: kth integrated SV2 stack, build, tests and client checks
 
-# TEST ONLY branch, never merged. For each fork branch of CyberAshven/kth that
-# carries a row of k-nuth/kth#773, and for upstream master as the baseline:
-# build kth with its tests from kth's own recipe and toolchain image, run kth's
-# node test suite (and the domain suite where the branch changes the domain
-# library), then put that kth into the package image and run
-# scripts/knuth_rpc_e2e.py, whose "#773 rows" section is each client's own
-# check of its row. It runs when this file changes, or by hand.
+# TEST ONLY branch, never merged. Build one integrated SV2 stack on current
+# master with the pinned GCC 16 toolchain and kth's own recipe. Run the node,
+# domain, blockchain, network, infrastructure, C API and callback controls,
+# then put that binary into the package image for client checks. Require all
+# four SV2 client rows to pass; unrelated RPC gaps remain in the report.
 on:
   push:
-    branches: [knuth-rpc-e2e]
+    branches: [test/sv2-stack-20261110]
     paths: [.github/workflows/kth-rows.yml]
   workflow_dispatch:
 
@@ -23,18 +21,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #816 merged with master 6773f2bb (#889, the gRPC and Cap'n Proto
-        # backends), with its handshake test ending on the service's first fee
-        # filter.
-          - name: 816-m6773f2bb
-            branch: test/816-m6773f2bb
+        # The integrated SV2 branch on current master. Keep this ref stable
+        # for the build and record its exact commit in the evidence artifact.
+          - name: sv2-stack-20261110
+            branch: test/sv2-stack-20261110
             gcc: '16'
             domain: true
             blockchain: true
+            infrastructure: true
+            capi: true
+            capi_async: true
             serve: true
             announce: true
-            compact: true
             network: true
+            sv2: true
+            noise: true
+            sv2_mining: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -128,6 +130,7 @@ jobs:
           TARGETS="kth_node_test node-exe"
           if [ "${{ matrix.domain }}" = "true" ]; then TARGETS="$TARGETS kth_domain_test"; fi
           if [ "${{ matrix.capi }}" = "true" ]; then TARGETS="$TARGETS kth_capi_test"; fi
+          if [ "${{ matrix.capi_async }}" = "true" ]; then TARGETS="$TARGETS kth_capi_async_callbacks_test"; fi
           if [ "${{ matrix.blockchain }}" = "true" ]; then TARGETS="$TARGETS kth_blockchain_test"; fi
           if [ "${{ matrix.network }}" = "true" ]; then TARGETS="$TARGETS kth_network_test"; fi
           if [ "${{ matrix.infrastructure }}" = "true" ]; then TARGETS="$TARGETS kth_infrastructure_test"; fi
@@ -160,7 +163,7 @@ jobs:
               # branches still take True.
               RPC=True
               if grep -q -F "\"rpc\": [\"jsonrpc\"" conanfile.py; then RPC=jsonrpc; fi
-              time conan install conanfile.py --version 1.5.2 -of build --build=missing \
+              time conan install conanfile.py --version 1.6.1 -of build --build=missing \
                 -o currency=BCH -o rpc=$RPC -o tests=True \
                 -o "utxoz/*:with_tests=False" -o "utxoz/*:with_benchmarks=False" \
                 -o "utxoz/*:with_large_benchmarks=False" \
@@ -222,6 +225,22 @@ jobs:
           rc=$?
           tail -n 40 capi-tests.log
           echo "kth_capi_test exit $rc" | tee -a test-status.txt
+        shell: bash
+      - name: Run kth's C API callback controls
+        if: matrix.capi_async
+        run: |
+          TEST=$(find kth-src/build -name kth_capi_async_callbacks_test -type f -perm -u+x | head -1)
+          if [ -z "$TEST" ]; then
+            echo "missing kth_capi_async_callbacks_test binary"
+            exit 1
+          fi
+          echo "test binary: $TEST"
+          set +e
+          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w "/src/$(dirname "${TEST#kth-src/}")" "$IMAGE" \
+            bash -c "timeout --kill-after=5 30 ./kth_capi_async_callbacks_test" > capi-async-tests.log 2>&1
+          rc=$?
+          cat capi-async-tests.log
+          echo "kth_capi_async_callbacks_test exit $rc" | tee -a test-status.txt
         shell: bash
       - name: Run kth's blockchain test suite
         if: matrix.blockchain
@@ -333,6 +352,29 @@ jobs:
           KTH_STALL: ${{ matrix.stall && '1' || '0' }}
           KTH_LONG: ${{ matrix.long || '0' }}
         shell: bash
+      - name: Require all integrated SV2 client checks to pass
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          result = json.loads(Path("e2e-out/results.json").read_text())
+          setup = result.get("setup", {})
+          rows = result.get("rows", [])
+          errors = [f"{name}: {value}" for name, value in setup.items() if name.endswith("_crashed")]
+          checked = []
+          for number in (21, 22, 23, 24):
+              found = [row for row in rows if row.get("row") == number]
+              if len(found) != 1 or found[0].get("verdict") != "ok":
+                  errors.append(f"SV2 row {number} is missing, duplicated or failed: {found}")
+              checked.append({"row": number, "passed": len(found) == 1 and found[0].get("verdict") == "ok"})
+          Path("e2e-out/sv2-client-status.json").write_text(json.dumps({"rows": checked, "errors": errors}, indent=2))
+          for row in checked:
+              print(f"SV2 row {row['row']}: {'passed' if row['passed'] else 'failed'}")
+          if errors:
+              raise SystemExit("\n".join(errors))
+          PY
+        shell: bash
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -343,13 +385,35 @@ jobs:
             node-tests.log
             domain-tests.log
             capi-tests.log
+            capi-async-tests.log
             blockchain-tests.log
             network-tests.log
             infrastructure-tests.log
             e2e-out
           if-no-files-found: ignore
-      - name: Fail when a kth test suite failed
+      - name: Require all seven native test suites to pass
         run: |
-          cat test-status.txt
-          ! grep -v ' exit 0$' test-status.txt
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+
+          expected = {
+              "kth_node_test", "kth_domain_test", "kth_blockchain_test",
+              "kth_network_test", "kth_infrastructure_test", "kth_capi_test",
+              "kth_capi_async_callbacks_test",
+          }
+          counts = Counter()
+          errors = []
+          for line in Path("test-status.txt").read_text().splitlines():
+              name, separator, code = line.partition(" exit ")
+              print(line)
+              if not separator or name not in expected or code != "0":
+                  errors.append(f"Invalid or failed native test result: {line!r}")
+              counts[name] += 1
+          for name in sorted(expected):
+              if counts[name] != 1:
+                  errors.append(f"Expected one result for {name}, found {counts[name]}")
+          if errors:
+              raise SystemExit("\n".join(errors))
+          PY
         shell: bash
