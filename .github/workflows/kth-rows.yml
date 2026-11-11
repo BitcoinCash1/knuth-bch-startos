@@ -23,69 +23,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # The SV2 stack and long poll, each merged with master 787d51ab up
-        # its stack, with organize(tx) calls moved to submit_transaction.
-          - name: sv2r-804
-            branch: test/sv2r-804
+        # #814 (the version message's height) merged with master 787d51ab.
+          - name: sv2r-814
+            branch: test/sv2r-814
             gcc: '16'
-            sv2: true
-          - name: sv2r-807
-            branch: test/sv2r-807
-            gcc: '16'
-            sv2: true
-            noise: true
-          - name: sv2r-817
-            branch: test/sv2r-817
-            gcc: '16'
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: sv2r-832
-            branch: test/sv2r-832
-            gcc: '16'
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: sv2r-880
-            branch: test/sv2r-880
-            gcc: '16'
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: sv2r-833
-            branch: test/sv2r-833
-            gcc: '16'
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: sv2r-834
-            branch: test/sv2r-834
-            gcc: '16'
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: sv2r-835
-            branch: test/sv2r-835
-            gcc: '16'
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: sv2r-879
-            branch: test/sv2r-879
-            gcc: '16'
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: sv2r-881
-            branch: test/sv2r-881
-            gcc: '16'
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: sv2r-877
-            branch: test/sv2r-877
-            gcc: '16'
-            longpoll: true
+            serve: true
+            announce: true
+            network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
