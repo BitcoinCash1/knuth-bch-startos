@@ -517,13 +517,37 @@ def coinbase(height: int, value: int, tag: bytes) -> bytes:
             + struct.pack("<I", 0))
 
 
-def solve_coinbase_only(template: dict, tag: bytes) -> tuple[str, str, str]:
+def fold_branch(coinbase_hash: bytes, branch: list[str]) -> bytes:
+    """The block's Merkle root from its coinbase hash and a template's
+    `merkle` branch (hashes in display order)."""
+    root = coinbase_hash
+    for sibling in branch:
+        root = sha256d(root + bytes.fromhex(sibling)[::-1])
+    return root
+
+
+def merkle_branch(txids: list[str]) -> list[str]:
+    """The coinbase's Merkle branch over transactions in block order (txids in
+    display order), as getblocktemplatelight gives it."""
+    level = [b""] + [bytes.fromhex(t)[::-1] for t in txids]
+    branch = []
+    while len(level) > 1:
+        branch.append(level[1][::-1].hex())
+        if len(level) % 2:
+            level.append(level[-1])
+        level = [b""] + [sha256d(level[i] + level[i + 1]) for i in range(2, len(level), 2)]
+    return branch
+
+
+def solve_coinbase_only(template: dict, tag: bytes, branch: list[str] | None = None) -> tuple[str, str, str]:
     """Coinbase-only block on a template: (block hex, block hash, coinbase hex).
     The coinbase claims the bare regtest subsidy: the template's coinbasevalue
-    may include fees of transactions this block leaves out."""
+    may include fees of transactions this block leaves out. With a light
+    template's `branch`, the root covers the transactions the node adds to the
+    block under its job id, so submitblocklight takes it."""
     subsidy = (50 * 100_000_000) >> (template["height"] // 150)
     base = coinbase(template["height"], subsidy, tag)
-    root = sha256d(base)
+    root = fold_branch(sha256d(base), branch or [])
     prev = bytes.fromhex(template["previousblockhash"])[::-1]
     bits = int(template["bits"], 16)
     target = (bits & 0xFFFFFF) << (8 * ((bits >> 24) - 3))
@@ -1059,8 +1083,9 @@ def mining(s: dict) -> None:
     if error is not None or not template:
         return
     RESULTS["mining"][-1]["merkle_branch_present"] = "merkle" in template
-    block, block_hash, coinbase_hex = solve_coinbase_only(template, b"knuth-rpc-e2e")
-    RESULTS["mining"].append({"step": "built coinbase-only block on kth's template", "node": "-",
+    block, block_hash, coinbase_hex = solve_coinbase_only(template, b"knuth-rpc-e2e", template.get("merkle"))
+    RESULTS["mining"].append({"step": "built the coinbase on kth's light template, root over its job's "
+                              f"{len(template.get('merkle') or [])}-hash merkle branch", "node": "-",
                               "result": block_hash})
     step("decoderawtransaction on the coinbase (EloPool exits if this fails)", KTH,
          "decoderawtransaction", coinbase_hex)
@@ -1201,14 +1226,19 @@ def row5_merkle(s: dict) -> None:
     branch = template.get("merkle")
     if not branch:
         return row(5, client, check, False, {"merkle": branch, "kth mempool": call(KTH, "getrawmempool")[0]})
-    # The template's transactions, in canonical order (txid bytes as stored).
-    pool = sorted(call(KTH, "getrawmempool")[0] or [], key=lambda t: bytes.fromhex(t)[::-1])
-    txs = [bytes.fromhex(call(BCHN, "getrawtransaction", t, False)[0]) for t in pool]
+    # The transactions of kth's full template on the same tip, in its order.
+    full, error = call(KTH, "getblocktemplate")
+    if error is not None or not full or full.get("previousblockhash") != template["previousblockhash"]:
+        return row(5, client, check, False, {"getblocktemplate": error or "another tip"})
+    txids = [t["txid"] for t in full.get("transactions", [])]
+    expected = merkle_branch(txids)
+    if expected != branch:
+        return row(5, client, check, False, {"light merkle": branch, "branch over getblocktemplate's "
+                                             f"{len(txids)} transactions": expected})
+    txs = [bytes.fromhex(t["data"]) for t in full["transactions"]]
     subsidy = (50 * 100_000_000) >> (template["height"] // 150)
     base = coinbase(template["height"], subsidy, b"knuth-rpc-e2e row 5")
-    root = sha256d(base)
-    for sibling in branch:
-        root = sha256d(root + bytes.fromhex(sibling)[::-1])
+    root = fold_branch(sha256d(base), branch)
     prev = bytes.fromhex(template["previousblockhash"])[::-1]
     bits = int(template["bits"], 16)
     target = (bits & 0xFFFFFF) << (8 * ((bits >> 24) - 3))
@@ -1221,11 +1251,9 @@ def row5_merkle(s: dict) -> None:
     accepted, error = call(BCHN, "submitblock", block.hex())
     tip = call(BCHN, "getbestblockhash")[0]
     ok = error is None and accepted is None and tip == sha256d(header)[::-1].hex()
-    row(5, client, check, ok, {"merkle": branch, "kth mempool": pool, "first is a txid": branch[0] in pool,
+    row(5, client, check, ok, {"transactions": len(txs), "light merkle equals the branch over them": True,
                                "bchn submitblock": accepted if error is None else error,
-                               "bchn tip is the block": tip == sha256d(header)[::-1].hex(),
-                               "sendrawtransaction to kth": txid})
-    wait_kth_height(template["height"], 120)
+                               "bchn tip is the block": tip == sha256d(header)[::-1].hex()})
 
 
 def row6_validateaddress(s: dict) -> None:
@@ -1596,16 +1624,16 @@ def row11_relay_out(s: dict) -> None:
 
 
 def pr795_fee_filter(s: dict) -> None:
-    """kth tells its peer the floor its own mempool admits at: BCHN's getpeerinfo
-    shows the fee filter kth sent, 100 satoshis per 1000 bytes for Knuth's
-    default 0.1 per byte (master sends a fixed 1000)."""
+    """kth tells its peer the floor its own mempool admits at (#873): BCHN's
+    getpeerinfo shows a fee filter of 1000 satoshis per 1000 bytes, the relay
+    floor kth and BCHN share since #868."""
     peers, error = call(BCHN, "getpeerinfo")
     kth_peers = [p for p in (peers or []) if "kth" in p.get("subver", "").lower()
                  or "knuth" in p.get("subver", "").lower()]
     seen = [{"subver": p.get("subver"), "minfeefilter": p.get("minfeefilter")} for p in kth_peers]
     ok = error is None and bool(kth_peers) and all(
-        abs(float(p.get("minfeefilter", -1)) - 0.000001) < 1e-12 for p in kth_peers)
-    row(795, "every peer (fee filter)", "BCHN sees kth's fee filter at 100 sat/kB, its own floor",
+        abs(float(p.get("minfeefilter", -1)) - 0.00001) < 1e-12 for p in kth_peers)
+    row(873, "every peer (fee filter)", "BCHN sees kth's fee filter at 1000 sat/kB, the relay floor both use",
         ok, seen if error is None else error)
 
 
