@@ -1477,7 +1477,14 @@ def row4_getblocktemplate(s: dict) -> None:
     for client, request in (
             ("ASICseer pool", {"capabilities": ["coinbasetxn", "workid", "coinbase/append"], "rules": []}),
             ("EloPool", {"capabilities": ["coinbasetxn", "workid", "coinbase/append"]})):
-        template, error = call(KTH, "getblocktemplate", request)
+        # A block another row just mined may still be connecting: kth then
+        # answers that the connected chain has not caught up, as BCHN answers
+        # while it is downloading. Wait that out, briefly.
+        for _ in range(30):
+            template, error = call(KTH, "getblocktemplate", request)
+            if error is None or "not caught up" not in str(error):
+                break
+            time.sleep(1)
         fields = ("previousblockhash", "target", "version", "curtime", "bits", "height", "coinbasevalue",
                   "transactions")
         ok = error is None and isinstance(template, dict) and all(f in template for f in fields) and \
@@ -1575,10 +1582,18 @@ def row10_relay_in(s: dict) -> None:
     transactions BCHN made right after kth synced, and one it makes now, long
     after, are in kth's mempool too."""
     client = "Fulcrum, BCH Explorer, miners"
+    # The light-template row may have mined them into a block since: then
+    # kth has them confirmed, which counts as having received them.
     kth = set(call(KTH, "getrawmempool")[0] or [])
-    missing = [t for t in s["mempool_txids"] if t not in kth]
-    row(10, client, "BCHN's wallet transactions from right after the sync are in kth's mempool",
-        not missing, {"kth mempool": sorted(kth), "missing": missing})
+    recent = set()
+    height = call(KTH, "getblockcount")[0] or 0
+    for h in range(max(0, height - 5), height + 1):
+        block, _ = call(KTH, "getblock", call(KTH, "getblockhash", h)[0], 1)
+        recent.update((block or {}).get("tx", []))
+    confirmed = [t for t in s["mempool_txids"] if t not in kth and t in recent]
+    missing = [t for t in s["mempool_txids"] if t not in kth and t not in confirmed]
+    row(10, client, "BCHN's wallet transactions from right after the sync reached kth",
+        not missing, {"kth mempool": sorted(kth), "confirmed in kth's chain": confirmed, "missing": missing})
     late = cli("sendtoaddress", s["others"][2], "0.1")
     reached = False
     for _ in range(30):
