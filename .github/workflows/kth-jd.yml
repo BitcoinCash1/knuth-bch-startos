@@ -22,16 +22,32 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Worker names (0x0002): #881 merged into #834's head (with #814),
-          # against P2Pool alpha, which has #77. The RED is #834 alone, which
-          # sends no names. The script now also reads kth's failover form of
-          # the acceptance line ("Entry 1 accepted local template as job").
-          - name: pr881-row25w-alpha
-            branch: test/881-jd-r6
-            row: "25w"
+          # The SV2 stack merged with master 787d51ab (organize(tx) calls moved
+          # to submit_transaction), each with #814 (also on 787d51ab) merged in,
+          # against P2Pool alpha, which has #76 and #77.
+          - name: sv2r-832-row25
+            branch: test/sv2r-jd-832
+            row: "25"
             p2pool: alpha
-          - name: pr881-row25w-red
-            branch: test/834-jd-r6
+          - name: sv2r-833-row25
+            branch: test/sv2r-jd-833
+            row: "25"
+            p2pool: alpha
+          - name: sv2r-834-row25b
+            branch: test/sv2r-jd-834
+            row: "25b"
+            p2pool: alpha
+            p2pool_tests: true
+          - name: sv2r-835-row25c
+            branch: test/sv2r-jd-835
+            row: "25c"
+            p2pool: alpha
+          - name: sv2r-879-tdp
+            branch: test/sv2r-jd-879
+            row: "tdp"
+            p2pool: alpha
+          - name: sv2r-881-row25w
+            branch: test/sv2r-jd-881w
             row: "25w"
             p2pool: alpha
     name: kth ${{ matrix.name }}
@@ -41,7 +57,7 @@ jobs:
       # The toolchain is this Docker Hub digest; the steps take the repo's copy
       # of it (ci-deps.yml) when that copy's label carries the same digest, and
       # set IMAGE to the one they use.
-      HUB_IMAGE: kthnode/gcc15-ubuntu24.04@sha256:4988fdeb3654c2b5ea591ffa4454f67e1a631549449c62e35060ba69da79eb67
+      HUB_IMAGE: kthnode/gcc16-ubuntu24.04@sha256:cde0d8a8b911ba290e4019fa4fac81723c7cae93cd864e509fd93a7c05d25dfe
       # Copies of BCHN, the toolchains and kth's Conan packages (ci-deps.yml).
       CI_DEPS: ghcr.io/bitcoincash1/knuth-ci-deps
     steps:
@@ -61,7 +77,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Pick the toolchain image
         run: |
-          COPY="$CI_DEPS:toolchain-gcc15"
+          COPY="$CI_DEPS:toolchain-gcc16"
           IMAGE="$HUB_IMAGE"
           if docker pull --quiet --platform linux/amd64 "$COPY" \
             && [ "$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.base.digest" }}' "$COPY")" = "${HUB_IMAGE#*@}" ]; then
@@ -86,7 +102,7 @@ jobs:
         run: |
           mkdir -p conan2
           if HASH=$(cat kth-src/conan.lock kth-src/conanfile.py | sha256sum | cut -d' ' -f1); then
-            REF="$CI_DEPS:conan-gcc15-$HASH"
+            REF="$CI_DEPS:conan-gcc16-$HASH"
             if docker pull --quiet "$REF" && id=$(docker create "$REF" /x); then
               docker cp "$id:/kth-conan.tgz" conan2/kth-conan.tgz || rm -f conan2/kth-conan.tgz
               docker rm "$id" >/dev/null || true
@@ -106,9 +122,9 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: conan2
-          key: kth-conan2v2-gcc15-${{ hashFiles('kth-src/conan.lock', 'kth-src/conanfile.py') }}
+          key: kth-conan2v2-gcc16-${{ hashFiles('kth-src/conan.lock', 'kth-src/conanfile.py') }}
           restore-keys: |
-            kth-conan2v2-gcc15-
+            kth-conan2v2-gcc16-
       - name: Restore the compiler cache
         uses: actions/cache/restore@v6
         with:
@@ -145,8 +161,12 @@ jobs:
                   || echo "restoring the kept Conan packages failed; conan install uses the registry"
                 rm -f /root/.conan2/kth-conan.tgz
               fi
+              # Since k-nuth/kth#794 the rpc option names a backend; older
+              # branches still take True.
+              RPC=True
+              if grep -q -F "\"rpc\": [\"jsonrpc\"" conanfile.py; then RPC=jsonrpc; fi
               time conan install conanfile.py --version 1.5.2 -of build --build=missing \
-                -o currency=BCH -o rpc=True -o tests=True \
+                -o currency=BCH -o rpc=$RPC -o tests=True \
                 -o "utxoz/*:with_tests=False" -o "utxoz/*:with_benchmarks=False" \
                 -o "utxoz/*:with_large_benchmarks=False" \
                 -s compiler.cppstd=23 -s build_type=Release
@@ -162,7 +182,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: conan2
-          key: kth-conan2v2-gcc15-${{ hashFiles('kth-src/conan.lock', 'kth-src/conanfile.py') }}
+          key: kth-conan2v2-gcc16-${{ hashFiles('kth-src/conan.lock', 'kth-src/conanfile.py') }}
       - name: Save the compiler cache
         if: always()
         uses: actions/cache/save@v6
