@@ -23,13 +23,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #814 (the version message's height) merged with master 787d51ab.
-          - name: sv2r-814
-            branch: test/sv2r-814
+        # #805 (SHV, CHIP-2026-02) merged with master 787d51ab.
+          - name: shv-805
+            branch: test/shv-805-m787d51ab
             gcc: '16'
-            serve: true
-            announce: true
+            domain: true
+            blockchain: true
             network: true
+            shv: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
