@@ -23,10 +23,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Master 787d51ab (after v1.6.1) as it is: every #773 row it answers.
-          - name: master-787d51ab
+        # Master 787d51ab with the announcement rows, the baseline for #814's row 1004.
+          - name: master-787d51ab-announce
             branch: test/master-787d51ab
             gcc: '16'
+            serve: true
+            announce: true
+            network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
