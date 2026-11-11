@@ -23,14 +23,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #805 (SHV, CHIP-2026-02) merged with master 787d51ab.
-          - name: shv-805
-            branch: test/shv-805-m787d51ab
+        # Master 787d51ab (after v1.6.1) as it is: every #773 row it answers.
+          - name: master-787d51ab
+            branch: test/master-787d51ab
             gcc: '16'
-            domain: true
-            blockchain: true
-            network: true
-            shv: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
