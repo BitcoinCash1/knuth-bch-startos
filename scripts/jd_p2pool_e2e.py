@@ -463,7 +463,6 @@ bootstrap_address = {toml_string(payout)}
 zmqpubhashblock = {toml_string(ZMQ)}
 chain = "bitcoin-cash"
 bitcoin_cash_network = "regtest"
-bch_share_chain = "mini"
 sv2_port = {P2POOL_SV2}
 sv2_authority_public_key = {toml_string(SV2_PUBLIC)}
 sv2_authority_secret_key = {toml_string(SV2_SECRET)}
@@ -497,7 +496,6 @@ port = {API_PORT}
         "bootstrap_address": payout,
         "chain": "bitcoin-cash",
         "bitcoin_cash_network": "regtest",
-        "bch_share_chain": "mini",
         "template_source": source,
         "start_difficulty": 1,
         "minimum_difficulty": 1,
