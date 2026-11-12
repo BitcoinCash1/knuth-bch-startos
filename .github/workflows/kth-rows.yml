@@ -23,11 +23,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # getblock's patterns argument, its byteCodePattern objects compared
-        # with BCHN's before the per-transaction fee check.
-          - name: getblock-patterns
-            branch: rpc/getblock-patterns
+        # The script filter's pure domain code: entry tree, Golomb-coded set
+        # and the filter of a block, with kth_domain_test.
+          - name: script-filter
+            branch: test/script-filter
             gcc: '16'
+            domain: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
