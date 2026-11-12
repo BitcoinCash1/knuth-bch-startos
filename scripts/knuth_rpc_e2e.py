@@ -781,7 +781,29 @@ def methods(s: dict) -> None:
         return None
 
     method_check("getblock", [blk, 2], "Explorer!", same=verbose2_same)
-    method_check("getblock", [blk, 2, True], "Explorer reorg/route", same=verbose2_same)
+    def patterns_same(k, b):
+        """Every scriptSig's and scriptPubKey's byteCodePattern, as BCHN's."""
+        differs = verbose2_same(k, b)
+        if differs:
+            return differs
+        def patterns(block):
+            found = []
+            for t in block.get("tx") or []:
+                for i in t.get("vin") or []:
+                    if "scriptSig" in i:
+                        found.append(("vin", t.get("txid"), i["scriptSig"].get("byteCodePattern")))
+                for o in t.get("vout") or []:
+                    found.append(("vout", t.get("txid"), (o.get("scriptPubKey") or {}).get("byteCodePattern")))
+            return found
+        kp, bp = patterns(k), patterns(b)
+        if len(kp) != len(bp):
+            return f"{len(kp)} scripts against {len(bp)}"
+        for (side, txid, mine), (_, _, theirs) in zip(kp, bp):
+            if mine != theirs:
+                return f"{side} of {txid[:12]}: {json.dumps(mine)[:160]} vs {json.dumps(theirs)[:160]}"
+        return None
+
+    method_check("getblock", [blk, 2, True], "Explorer reorg/route", same=patterns_same)
     method_check("getblockheader", [blk, False], "Explorer!", same=eq)
     method_check("getblockheader", [blk, True], "Fulcrum client, package health",
                  needed=("confirmations", "height", "time"))

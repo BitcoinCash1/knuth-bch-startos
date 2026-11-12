@@ -23,13 +23,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Master 787d51ab with the announcement rows, the baseline for #814's row 1004.
-          - name: master-787d51ab-announce
-            branch: test/master-787d51ab
+        # getblock's patterns argument, compared with BCHN's byteCodePattern
+        # objects; #866 and #867 merged with master 787d51ab as a check.
+          - name: getblock-patterns
+            branch: rpc/getblock-patterns
             gcc: '16'
-            serve: true
-            announce: true
-            network: true
+          - name: 866-m787d51ab
+            branch: test/866-m787d51ab
+            gcc: '16'
+          - name: 867-m787d51ab
+            branch: test/867-m787d51ab
+            gcc: '16'
+            blockchain: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
