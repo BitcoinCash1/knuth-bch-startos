@@ -796,11 +796,16 @@ def methods(s: dict) -> None:
         kp, bp = patterns(k), patterns(b)
         if len(kp) != len(bp):
             return f"{len(kp)} scripts against {len(bp)}"
+        # patternAsm is script text, which kth writes in its own notation in
+        # every asm field; the other fields are compared with BCHN's.
+        def bytes_only(p):
+            return {f: v for f, v in (p or {}).items() if f != "patternAsm"} if p is not None else None
         for (side, txid, mine), (_, _, theirs) in zip(kp, bp):
-            if mine != theirs:
+            if bytes_only(mine) != bytes_only(theirs) or (mine is None) != (theirs is None):
                 return f"{side} of {txid[:12]}: {json.dumps(mine)[:160]} vs {json.dumps(theirs)[:160]}"
         rest = verbose2_same(k, b)
-        return f"byteCodePattern equal to BCHN's in all {len(kp)} scripts; {rest}" if rest else None
+        same = f"fingerprint, pattern, data and error equal to BCHN's in all {len(kp)} scripts"
+        return f"{same}; {rest}" if rest else None
 
     method_check("getblock", [blk, 2, True], "Explorer reorg/route", same=patterns_same)
     method_check("getblockheader", [blk, False], "Explorer!", same=eq)
