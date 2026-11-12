@@ -782,10 +782,8 @@ def methods(s: dict) -> None:
 
     method_check("getblock", [blk, 2], "Explorer!", same=verbose2_same)
     def patterns_same(k, b):
-        """Every scriptSig's and scriptPubKey's byteCodePattern, as BCHN's."""
-        differs = verbose2_same(k, b)
-        if differs:
-            return differs
+        """Every scriptSig's and scriptPubKey's byteCodePattern, as BCHN's;
+        then the verbosity 2 checks, reported after the patterns."""
         def patterns(block):
             found = []
             for t in block.get("tx") or []:
@@ -801,7 +799,8 @@ def methods(s: dict) -> None:
         for (side, txid, mine), (_, _, theirs) in zip(kp, bp):
             if mine != theirs:
                 return f"{side} of {txid[:12]}: {json.dumps(mine)[:160]} vs {json.dumps(theirs)[:160]}"
-        return None
+        rest = verbose2_same(k, b)
+        return f"byteCodePattern equal to BCHN's in all {len(kp)} scripts; {rest}" if rest else None
 
     method_check("getblock", [blk, 2, True], "Explorer reorg/route", same=patterns_same)
     method_check("getblockheader", [blk, False], "Explorer!", same=eq)

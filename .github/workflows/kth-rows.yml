@@ -23,18 +23,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # getblock's patterns argument, compared with BCHN's byteCodePattern
-        # objects; #866 and #867 merged with master 787d51ab as a check.
+        # getblock's patterns argument, its byteCodePattern objects compared
+        # with BCHN's before the per-transaction fee check.
           - name: getblock-patterns
             branch: rpc/getblock-patterns
             gcc: '16'
-          - name: 866-m787d51ab
-            branch: test/866-m787d51ab
-            gcc: '16'
-          - name: 867-m787d51ab
-            branch: test/867-m787d51ab
-            gcc: '16'
-            blockchain: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
