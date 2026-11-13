@@ -96,7 +96,7 @@ RUN conan profile detect --force \
  && conan remote add kth https://packages.kth.cash/api/ --force \
  && conan install conanfile.py --version 1.5.2 -of build --build=missing \
       -o "kth/*:currency=${CURRENCY}" \
-      -o "kth/*:rpc=True" \
+      -o "kth/*:rpc=jsonrpc" \
       -o "kth/*:tests=False" \
       -o "utxoz/*:with_tests=False" \
       -o "utxoz/*:with_benchmarks=False" \
