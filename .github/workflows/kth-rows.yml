@@ -23,10 +23,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # The Job Declaration upstreams through net.proxy and I2P: the SV2 stack up
-        # to #832 with #808 (and #803) merged in. The node suite holds its tests;
-        # the network suite shows the merge left the SOCKS5 and SAM code whole.
-        # The #803 and #808 refresh ran as run 43467396123.
+        # The Tor and I2P branches after run 43467396123 (#803: one node case that
+        # counted on a proxy dial master now skips; #808: fixtures that hand the
+        # node inbound sessions with the inbound limit at zero), and the Job
+        # Declaration upstreams through net.proxy and I2P on top of them: the SV2
+        # stack up to #832 with #808 merged in.
+          - name: sv2s-803-socks5
+            branch: test/sv2s-803
+            gcc: '16'
+            network: true
+          - name: sv2s-808-i2p
+            branch: test/sv2s-808
+            gcc: '16'
+            network: true
           - name: sv2s-jd-tor-i2p
             branch: test/sv2s-jd-tor-i2p
             gcc: '16'
