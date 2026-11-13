@@ -12,6 +12,8 @@
 # so this stage uses the project's own toolchain image to match the compile
 # profile published on packages.kth.cash.
 ARG TOOLCHAIN=kthnode/gcc15-ubuntu24.04@sha256:4988fdeb3654c2b5ea591ffa4454f67e1a631549449c62e35060ba69da79eb67
+# TEST ONLY: kth after k-nuth/kth#865 builds with GCC 16.2; the JD build uses the image kth-jd.yml builds the rows with.
+ARG TOOLCHAIN_JD=kthnode/gcc16-ubuntu24.04@sha256:cde0d8a8b911ba290e4019fa4fac81723c7cae93cd864e509fd93a7c05d25dfe
 
 # The official gcc15 toolchain image is linux/amd64 only. Packing aarch64 and
 # riscv64 s9pks reuses this image; StartOS runs it under qemu (emulateMissing).
@@ -78,16 +80,16 @@ RUN conan profile detect --force \
  && test -x /out/kth-tempnet
 
 # ── Job Declaration build (TEST ONLY) ───────────────────────────────
-# TEST ONLY, Job Declaration client (k-nuth/kth#832, #834) on chipnet against the BCH P2Pool pool.
-FROM --platform=linux/amd64 ${TOOLCHAIN} AS kth-jd-build
+# TEST ONLY, Job Declaration client (k-nuth/kth#832 to #835) on chipnet against the BCH P2Pool pool.
+FROM --platform=linux/amd64 ${TOOLCHAIN_JD} AS kth-jd-build
 
-ARG JD_COMMIT=a2c400bd
+ARG JD_COMMIT=5a95bfa5
 ARG CURRENCY=BCH
 
 RUN pip install --no-cache-dir --upgrade "conan>=2.25,<3" "kthbuild>=4,<5"
 
 WORKDIR /src/kth
-RUN git clone --branch test/sv2-jd-payout-outputs-announce --single-branch https://github.com/CyberAshven/kth.git . \
+RUN git clone --branch test/sv2r-jd-835 --single-branch https://github.com/CyberAshven/kth.git . \
  && git checkout --detach ${JD_COMMIT}
 
 RUN conan profile detect --force \
