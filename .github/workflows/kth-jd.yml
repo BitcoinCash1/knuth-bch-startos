@@ -22,20 +22,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Delay test. The same row 25w on the failover + payout outputs
-          # combination, with every packet to and from P2Pool's SV2 port held
-          # back: 250 ms each way is a 0.5 s round trip, 1000 ms a 2 s one. This
-          # is what a declaration over Tor or I2P meets. The refreshed stack's
-          # rows ran as run 43466685697 and are in this file's history.
-          - name: sv2s-881w-row25w-rt500ms
+          # The pool's fix for declared jobs (BCH P2Pool fix/sv2-declared-job-slots:
+          # a channel's own 8 declared-job slots, tokens per connection,
+          # stale-chain-tip and template-unavailable answers), with the same kth as
+          # the alpha rows of run 43467817032: row 25w without delay, then with a
+          # 0.5 s and a 2 s round trip to the pool. 250 ms each way is a 0.5 s round
+          # trip, 1000 ms a 2 s one.
+          - name: sv2s-881w-row25w-poolfix
             branch: test/sv2r-jd-881w-stale
             row: "25w"
-            p2pool: alpha
+            p2pool: fix/sv2-declared-job-slots
+          - name: sv2s-881w-row25w-poolfix-rt500ms
+            branch: test/sv2r-jd-881w-stale
+            row: "25w"
+            p2pool: fix/sv2-declared-job-slots
             delay_ms: 250
-          - name: sv2s-881w-row25w-rt2000ms
+          - name: sv2s-881w-row25w-poolfix-rt2000ms
             branch: test/sv2r-jd-881w-stale
             row: "25w"
-            p2pool: alpha
+            p2pool: fix/sv2-declared-job-slots
             delay_ms: 1000
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
