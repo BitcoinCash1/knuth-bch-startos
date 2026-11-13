@@ -22,34 +22,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # The SV2 stack refreshed with master 41c05ea7 (which has #814), each
-          # branch as it would be pushed to its PR, against P2Pool alpha. Row 25w
-          # needs failover and payout outputs together: the combination branch.
-          - name: sv2s-832-row25
-            branch: test/sv2s-832
-            row: "25"
-            p2pool: alpha
-          - name: sv2s-833-row25
-            branch: test/sv2s-833
-            row: "25"
-            p2pool: alpha
-          - name: sv2s-834-row25b
-            branch: test/sv2s-834
-            row: "25b"
-            p2pool: alpha
-            p2pool_tests: true
-          - name: sv2s-835-row25c
-            branch: test/sv2s-835
-            row: "25c"
-            p2pool: alpha
-          - name: sv2s-879-tdp
-            branch: test/sv2s-879
-            row: "tdp"
-            p2pool: alpha
-          - name: sv2s-881w-row25w
+          # Delay test. The same row 25w on the failover + payout outputs
+          # combination, with every packet to and from P2Pool's SV2 port held
+          # back: 250 ms each way is a 0.5 s round trip, 1000 ms a 2 s one. This
+          # is what a declaration over Tor or I2P meets. The refreshed stack's
+          # rows ran as run 43466685697 and are in this file's history.
+          - name: sv2s-881w-row25w-rt500ms
             branch: test/sv2r-jd-881w-stale
             row: "25w"
             p2pool: alpha
+            delay_ms: 250
+          - name: sv2s-881w-row25w-rt2000ms
+            branch: test/sv2r-jd-881w-stale
+            row: "25w"
+            p2pool: alpha
+            delay_ms: 1000
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -267,6 +254,21 @@ jobs:
           cd p2pool
           cargo test --locked -p p2poolv2_lib --lib -- stratum::sv2:: 2>&1 | tee ../p2pool-tests.log
         shell: bash
+      - name: Delay P2Pool's SV2 port
+        if: matrix.delay_ms
+        run: |
+          # kth runs with host networking and dials 127.0.0.1:3336, so the delay sits
+          # on the loopback device, on TCP port 3336 alone: BCHN, RPC and the mining
+          # device's connection to kth are untouched. No delay, no test: any failure
+          # here fails the job.
+          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" >/dev/null 2>&1 || true
+          sudo modprobe sch_netem
+          sudo tc qdisc add dev lo root handle 1: prio bands 4
+          sudo tc qdisc add dev lo parent 1:4 handle 40: netem delay ${{ matrix.delay_ms }}ms
+          sudo tc filter add dev lo protocol ip parent 1:0 prio 1 u32 match ip protocol 6 0xff match ip dport 3336 0xffff flowid 1:4
+          sudo tc filter add dev lo protocol ip parent 1:0 prio 1 u32 match ip protocol 6 0xff match ip sport 3336 0xffff flowid 1:4
+          sudo tc -s qdisc show dev lo
+        shell: bash
       - name: Run the Job Declaration check
         run: |
           KTH_BIN=$(find "$PWD/kth-src/build" -name kth -type f -perm -u+x -path '*node-exe*' -print -quit)
@@ -288,7 +290,9 @@ jobs:
               exit 1
             fi
           done
-          python3 -u scripts/jd_p2pool_e2e.py e2e-out
+          rc=0; python3 -u scripts/jd_p2pool_e2e.py e2e-out || rc=$?
+          if [ -n "${{ matrix.delay_ms }}" ]; then sudo tc -s qdisc show dev lo | tee e2e-out/netem.txt; fi
+          exit $rc
         shell: bash
       - uses: actions/upload-artifact@v7
         if: always()
