@@ -23,20 +23,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # The Tor and I2P pull requests refreshed with master 41c05ea7: #803 (SOCKS5)
-        # and #808 (I2P through SAM, with #803 merged in), with the network,
-        # infrastructure and domain suites next to the node suite. The SV2 stack
-        # entries ran as run 43466673220 and are in this file's history.
-          - name: sv2s-803-socks5
-            branch: test/sv2s-803
+        # The Job Declaration upstreams through net.proxy and I2P: the SV2 stack up
+        # to #832 with #808 (and #803) merged in. The node suite holds its tests;
+        # the network suite shows the merge left the SOCKS5 and SAM code whole.
+        # The #803 and #808 refresh ran as run 43467396123.
+          - name: sv2s-jd-tor-i2p
+            branch: test/sv2s-jd-tor-i2p
             gcc: '16'
             network: true
-          - name: sv2s-808-i2p
-            branch: test/sv2s-808
-            gcc: '16'
-            network: true
-            infrastructure: true
-            domain: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
