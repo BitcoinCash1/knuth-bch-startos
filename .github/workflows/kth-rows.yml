@@ -23,20 +23,42 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # kth's JD client waits and declares again when the pool's node is on
-        # another tip (a stale payout answer with no notice), as one commit on
-        # the head of k-nuth/kth#834: kth_node_test.
-          - name: jd-881w-stale
+        # The SV2 stack refreshed with master 41c05ea7, each branch as it would be
+        # pushed to its PR: #807 with the Noise certificate's clock leeway, #834
+        # with the JD client's stale rules, and the merges between them. The last
+        # entry is the failover + payout outputs combination the Start9 runs.
+          - name: sv2s-804
+            branch: test/sv2s-804
+            gcc: '16'
+          - name: sv2s-807
+            branch: test/sv2s-807
+            gcc: '16'
+          - name: sv2s-817
+            branch: test/sv2s-817
+            gcc: '16'
+          - name: sv2s-832
+            branch: test/sv2s-832
+            gcc: '16'
+          - name: sv2s-833
+            branch: test/sv2s-833
+            gcc: '16'
+          - name: sv2s-834
+            branch: test/sv2s-834
+            gcc: '16'
+          - name: sv2s-835
+            branch: test/sv2s-835
+            gcc: '16'
+          - name: sv2s-879
+            branch: test/sv2s-879
+            gcc: '16'
+          - name: sv2s-880
+            branch: test/sv2s-880
+            gcc: '16'
+          - name: sv2s-881
+            branch: test/sv2s-881
+            gcc: '16'
+          - name: sv2s-881w-combination
             branch: test/sv2r-jd-881w-stale
-            gcc: '16'
-        # The same fixes in the shape of the open PRs: the Noise certificate's
-        # clock leeway on the head of k-nuth/kth#807, and the JD client's stale
-        # rules on the head of #834.
-          - name: noise-leeway-807
-            branch: test/sv2r-noise-leeway
-            gcc: '16'
-          - name: jd-stale-834
-            branch: test/sv2r-jd-834-stale
             gcc: '16'
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
