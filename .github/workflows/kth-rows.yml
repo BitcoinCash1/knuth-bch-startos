@@ -23,13 +23,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # The script filter's pure domain code: entry tree, Golomb-coded set
-        # and the filter of a block, with kth_domain_test.
-          - name: script-filter
-            branch: test/script-filter
+        # The script filter's pure domain code: entry tree, Golomb-coded set,
+        # the filter of a block and the transaction Merkle branch, with the
+        # filters and headers a bchd node served for blocks of its chain
+        # rebuilt in kth_domain_test.
+          - name: script-filter-pure
+            branch: test/script-filter-pure
             gcc: '16'
             domain: true
-            blockchain: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
