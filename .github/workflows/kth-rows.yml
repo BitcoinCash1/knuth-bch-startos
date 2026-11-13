@@ -29,6 +29,7 @@ jobs:
             branch: test/script-filter
             gcc: '16'
             domain: true
+            blockchain: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
