@@ -23,43 +23,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # The SV2 stack refreshed with master 41c05ea7, each branch as it would be
-        # pushed to its PR: #807 with the Noise certificate's clock leeway, #834
-        # with the JD client's stale rules, and the merges between them. The last
-        # entry is the failover + payout outputs combination the Start9 runs.
-          - name: sv2s-804
-            branch: test/sv2s-804
+        # The Tor and I2P pull requests refreshed with master 41c05ea7: #803 (SOCKS5)
+        # and #808 (I2P through SAM, with #803 merged in), with the network,
+        # infrastructure and domain suites next to the node suite. The SV2 stack
+        # entries ran as run 43466673220 and are in this file's history.
+          - name: sv2s-803-socks5
+            branch: test/sv2s-803
             gcc: '16'
-          - name: sv2s-807
-            branch: test/sv2s-807
+            network: true
+          - name: sv2s-808-i2p
+            branch: test/sv2s-808
             gcc: '16'
-          - name: sv2s-817
-            branch: test/sv2s-817
-            gcc: '16'
-          - name: sv2s-832
-            branch: test/sv2s-832
-            gcc: '16'
-          - name: sv2s-833
-            branch: test/sv2s-833
-            gcc: '16'
-          - name: sv2s-834
-            branch: test/sv2s-834
-            gcc: '16'
-          - name: sv2s-835
-            branch: test/sv2s-835
-            gcc: '16'
-          - name: sv2s-879
-            branch: test/sv2s-879
-            gcc: '16'
-          - name: sv2s-880
-            branch: test/sv2s-880
-            gcc: '16'
-          - name: sv2s-881
-            branch: test/sv2s-881
-            gcc: '16'
-          - name: sv2s-881w-combination
-            branch: test/sv2r-jd-881w-stale
-            gcc: '16'
+            network: true
+            infrastructure: true
+            domain: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
