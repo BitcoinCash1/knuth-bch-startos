@@ -26,8 +26,8 @@ jobs:
         # kth's JD client waits and declares again when the pool's node is on
         # another tip (a stale payout answer with no notice), as one commit on
         # the head of k-nuth/kth#834: kth_node_test.
-          - name: jd-stale-wait
-            branch: test/sv2r-jd-835-stale
+          - name: jd-881w-stale
+            branch: test/sv2r-jd-881w-stale
             gcc: '16'
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
