@@ -23,19 +23,42 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # The Tor and I2P branches after run 43467396123 (#803: one node case that
-        # counted on a proxy dial master now skips; #808: fixtures that hand the
-        # node inbound sessions with the inbound limit at zero), and the Job
-        # Declaration upstreams through net.proxy and I2P on top of them: the SV2
-        # stack up to #832 with #808 merged in.
-          - name: sv2s-803-socks5
-            branch: test/sv2s-803
+        # The SV2 stack after run 43466673220. The Noise certificate's clock leeway
+        # had gone into every certificate check, the server's own included; it is
+        # now the initiator's alone (#807), and #832's slow-handshake case expires
+        # past it. #804 passed in that run and is unchanged. The Tor and I2P
+        # branches run as 43475622528; the JD upstreams through them are here
+        # again with the #832 fix merged in.
+          - name: sv2s-807
+            branch: test/sv2s-807
             gcc: '16'
-            network: true
-          - name: sv2s-808-i2p
-            branch: test/sv2s-808
+          - name: sv2s-817
+            branch: test/sv2s-817
             gcc: '16'
-            network: true
+          - name: sv2s-832
+            branch: test/sv2s-832
+            gcc: '16'
+          - name: sv2s-833
+            branch: test/sv2s-833
+            gcc: '16'
+          - name: sv2s-834
+            branch: test/sv2s-834
+            gcc: '16'
+          - name: sv2s-835
+            branch: test/sv2s-835
+            gcc: '16'
+          - name: sv2s-879
+            branch: test/sv2s-879
+            gcc: '16'
+          - name: sv2s-880
+            branch: test/sv2s-880
+            gcc: '16'
+          - name: sv2s-881
+            branch: test/sv2s-881
+            gcc: '16'
+          - name: sv2s-881w-combination
+            branch: test/sv2r-jd-881w-stale
+            gcc: '16'
           - name: sv2s-jd-tor-i2p
             branch: test/sv2s-jd-tor-i2p
             gcc: '16'
