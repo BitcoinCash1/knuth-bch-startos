@@ -29,6 +29,15 @@ jobs:
           - name: jd-881w-stale
             branch: test/sv2r-jd-881w-stale
             gcc: '16'
+        # The same fixes in the shape of the open PRs: the Noise certificate's
+        # clock leeway on the head of k-nuth/kth#807, and the JD client's stale
+        # rules on the head of #834.
+          - name: noise-leeway-807
+            branch: test/sv2r-noise-leeway
+            gcc: '16'
+          - name: jd-stale-834
+            branch: test/sv2r-jd-834-stale
+            gcc: '16'
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
