@@ -8,12 +8,8 @@ import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 const ALLOW_DOWNGRADE = false
 
 export const current = VersionInfo.of({
-  version: '1.5.2:1',
-  releaseNotes:
-    'Add Tempnet as a network option. Tempnet runs kth commit ' +
-    'c67aa441b98085b4001b397842b622afe877d7aa from CyberAshven/kth, with ' +
-    'Tempnet support (#752) and the fast-sync crash fix (#815) merged onto kth master, pending an upstream release. ' +
-    'Every other network is unchanged and continues to run released kth 1.5.2.',
+  version: '1.7.0:0',
+  releaseNotes: 'Upstream v1.7.0.',
   migrations: {
     up: async () => {},
     down: ALLOW_DOWNGRADE ? async () => {} : IMPOSSIBLE,
