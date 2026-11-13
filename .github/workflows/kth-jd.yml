@@ -56,6 +56,12 @@ jobs:
             branch: test/sv2r-jd-881w
             row: "25w"
             p2pool: alpha
+          # The #881 + #834 combination (failover and payout outputs together) with
+          # the JD client's wait on a tip difference and its payout refresh.
+          - name: sv2r-881w-stale-row25w
+            branch: test/sv2r-jd-881w-stale
+            row: "25w"
+            p2pool: alpha
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
