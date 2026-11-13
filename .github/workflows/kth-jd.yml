@@ -42,6 +42,12 @@ jobs:
             branch: test/sv2r-jd-835
             row: "25c"
             p2pool: alpha
+          # #835 with the JD client's wait on a stale payout answer (the pool's
+          # node on another tip) in place of leaving the pool.
+          - name: sv2r-835-row25c-stale-wait
+            branch: test/sv2r-jd-835-stale
+            row: "25c"
+            p2pool: alpha
           - name: sv2r-879-tdp
             branch: test/sv2r-jd-879
             row: "tdp"
