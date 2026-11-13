@@ -83,13 +83,13 @@ RUN conan profile detect --force \
 # TEST ONLY, Job Declaration client (k-nuth/kth#832 to #835) on chipnet against the BCH P2Pool pool.
 FROM --platform=linux/amd64 ${TOOLCHAIN_JD} AS kth-jd-build
 
-ARG JD_COMMIT=5a95bfa5
+ARG JD_COMMIT=a45735f9
 ARG CURRENCY=BCH
 
 RUN pip install --no-cache-dir --upgrade "conan>=2.25,<3" "kthbuild>=4,<5"
 
 WORKDIR /src/kth
-RUN git clone --branch test/sv2r-jd-835 --single-branch https://github.com/CyberAshven/kth.git . \
+RUN git clone --branch test/sv2r-jd-835-stale --single-branch https://github.com/CyberAshven/kth.git . \
  && git checkout --detach ${JD_COMMIT}
 
 RUN conan profile detect --force \
