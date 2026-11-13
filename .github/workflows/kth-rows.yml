@@ -23,18 +23,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # The script filter of a block built when asked for, from the stored
-        # block and its undo record, with the latest kept in memory: the
-        # mapping and the cache in kth_blockchain_test, the chain read over
-        # the node's connect path in kth_node_test, on top of the pure domain
-        # code in kth_domain_test.
-        # The regular compact filter (type 0) on Knuth's master: the Golomb-coded
-        # set and the filter of a block, with the filters bchd's library builds
-        # for blocks of a bchd chain rebuilt in kth_domain_test.
-          - name: compact-filter
-            branch: test/compact-filter-b
+        # kth's JD client waits and declares again when the pool's node is on
+        # another tip (a stale payout answer with no notice): kth_node_test.
+          - name: jd-stale-wait
+            branch: test/sv2r-jd-835-stale
             gcc: '16'
-            domain: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
