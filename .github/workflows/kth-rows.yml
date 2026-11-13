@@ -32,7 +32,7 @@ jobs:
         # set and the filter of a block, with the filters bchd's library builds
         # for blocks of a bchd chain rebuilt in kth_domain_test.
           - name: compact-filter
-            branch: test/compact-filter
+            branch: test/compact-filter-b
             gcc: '16'
             domain: true
     name: kth ${{ matrix.name }}
