@@ -22,43 +22,31 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # The SV2 stack merged with master 787d51ab (organize(tx) calls moved
-          # to submit_transaction), each with #814 (also on 787d51ab) merged in,
-          # against P2Pool alpha, which has #76 and #77.
-          - name: sv2r-832-row25
-            branch: test/sv2r-jd-832
+          # The SV2 stack refreshed with master 41c05ea7 (which has #814), each
+          # branch as it would be pushed to its PR, against P2Pool alpha. Row 25w
+          # needs failover and payout outputs together: the combination branch.
+          - name: sv2s-832-row25
+            branch: test/sv2s-832
             row: "25"
             p2pool: alpha
-          - name: sv2r-833-row25
-            branch: test/sv2r-jd-833
+          - name: sv2s-833-row25
+            branch: test/sv2s-833
             row: "25"
             p2pool: alpha
-          - name: sv2r-834-row25b
-            branch: test/sv2r-jd-834
+          - name: sv2s-834-row25b
+            branch: test/sv2s-834
             row: "25b"
             p2pool: alpha
             p2pool_tests: true
-          - name: sv2r-835-row25c
-            branch: test/sv2r-jd-835
+          - name: sv2s-835-row25c
+            branch: test/sv2s-835
             row: "25c"
             p2pool: alpha
-          # #835 with the JD client's wait on a stale payout answer (the pool's
-          # node on another tip) in place of leaving the pool.
-          - name: sv2r-835-row25c-stale-wait
-            branch: test/sv2r-jd-835-stale
-            row: "25c"
-            p2pool: alpha
-          - name: sv2r-879-tdp
-            branch: test/sv2r-jd-879
+          - name: sv2s-879-tdp
+            branch: test/sv2s-879
             row: "tdp"
             p2pool: alpha
-          - name: sv2r-881-row25w
-            branch: test/sv2r-jd-881w
-            row: "25w"
-            p2pool: alpha
-          # The #881 + #834 combination (failover and payout outputs together) with
-          # the JD client's wait on a tip difference and its payout refresh.
-          - name: sv2r-881w-stale-row25w
+          - name: sv2s-881w-row25w
             branch: test/sv2r-jd-881w-stale
             row: "25w"
             p2pool: alpha
