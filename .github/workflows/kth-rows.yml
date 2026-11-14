@@ -23,16 +23,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # The Neutrino library itself against kth: scripts/neutrino-client, built
-        # from gcash/neutrino, with kth as its only peer on the regtest chain of
-        # more than 2,000 blocks, beside the light client of run 43626838457. The
-        # branch now ends with its docs page. BIP37 runs as 43650558198.
-          - name: compact-filter-serving-neutrino
-            branch: test/compact-filter-serving
+        # BIP37 with its test data corrected (a public key of 34 bytes where 33
+        # was meant): the domain suite, then the serving branch with the light
+        # client that compares kth with BCHN at four steps, which passed in run
+        # 43650558198. The Neutrino library runs against kth as 43650821096.
+          - name: bip37-bloom-filter
+            branch: test/bip37-bloom-filter
             gcc: '16'
-            filters: true
-            neutrino: true
-            long: 2100
+            domain: true
+          - name: bip37-serving-e2e
+            branch: test/bip37-serving
+            gcc: '16'
+            domain: true
+            network: true
+            bloom: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
