@@ -23,35 +23,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # The SV2 stack after run 43466673220. The Noise certificate's clock leeway
-        # had gone into every certificate check, the server's own included; it is
-        # now the initiator's alone (#807), and #832's slow-handshake case expires
-        # past it. #804 passed in that run and is unchanged. The Tor and I2P
-        # branches run as 43475622528; the JD upstreams through them are here
-        # again with the #832 fix merged in.
-          - name: sv2s-807
-            branch: test/sv2s-807
-            gcc: '16'
-          - name: sv2s-817
-            branch: test/sv2s-817
-            gcc: '16'
-          - name: sv2s-832
-            branch: test/sv2s-832
-            gcc: '16'
+        # #833 after a day against a live pool: a silent handshake is retried like
+        # any failure (it had the one-hour authority hold), and a recovered pool
+        # returns from solo without waiting for a new tip. #881 builds on #833; the
+        # combination is what the Start9 runs. The rest of the stack ran green as
+        # run 43476435468 and is in this file's history.
           - name: sv2s-833
             branch: test/sv2s-833
-            gcc: '16'
-          - name: sv2s-834
-            branch: test/sv2s-834
-            gcc: '16'
-          - name: sv2s-835
-            branch: test/sv2s-835
-            gcc: '16'
-          - name: sv2s-879
-            branch: test/sv2s-879
-            gcc: '16'
-          - name: sv2s-880
-            branch: test/sv2s-880
             gcc: '16'
           - name: sv2s-881
             branch: test/sv2s-881
@@ -59,10 +37,6 @@ jobs:
           - name: sv2s-881w-combination
             branch: test/sv2r-jd-881w-stale
             gcc: '16'
-          - name: sv2s-jd-tor-i2p
-            branch: test/sv2s-jd-tor-i2p
-            gcc: '16'
-            network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
