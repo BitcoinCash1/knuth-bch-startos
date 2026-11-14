@@ -23,12 +23,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # The regular compact filter of a block (filter type 0) on current master
-        # 5b230a17: the Golomb-coded set, the filter, its hash and header, with
-        # the domain suite that holds their tests. The #833 fixes ran green as run
-        # 43612892461 and are in this file's history.
-          - name: compact-filter-regular
-            branch: test/compact-filter-c
+        # The six compact filter messages (getcfilters, cfilter, getcfheaders,
+        # cfheaders, getcfcheckpt, cfcheckpt) on top of the regular filter, on
+        # master 5b230a17, with the domain suite that holds their tests. The
+        # regular filter alone runs as 43622551404.
+          - name: compact-filter-messages
+            branch: test/compact-filter-messages
             gcc: '16'
             domain: true
     name: kth ${{ matrix.name }}
