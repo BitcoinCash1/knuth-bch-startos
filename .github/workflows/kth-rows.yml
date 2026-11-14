@@ -23,14 +23,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Row 36 of #773: getrawtransaction for a confirmed transaction without
-        # its block hash, found through an output of it that is still unspent,
-        # with no index. The node suite holds its test; the node calls of the
-        # end-to-end checks compare the answer with BCHN's. BIP37 runs as
-        # 43653265427 and the Neutrino library as 43650821096.
-          - name: getrawtransaction-unspent
-            branch: test/getrawtransaction-unspent
+        # The script filter (filter type 1) carried onto the compact filter
+        # stack: its entry tree and builder, the transaction Merkle branch, and
+        # the source that builds it from a stored block and its undo record,
+        # on top of the regular filter, the messages and the serving code. The
+        # domain, blockchain and node suites hold its tests. Row 36 runs as
+        # 43653555904 and BIP37 as 43653265427.
+          - name: script-filter-type1
+            branch: test/script-filter-type1
             gcc: '16'
+            domain: true
+            blockchain: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
