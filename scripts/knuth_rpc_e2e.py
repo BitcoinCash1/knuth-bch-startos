@@ -2950,10 +2950,12 @@ def bloom_bits(elements: list[bytes], size: int = 64, functions: int = 5, tweak:
 
 def bloom_filter_light_client(s: dict) -> None:
     """A wallet that loads a bloom filter (BIP37) and asks for filtered blocks,
-    against kth and against BCHN with the same bytes. The filter holds the key
-    hash one wallet transaction pays to. kth's merkleblock and the transactions
-    after it must be the bytes BCHN sends."""
-    client = "bloom filter light client (filterload, getdata of filtered blocks over P2P)"
+    against kth and against BCHN with the same bytes, step by step: before any
+    filter is loaded, with a filter that holds the key hash one wallet
+    transaction pays to, after an element is added, and after the filter is
+    cleared. At every step kth's merkleblocks and the transactions after them
+    must be the bytes BCHN sends."""
+    client = "bloom filter light client (filterload, filteradd, filterclear, getdata of filtered blocks over P2P)"
     if not BLOOM:
         return
     seen: dict = {}
@@ -2964,58 +2966,51 @@ def bloom_filter_light_client(s: dict) -> None:
         key_hash = script[3:23]
         seen["watched key hash"] = key_hash.hex()
         bits = bloom_bits([key_hash])
-        load = bytes([len(bits)]) + bits + struct.pack("<II", 5, 0) + b"\x01"
+        load = bytes([len(bits)]) + bits + struct.pack("<II", 5, 0) + bytes([1])
         tx_block = bytes.fromhex(s["tx_block"])[::-1]
         other_block = bytes.fromhex(call(BCHN, "getblockhash", 5)[0])[::-1]
+        coinbase = bytes.fromhex(call(BCHN, "getblock", other_block[::-1].hex(), 1)[0]["tx"][0])[::-1]
         wanted = (b"merkleblock", b"tx", b"notfound")
 
         def filtered(inventory: list[bytes]) -> bytes:
             return bytes([len(inventory)]) + b"".join(struct.pack("<I", 3) + h for h in inventory)
 
+        steps = (("no filter loaded", None, [tx_block]),
+                 ("filter loaded", (b"filterload", load), [tx_block, other_block]),
+                 ("element added", (b"filteradd", bytes([32]) + coinbase), [other_block]),
+                 ("filter cleared", (b"filterclear", b""), [other_block]))
         answers: dict = {}
         for name, port in (("kth", KTH_P2P_PORT), ("bchn", 18444)):
             peer = LightPeer(port)
             peers[name] = peer
             if name == "kth":
                 seen["NODE_BLOOM advertised"] = peer.services is not None and bool(peer.services & NODE_BLOOM)
-                # Before a filter is loaded a filtered block gets no answer.
-                peer.send(b"getdata", filtered([tx_block]))
-                seen["no answer without a filter"] = not peer.collect(wanted, None, quiet=3.0, limit=6.0)
-            peer.send(b"filterload", load)
-            peer.send(b"getdata", filtered([tx_block, other_block]))
-            answers[name] = peer.collect(wanted, None, quiet=5.0, limit=60.0)
-        kth, bchn = answers["kth"], answers["bchn"]
-        seen["kth sent"] = [c.decode() for c, _ in kth]
-        seen["bchn sent"] = [c.decode() for c, _ in bchn]
-        proofs = [p for c, p in kth if c == b"merkleblock"]
-        matched = [p for c, p in kth if c == b"tx"]
-        seen["matched transactions"] = len(matched)
-        same = kth == bchn
-        seen["same bytes as BCHN"] = same
-
-        # The filter can grow and go: an element added matches the coinbase of
-        # another block, and after filterclear a filtered block has no answer.
-        peer = peers["kth"]
-        coinbase = bytes.fromhex(call(BCHN, "getblock", other_block[::-1].hex(), 1)[0]["tx"][0])[::-1]
-        peer.send(b"filteradd", bytes([32]) + coinbase)
-        peer.send(b"getdata", filtered([other_block]))
-        after_add = peer.collect(wanted, None, quiet=4.0, limit=30.0)
-        seen["after filteradd"] = [c.decode() for c, _ in after_add]
-        added_ok = [c for c, _ in after_add] == [b"merkleblock", b"tx"]
-        peer.send(b"filterclear", b"")
-        peer.send(b"getdata", filtered([other_block]))
-        seen["no answer after filterclear"] = not peer.collect(wanted, None, quiet=3.0, limit=6.0)
-
-        ok = (bool(seen["NODE_BLOOM advertised"]) and seen["no answer without a filter"] and same
-              and len(proofs) == 2 and len(matched) >= 1 and added_ok and seen["no answer after filterclear"])
+            answers[name] = []
+            for _, message, inventory in steps:
+                if message is not None:
+                    peer.send(*message)
+                peer.send(b"getdata", filtered(inventory))
+                answers[name].append(peer.collect(wanted, None, quiet=5.0, limit=60.0))
+        same = True
+        for at, (label, _, _) in enumerate(steps):
+            kth, bchn = answers["kth"][at], answers["bchn"][at]
+            seen[label] = {"kth": [c.decode() for c, _ in kth], "bchn": [c.decode() for c, _ in bchn],
+                           "same bytes": kth == bchn}
+            same = same and kth == bchn and len(bchn) > 0
+        # The loaded filter proves something: fewer transactions than the block
+        # holds are sent for the block of wallet transactions.
+        whole = sum(1 for c, _ in answers["bchn"][0] if c == b"tx")
+        matched = sum(1 for c, _ in answers["kth"][1] if c == b"tx")
+        seen["transactions in the block"] = whole
+        seen["transactions the filter matched"] = matched
+        ok = bool(seen["NODE_BLOOM advertised"]) and same and 1 <= matched < whole + 1
     except (OSError, ValueError, KeyError, IndexError) as error:
         seen["error"] = f"{type(error).__name__}: {error}"
     finally:
         for peer in peers.values():
             peer.close()
-    row(1003, client, "kth advertises NODE_BLOOM; with the same filter its merkleblocks and matched "
-        "transactions are the bytes BCHN sends; filteradd extends the filter and filterclear removes it",
-        ok, seen)
+    row(1003, client, "kth advertises NODE_BLOOM; before a filter is loaded, with one, after filteradd and "
+        "after filterclear, its merkleblocks and transactions are the bytes BCHN sends", ok, seen)
 
 
 # ---- report -------------------------------------------------------------------

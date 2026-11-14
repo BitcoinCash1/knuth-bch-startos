@@ -23,21 +23,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Light wallets end to end, on a regtest chain of more than 2,000 blocks
-        # that kth syncs from BCHN. filters: a client syncs the filter header
-        # checkpoints, every filter hash and filters from kth, and compares the
-        # filters with the ones built from BCHN's reading of the same blocks.
-        # bloom: a client loads the same bloom filter into kth and into BCHN and
-        # compares the merkleblocks and matched transactions byte for byte.
-        # The unit suites of these branches run as 43624710572 and 43626423606.
-          - name: compact-filter-serving-e2e
-            branch: test/compact-filter-serving
+        # BIP37 after reading BCHN: every peer starts with the filter that holds
+        # everything, so a filtered block asked for before filterload, and after
+        # filterclear, is answered with all its transactions. The light client now
+        # compares kth with BCHN at each of four steps. Domain and network suites
+        # too: the domain branch had one test with a mistyped transaction. The
+        # compact filter run of this client passed as 43626838457.
+          - name: bip37-bloom-filter
+            branch: test/bip37-bloom-filter
             gcc: '16'
-            filters: true
-            long: 2100
+            domain: true
           - name: bip37-serving-e2e
             branch: test/bip37-serving
             gcc: '16'
+            domain: true
+            network: true
             bloom: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
