@@ -23,22 +23,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # BIP37 after reading BCHN: every peer starts with the filter that holds
-        # everything, so a filtered block asked for before filterload, and after
-        # filterclear, is answered with all its transactions. The light client now
-        # compares kth with BCHN at each of four steps. Domain and network suites
-        # too: the domain branch had one test with a mistyped transaction. The
-        # compact filter run of this client passed as 43626838457.
-          - name: bip37-bloom-filter
-            branch: test/bip37-bloom-filter
+        # The Neutrino library itself against kth: scripts/neutrino-client, built
+        # from gcash/neutrino, with kth as its only peer on the regtest chain of
+        # more than 2,000 blocks, beside the light client of run 43626838457. The
+        # branch now ends with its docs page. BIP37 runs as 43650558198.
+          - name: compact-filter-serving-neutrino
+            branch: test/compact-filter-serving
             gcc: '16'
-            domain: true
-          - name: bip37-serving-e2e
-            branch: test/bip37-serving
-            gcc: '16'
-            domain: true
-            network: true
-            bloom: true
+            filters: true
+            neutrino: true
+            long: 2100
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -321,6 +315,13 @@ jobs:
           git -C sv2-apps checkout --quiet ffad32eb11128b8e3cf9ff20604480c11e5cbfab
           cargo build --release --locked --manifest-path sv2-apps/Cargo.toml -p integration_tests_sv2 --bin mining_device
         shell: bash
+      - name: Build the Neutrino wallet client
+        if: matrix.neutrino
+        run: |
+          # The gcash/neutrino library itself, pinned in scripts/neutrino-client/go.mod.
+          cd scripts/neutrino-client
+          go build -o "$GITHUB_WORKSPACE/neutrino-client" .
+        shell: bash
       - name: Run the end-to-end checks against this kth
         run: python3 scripts/knuth_rpc_e2e.py e2e-out
         env:
@@ -336,6 +337,7 @@ jobs:
           KTH_SHV: ${{ matrix.shv && '1' || '0' }}
           KTH_FILTERS: ${{ matrix.filters && '1' || '0' }}
           KTH_BLOOM: ${{ matrix.bloom && '1' || '0' }}
+          KTH_NEUTRINO_BIN: ${{ matrix.neutrino && format('{0}/neutrino-client', github.workspace) || '' }}
           KTH_STALL: ${{ matrix.stall && '1' || '0' }}
           KTH_LONG: ${{ matrix.long || '0' }}
         shell: bash

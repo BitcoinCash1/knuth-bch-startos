@@ -53,6 +53,9 @@ FILTERS = os.environ.get("KTH_FILTERS") == "1"
 # KTH_BLOOM=1 (bloom filters, BIP37): kth runs with node.bloom_filters and
 # takes inbound P2P; the same light client asks BCHN too.
 BLOOM = os.environ.get("KTH_BLOOM") == "1"
+# KTH_NEUTRINO_BIN, with KTH_FILTERS=1: the built scripts/neutrino-client, a
+# wallet's node connection made with the gcash/neutrino library itself.
+NEUTRINO_BIN = os.environ.get("KTH_NEUTRINO_BIN") or ""
 KTH_P2P_PORT = 18555
 # KTH_STALL=1 (#773 row 27): kth reaches BCHN only through a relay that never
 # delivers kth's first request for blocks, so that request times out while the
@@ -2623,7 +2626,8 @@ def rows(s: dict) -> None:
                   row18_estimatefee, row19_networkhashps, row20_getchaintips, row5_merkle, row4_getblocktemplate,
                   row1_accept_found_block, row2_found_block_reaches_peers, row3_submitblock,
                   row21_template_provider, row23_template_flow, row22_noise, pr803_outbound_proxy,
-                  shv_light_client, compact_filter_light_client, bloom_filter_light_client, i2p_second_node, serve_second_node, announce_second_node,
+                  shv_light_client, compact_filter_light_client, neutrino_wallet_client,
+                  bloom_filter_light_client, i2p_second_node, serve_second_node, announce_second_node,
                   compact_blocks_both_ways, row24_mining_protocol, pr874_long_polling):
         try:
             check(s)
@@ -2911,6 +2915,39 @@ def compact_filter_light_client(s: dict) -> None:
     row(1002, client, "kth advertises NODE_CF; the filter headers of the whole chain chain from zeros and "
         "match the checkpoints; filters hash to them and equal the ones built from BCHN's blocks; bad "
         "requests get no answer; 64 bytes are stored per thousand blocks", ok, seen)
+
+
+def neutrino_wallet_client(s: dict) -> None:
+    """The Neutrino library (gcash/neutrino) with kth as its only peer: it
+    syncs block headers and filter headers to the tip, checking the filter
+    headers against kth's checkpoints as it does on any network, fetches the
+    filter of the block of wallet transactions, finds in it a script that
+    block pays and not one it does not, and fetches the block."""
+    client = "Neutrino wallet library (gcash/neutrino), kth its only peer"
+    if not FILTERS or not NEUTRINO_BIN:
+        return
+    tip = call(KTH, "getblockcount")[0]
+    paid = call(BCHN, "validateaddress", s["others"][0])[0]["scriptPubKey"]
+    absent = "76a914" + "ab" * 20 + "88ac"
+    seen: dict = {"tip": tip}
+    ok = False
+    try:
+        run = subprocess.run([NEUTRINO_BIN, "-connect", f"127.0.0.1:{KTH_P2P_PORT}", "-height", str(tip),
+                              "-block", s["tx_block"], "-script", paid, "-absent", absent,
+                              "-timeout", "4m"], capture_output=True, text=True, timeout=420)
+        lines = [line for line in run.stdout.splitlines() if line.startswith("{")]
+        seen["exit"] = run.returncode
+        if lines:
+            seen.update(json.loads(lines[-1]))
+        else:
+            seen["output"] = (run.stdout + run.stderr)[-300:]
+        ok = (run.returncode == 0 and bool(seen.get("synced")) and seen.get("block_headers") == tip
+              and seen.get("filter_headers") == tip and bool(seen.get("paid_script_found"))
+              and not seen.get("other_script_found") and (seen.get("block_transactions") or 0) >= 2)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+        seen["error"] = f"{type(error).__name__}: {error}"
+    row(1004, client, "it syncs block headers and filter headers to kth's tip, takes the filter of the "
+        "wallet block, finds a script that block pays and not another, and fetches the block", ok, seen)
 
 
 def bloom_bits(elements: list[bytes], size: int = 64, functions: int = 5, tweak: int = 0) -> bytes:
