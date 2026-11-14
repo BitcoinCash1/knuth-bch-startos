@@ -23,13 +23,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # The peer bloom filter and the partial merkle tree of a merkleblock
-        # (BIP37), domain code alone, on master 5b230a17. The compact filter
-        # branches run as 43622551404, 43623722055 and 43624710572.
-          - name: bip37-bloom-filter
-            branch: test/bip37-bloom-filter
+        # BIP37 served: the per-peer filter in its session, the three filter
+        # messages, merkleblock answers, filtered announcements and mempool
+        # answers, the setting and the service bit, on top of the domain code
+        # (run 43625680825), on master 5b230a17. The network suite too: the
+        # peer's transaction inventory holds the filter.
+          - name: bip37-serving
+            branch: test/bip37-serving
             gcc: '16'
             domain: true
+            network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
