@@ -47,6 +47,12 @@ PROXY_PORT = 19050
 # Branches with SHV set KTH_SHV=1: kth keeps its MMR index and takes inbound P2P
 # connections, so the light client below can ask it for proofs.
 SHV = os.environ.get("KTH_SHV") == "1"
+# KTH_FILTERS=1 (compact filters served to light wallets): kth runs with
+# node.compact_filters and takes inbound P2P for the light client below.
+FILTERS = os.environ.get("KTH_FILTERS") == "1"
+# KTH_BLOOM=1 (bloom filters, BIP37): kth runs with node.bloom_filters and
+# takes inbound P2P; the same light client asks BCHN too.
+BLOOM = os.environ.get("KTH_BLOOM") == "1"
 KTH_P2P_PORT = 18555
 # KTH_STALL=1 (#773 row 27): kth reaches BCHN only through a relay that never
 # delivers kth's first request for blocks, so that request times out while the
@@ -164,8 +170,11 @@ def start_kth() -> None:
                     "--init_run", "--network", "regtest", "--node.display", "daemon",
                     "--db.directory", "/data/e2e", "--db.db_mode", "full",
                     "--net.inbound_port", str(KTH_P2P_PORT),
-                    "--net.inbound_connections", "4" if SHV or I2P or SERVE or ANNOUNCE or COMPACT else "0",
+                    "--net.inbound_connections",
+                    "4" if SHV or I2P or SERVE or ANNOUNCE or COMPACT or FILTERS or BLOOM else "0",
                     *(["--node.mmr_index", "true"] if SHV else []),
+                    *(["--node.compact_filters", "true"] if FILTERS else []),
+                    *(["--node.bloom_filters", "true"] if BLOOM else []),
                     "--net.outbound_connections", "1",
                     "--net.peer", (f"{BCHN_I2P.address}:0" if I2P
                                    else f"127.0.0.1:{STALL_PORT if STALL else 18444}"),
@@ -2614,12 +2623,399 @@ def rows(s: dict) -> None:
                   row18_estimatefee, row19_networkhashps, row20_getchaintips, row5_merkle, row4_getblocktemplate,
                   row1_accept_found_block, row2_found_block_reaches_peers, row3_submitblock,
                   row21_template_provider, row23_template_flow, row22_noise, pr803_outbound_proxy,
-                  shv_light_client, i2p_second_node, serve_second_node, announce_second_node,
+                  shv_light_client, compact_filter_light_client, bloom_filter_light_client, i2p_second_node, serve_second_node, announce_second_node,
                   compact_blocks_both_ways, row24_mining_protocol, pr874_long_polling):
         try:
             check(s)
         except Exception as error:  # one broken check must not hide the others
             row(0, check.__name__, "crashed", False, f"{type(error).__name__}: {error}")
+
+
+
+# ---- light wallets over P2P: compact filters and bloom filters ---------------------
+
+NODE_BLOOM = 1 << 2
+NODE_CF = 1 << 8
+GCS_P = 19
+GCS_M = 784931
+MASK64 = (1 << 64) - 1
+
+
+def siphash24(k0: int, k1: int, data: bytes) -> int:
+    v0 = k0 ^ 0x736f6d6570736575
+    v1 = k1 ^ 0x646f72616e646f6d
+    v2 = k0 ^ 0x6c7967656e657261
+    v3 = k1 ^ 0x7465646279746573
+
+    def rotl(x: int, b: int) -> int:
+        return ((x << b) | (x >> (64 - b))) & MASK64
+
+    def rounds(n: int) -> None:
+        nonlocal v0, v1, v2, v3
+        for _ in range(n):
+            v0 = (v0 + v1) & MASK64; v1 = rotl(v1, 13); v1 ^= v0; v0 = rotl(v0, 32)
+            v2 = (v2 + v3) & MASK64; v3 = rotl(v3, 16); v3 ^= v2
+            v0 = (v0 + v3) & MASK64; v3 = rotl(v3, 21); v3 ^= v0
+            v2 = (v2 + v1) & MASK64; v1 = rotl(v1, 17); v1 ^= v2; v2 = rotl(v2, 32)
+
+    whole = len(data) - len(data) % 8
+    for o in range(0, whole, 8):
+        m = int.from_bytes(data[o:o + 8], "little")
+        v3 ^= m
+        rounds(2)
+        v0 ^= m
+    last = int.from_bytes(data[whole:], "little") | ((len(data) & 0xff) << 56)
+    v3 ^= last
+    rounds(2)
+    v0 ^= last
+    v2 ^= 0xff
+    rounds(4)
+    return v0 ^ v1 ^ v2 ^ v3
+
+
+def gcs_values(filter_bytes: bytes) -> tuple[int, list[int]]:
+    """The item count of a served filter and its values, in order: each is the
+    one before plus a Golomb-Rice coded difference, most significant bit first."""
+    n, o = read_compact(filter_bytes, 0)
+    bits = int.from_bytes(filter_bytes[o:], "big")
+    left = (len(filter_bytes) - o) * 8
+    values = []
+    last = 0
+    for _ in range(n):
+        quotient = 0
+        while True:
+            if left == 0:
+                raise ValueError("filter ends inside a value")
+            left -= 1
+            if not (bits >> left) & 1:
+                break
+            quotient += 1
+        if left < GCS_P:
+            raise ValueError("filter ends inside a remainder")
+        left -= GCS_P
+        remainder = (bits >> left) & ((1 << GCS_P) - 1)
+        last += (quotient << GCS_P) | remainder
+        values.append(last)
+    return n, values
+
+
+def gcs_expected(block_hash: bytes, items: set[bytes]) -> list[int]:
+    """What a filter of these items holds under the block's key."""
+    k0 = int.from_bytes(block_hash[:8], "little")
+    k1 = int.from_bytes(block_hash[8:16], "little")
+    modulus = len(items) * GCS_M
+    return sorted({(siphash24(k0, k1, item) * modulus) >> 64 for item in items})
+
+
+def regular_filter_items(block: dict) -> set[bytes]:
+    """The items of the regular filter, from BCHN's own reading of the block:
+    the outpoint of every input after the coinbase, and every output script
+    that is not empty."""
+    items: set[bytes] = set()
+    for at, tx in enumerate(block["tx"]):
+        if at != 0:
+            for vin in tx["vin"]:
+                items.add(bytes.fromhex(vin["txid"])[::-1] + struct.pack("<I", vin["vout"]))
+        for vout in tx["vout"]:
+            script = bytes.fromhex(vout["scriptPubKey"]["hex"])
+            if script:
+                items.add(script)
+    return items
+
+
+class LightPeer:
+    """A P2P connection that has finished the version handshake as a wallet
+    would: it answers pings and skips everything it did not ask for."""
+
+    def __init__(self, port: int):
+        self.sock = socket.create_connection(("127.0.0.1", port), timeout=20)
+        self.reader = LineReader(self.sock)
+        address = (struct.pack("<Q", 0) + bytes(10) + b"\xff\xff" + socket.inet_aton("127.0.0.1")
+                   + struct.pack(">H", port))
+        version = (struct.pack("<iQq", 70016, 0, int(time.time())) + address + address
+                   + struct.pack("<Q", 0x6c69676874) + b"\x0dknuth-rpc-e2e" + struct.pack("<i", 0) + b"\x00")
+        self.sock.sendall(p2p_message(b"version", version))
+        self.services = None
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            message = p2p_read(self.reader)
+            if message is None:
+                break
+            command, payload = message
+            if command == b"version":
+                self.services, = struct.unpack("<Q", payload[4:12])
+                self.sock.sendall(p2p_message(b"verack", b""))
+                break
+            if command == b"ping":
+                self.sock.sendall(p2p_message(b"pong", payload))
+
+    def send(self, command: bytes, payload: bytes) -> None:
+        self.sock.sendall(p2p_message(command, payload))
+
+    def collect(self, wanted: tuple[bytes, ...], count: int | None, quiet: float = 4.0, limit: float = 90.0):
+        """Messages of the wanted commands, in order, until `count` of them
+        arrived or nothing wanted came for `quiet` seconds."""
+        out = []
+        end = time.time() + limit
+        until = time.time() + quiet
+        while time.time() < min(end, until) and (count is None or len(out) < count):
+            message = p2p_read(self.reader, max(0.2, min(end, until) - time.time()))
+            if message is None:
+                break
+            command, payload = message
+            if command == b"ping":
+                self.sock.sendall(p2p_message(b"pong", payload))
+            elif command in wanted:
+                out.append((command, payload))
+                until = time.time() + quiet
+        return out
+
+    def close(self) -> None:
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
+def compact_filter_light_client(s: dict) -> None:
+    """A wallet that syncs compact filters from kth over P2P, as a Neutrino
+    wallet does: the filter header checkpoints, the filter hashes of the whole
+    chain in ranges of 2,000, then filters. Every filter header is chained
+    here from the hashes kth sends; every filter read is hashed against them;
+    and filters are decoded and compared, value for value, with the filter
+    built here from BCHN's own reading of the same blocks."""
+    client = "compact filter light client (getcfcheckpt, getcfheaders, getcfilters over P2P)"
+    if not FILTERS:
+        return
+    tip = call(KTH, "getblockcount")[0]
+    hashes = [bytes.fromhex(call(BCHN, "getblockhash", h)[0])[::-1] for h in range(tip + 1)]
+    seen: dict = {"tip": tip}
+    ok = False
+    peer = None
+    try:
+        peer = LightPeer(KTH_P2P_PORT)
+        seen["NODE_CF advertised"] = peer.services is not None and bool(peer.services & NODE_CF)
+
+        # The checkpoints first, as a wallet asks.
+        peer.send(b"getcfcheckpt", b"\x00" + hashes[tip])
+        reply = peer.collect((b"cfcheckpt",), 1, quiet=120.0, limit=600.0)
+        checkpoints = []
+        if reply:
+            body = reply[0][1]
+            count, o = read_compact(body, 33)
+            checkpoints = [body[o + 32 * i:o + 32 * (i + 1)] for i in range(count)]
+            seen["cfcheckpt"] = {"type": body[0], "stop is the tip": body[1:33] == hashes[tip], "headers": count,
+                                 "whole": o + 32 * count == len(body)}
+
+        # Every filter hash, 2,000 blocks a request, chained from all zeros.
+        header = bytes(32)
+        filter_hashes: list[bytes] = []
+        headers: list[bytes] = []
+        batches_ok = True
+        start = 0
+        while start <= tip:
+            stop = min(tip, start + 1999)
+            peer.send(b"getcfheaders", b"\x00" + struct.pack("<I", start) + hashes[stop])
+            reply = peer.collect((b"cfheaders",), 1, quiet=60.0, limit=300.0)
+            if not reply:
+                batches_ok = False
+                seen["cfheaders missing at"] = start
+                break
+            body = reply[0][1]
+            count, o = read_compact(body, 65)
+            if (body[0] != 0 or body[1:33] != hashes[stop] or body[33:65] != header
+                    or count != stop - start + 1 or o + 32 * count != len(body)):
+                batches_ok = False
+                seen["cfheaders wrong at"] = start
+                break
+            for i in range(count):
+                filter_hash = body[o + 32 * i:o + 32 * (i + 1)]
+                header = sha256d(filter_hash + header)
+                filter_hashes.append(filter_hash)
+                headers.append(header)
+            start = stop + 1
+        seen["filter hashes"] = len(filter_hashes)
+        seen["cfheaders batches chain"] = batches_ok and len(filter_hashes) == tip + 1
+        checkpoints_ok = (batches_ok and len(checkpoints) == tip // 1000
+                          and all(checkpoints[i] == headers[(i + 1) * 1000] for i in range(len(checkpoints))))
+        seen["checkpoints are the chained headers at each 1000"] = checkpoints_ok
+
+        # Filters: the first blocks, the blocks around the wallet transactions, the tip.
+        ranges = [(0, min(tip, 9)), (max(0, s["tx_block_height"] - 2), min(tip, s["tx_block_height"] + 2)),
+                  (tip, tip)]
+        filters_ok = batches_ok
+        compared = 0
+        largest = 0
+        for first, last in ranges:
+            peer.send(b"getcfilters", b"\x00" + struct.pack("<I", first) + hashes[last])
+            reply = peer.collect((b"cfilter",), last - first + 1, quiet=60.0, limit=300.0)
+            if len(reply) != last - first + 1:
+                filters_ok = False
+                seen[f"cfilters {first}..{last}"] = len(reply)
+                continue
+            for i, (_, body) in enumerate(reply):
+                height = first + i
+                size, o = read_compact(body, 33)
+                data = body[o:o + size]
+                if (body[0] != 0 or body[1:33] != hashes[height] or o + size != len(body)
+                        or not batches_ok or sha256d(data) != filter_hashes[height]):
+                    filters_ok = False
+                    seen["cfilter wrong at"] = height
+                    continue
+                block = call(BCHN, "getblock", hashes[height][::-1].hex(), 2)[0]
+                items = regular_filter_items(block)
+                n, values = gcs_values(data)
+                largest = max(largest, n)
+                if n != len(items) or values != gcs_expected(hashes[height], items):
+                    filters_ok = False
+                    seen["cfilter content differs at"] = height
+                    continue
+                compared += 1
+        seen["filters equal to the ones built from BCHN's blocks"] = compared
+        seen["most items in one filter"] = largest
+
+        # What is not answered: another filter type, a start above the stop
+        # block, a range past the limit, a stop block nobody has.
+        silent = True
+        for command, payload in ((b"getcfilters", b"\x01" + struct.pack("<I", 0) + hashes[tip]),
+                                 (b"getcfilters", b"\x00" + struct.pack("<I", 5) + hashes[4]),
+                                 (b"getcfheaders", b"\x00" + struct.pack("<I", 3) + b"\x11" * 32),
+                                 (b"getcfcheckpt", b"\x01" + hashes[tip])):
+            peer.send(command, payload)
+        if tip >= 1000:
+            peer.send(b"getcfilters", b"\x00" + struct.pack("<I", 0) + hashes[1000])
+        if tip >= 2000:
+            peer.send(b"getcfheaders", b"\x00" + struct.pack("<I", 0) + hashes[2000])
+        if peer.collect((b"cfilter", b"cfheaders", b"cfcheckpt"), None, quiet=4.0, limit=10.0):
+            silent = False
+        seen["refused requests get no answer"] = silent
+        # And the connection still serves a good one.
+        peer.send(b"getcfilters", b"\x00" + struct.pack("<I", tip) + hashes[tip])
+        seen["answers after them"] = len(peer.collect((b"cfilter",), 1, quiet=30.0, limit=60.0)) == 1
+
+        # The only thing stored: 64 bytes for every thousand blocks.
+        stored = subprocess.run(["docker", "exec", "kth", "sh", "-c",
+                                 "wc -c < /data/e2e/compact_filter_checkpoints"],
+                                capture_output=True, text=True).stdout.strip()
+        seen["checkpoint file bytes"] = stored
+        file_ok = stored.isdigit() and int(stored) == 64 * (tip // 1000)
+
+        ok = (bool(seen["NODE_CF advertised"]) and seen["cfheaders batches chain"] and checkpoints_ok
+              and filters_ok and compared == sum(last - first + 1 for first, last in ranges)
+              and silent and seen["answers after them"] and file_ok)
+    except (OSError, ValueError, KeyError, IndexError) as error:
+        seen["error"] = f"{type(error).__name__}: {error}"
+    finally:
+        if peer is not None:
+            peer.close()
+    row(1002, client, "kth advertises NODE_CF; the filter headers of the whole chain chain from zeros and "
+        "match the checkpoints; filters hash to them and equal the ones built from BCHN's blocks; bad "
+        "requests get no answer; 64 bytes are stored per thousand blocks", ok, seen)
+
+
+def bloom_bits(elements: list[bytes], size: int = 64, functions: int = 5, tweak: int = 0) -> bytes:
+    bits = bytearray(size)
+
+    def murmur3(seed: int, data: bytes) -> int:
+        h = seed & 0xffffffff
+        rot = lambda x, r: ((x << r) | (x >> (32 - r))) & 0xffffffff
+        for o in range(0, len(data) - len(data) % 4, 4):
+            k = int.from_bytes(data[o:o + 4], "little")
+            k = (k * 0xcc9e2d51) & 0xffffffff
+            k = rot(k, 15)
+            k = (k * 0x1b873593) & 0xffffffff
+            h ^= k
+            h = rot(h, 13)
+            h = (h * 5 + 0xe6546b64) & 0xffffffff
+        tail = data[len(data) - len(data) % 4:]
+        if tail:
+            k = int.from_bytes(tail, "little")
+            k = (k * 0xcc9e2d51) & 0xffffffff
+            k = rot(k, 15)
+            k = (k * 0x1b873593) & 0xffffffff
+            h ^= k
+        h ^= len(data)
+        h ^= h >> 16
+        h = (h * 0x85ebca6b) & 0xffffffff
+        h ^= h >> 13
+        h = (h * 0xc2b2ae35) & 0xffffffff
+        return h ^ (h >> 16)
+
+    for element in elements:
+        for i in range(functions):
+            bit = murmur3((i * 0xfba4c795 + tweak) & 0xffffffff, element) % (size * 8)
+            bits[bit >> 3] |= 1 << (bit & 7)
+    return bytes(bits)
+
+
+def bloom_filter_light_client(s: dict) -> None:
+    """A wallet that loads a bloom filter (BIP37) and asks for filtered blocks,
+    against kth and against BCHN with the same bytes. The filter holds the key
+    hash one wallet transaction pays to. kth's merkleblock and the transactions
+    after it must be the bytes BCHN sends."""
+    client = "bloom filter light client (filterload, getdata of filtered blocks over P2P)"
+    if not BLOOM:
+        return
+    seen: dict = {}
+    ok = False
+    peers: dict = {}
+    try:
+        script = bytes.fromhex(call(BCHN, "validateaddress", s["others"][0])[0]["scriptPubKey"])
+        key_hash = script[3:23]
+        seen["watched key hash"] = key_hash.hex()
+        bits = bloom_bits([key_hash])
+        load = bytes([len(bits)]) + bits + struct.pack("<II", 5, 0) + b"\x01"
+        tx_block = bytes.fromhex(s["tx_block"])[::-1]
+        other_block = bytes.fromhex(call(BCHN, "getblockhash", 5)[0])[::-1]
+        wanted = (b"merkleblock", b"tx", b"notfound")
+
+        def filtered(inventory: list[bytes]) -> bytes:
+            return bytes([len(inventory)]) + b"".join(struct.pack("<I", 3) + h for h in inventory)
+
+        answers: dict = {}
+        for name, port in (("kth", KTH_P2P_PORT), ("bchn", 18444)):
+            peer = LightPeer(port)
+            peers[name] = peer
+            if name == "kth":
+                seen["NODE_BLOOM advertised"] = peer.services is not None and bool(peer.services & NODE_BLOOM)
+                # Before a filter is loaded a filtered block gets no answer.
+                peer.send(b"getdata", filtered([tx_block]))
+                seen["no answer without a filter"] = not peer.collect(wanted, None, quiet=3.0, limit=6.0)
+            peer.send(b"filterload", load)
+            peer.send(b"getdata", filtered([tx_block, other_block]))
+            answers[name] = peer.collect(wanted, None, quiet=5.0, limit=60.0)
+        kth, bchn = answers["kth"], answers["bchn"]
+        seen["kth sent"] = [c.decode() for c, _ in kth]
+        seen["bchn sent"] = [c.decode() for c, _ in bchn]
+        proofs = [p for c, p in kth if c == b"merkleblock"]
+        matched = [p for c, p in kth if c == b"tx"]
+        seen["matched transactions"] = len(matched)
+        same = kth == bchn
+        seen["same bytes as BCHN"] = same
+
+        # The filter can grow and go: an element added matches the coinbase of
+        # another block, and after filterclear a filtered block has no answer.
+        peer = peers["kth"]
+        coinbase = bytes.fromhex(call(BCHN, "getblock", other_block[::-1].hex(), 1)[0]["tx"][0])[::-1]
+        peer.send(b"filteradd", bytes([32]) + coinbase)
+        peer.send(b"getdata", filtered([other_block]))
+        after_add = peer.collect(wanted, None, quiet=4.0, limit=30.0)
+        seen["after filteradd"] = [c.decode() for c, _ in after_add]
+        added_ok = [c for c, _ in after_add] == [b"merkleblock", b"tx"]
+        peer.send(b"filterclear", b"")
+        peer.send(b"getdata", filtered([other_block]))
+        seen["no answer after filterclear"] = not peer.collect(wanted, None, quiet=3.0, limit=6.0)
+
+        ok = (bool(seen["NODE_BLOOM advertised"]) and seen["no answer without a filter"] and same
+              and len(proofs) == 2 and len(matched) >= 1 and added_ok and seen["no answer after filterclear"])
+    except (OSError, ValueError, KeyError, IndexError) as error:
+        seen["error"] = f"{type(error).__name__}: {error}"
+    finally:
+        for peer in peers.values():
+            peer.close()
+    row(1003, client, "kth advertises NODE_BLOOM; with the same filter its merkleblocks and matched "
+        "transactions are the bytes BCHN sends; filteradd extends the filter and filterclear removes it",
+        ok, seen)
 
 
 # ---- report -------------------------------------------------------------------

@@ -23,16 +23,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # BIP37 served: the per-peer filter in its session, the three filter
-        # messages, merkleblock answers, filtered announcements and mempool
-        # answers, the setting and the service bit, on top of the domain code
-        # (run 43625680825), on master 5b230a17. The network suite too: the
-        # peer's transaction inventory holds the filter.
-          - name: bip37-serving
+        # Light wallets end to end, on a regtest chain of more than 2,000 blocks
+        # that kth syncs from BCHN. filters: a client syncs the filter header
+        # checkpoints, every filter hash and filters from kth, and compares the
+        # filters with the ones built from BCHN's reading of the same blocks.
+        # bloom: a client loads the same bloom filter into kth and into BCHN and
+        # compares the merkleblocks and matched transactions byte for byte.
+        # The unit suites of these branches run as 43624710572 and 43626423606.
+          - name: compact-filter-serving-e2e
+            branch: test/compact-filter-serving
+            gcc: '16'
+            filters: true
+            long: 2100
+          - name: bip37-serving-e2e
             branch: test/bip37-serving
             gcc: '16'
-            domain: true
-            network: true
+            bloom: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -328,6 +334,8 @@ jobs:
           KTH_LONGPOLL: ${{ matrix.longpoll && '1' || '0' }}
           KTH_PROXY: ${{ matrix.proxy && '1' || '0' }}
           KTH_SHV: ${{ matrix.shv && '1' || '0' }}
+          KTH_FILTERS: ${{ matrix.filters && '1' || '0' }}
+          KTH_BLOOM: ${{ matrix.bloom && '1' || '0' }}
           KTH_STALL: ${{ matrix.stall && '1' || '0' }}
           KTH_LONG: ${{ matrix.long || '0' }}
         shell: bash
