@@ -23,20 +23,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # BIP37 with its test data corrected (a public key of 34 bytes where 33
-        # was meant): the domain suite, then the serving branch with the light
-        # client that compares kth with BCHN at four steps, which passed in run
-        # 43650558198. The Neutrino library runs against kth as 43650821096.
-          - name: bip37-bloom-filter
-            branch: test/bip37-bloom-filter
+        # Row 36 of #773: getrawtransaction for a confirmed transaction without
+        # its block hash, found through an output of it that is still unspent,
+        # with no index. The node suite holds its test; the node calls of the
+        # end-to-end checks compare the answer with BCHN's. BIP37 runs as
+        # 43653265427 and the Neutrino library as 43650821096.
+          - name: getrawtransaction-unspent
+            branch: test/getrawtransaction-unspent
             gcc: '16'
-            domain: true
-          - name: bip37-serving-e2e
-            branch: test/bip37-serving
-            gcc: '16'
-            domain: true
-            network: true
-            bloom: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
