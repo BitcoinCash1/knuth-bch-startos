@@ -23,12 +23,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # The six compact filter messages (getcfilters, cfilter, getcfheaders,
-        # cfheaders, getcfcheckpt, cfcheckpt) on top of the regular filter, on
-        # master 5b230a17, with the domain suite that holds their tests. The
-        # regular filter alone runs as 43622551404.
-          - name: compact-filter-messages
-            branch: test/compact-filter-messages
+        # Compact filters served to peers: the filter service (filters built from
+        # the blocks on request, a memory cache, one filter header kept for every
+        # thousand blocks), the three request handlers, the setting and the
+        # service bit, on top of the messages and the regular filter, on master
+        # 5b230a17. The messages alone run as 43623722055.
+          - name: compact-filter-serving
+            branch: test/compact-filter-serving
             gcc: '16'
             domain: true
     name: kth ${{ matrix.name }}
