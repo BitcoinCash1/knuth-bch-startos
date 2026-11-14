@@ -23,13 +23,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Compact filters served to peers: the filter service (filters built from
-        # the blocks on request, a memory cache, one filter header kept for every
-        # thousand blocks), the three request handlers, the setting and the
-        # service bit, on top of the messages and the regular filter, on master
-        # 5b230a17. The messages alone run as 43623722055.
-          - name: compact-filter-serving
-            branch: test/compact-filter-serving
+        # The peer bloom filter and the partial merkle tree of a merkleblock
+        # (BIP37), domain code alone, on master 5b230a17. The compact filter
+        # branches run as 43622551404, 43623722055 and 43624710572.
+          - name: bip37-bloom-filter
+            branch: test/bip37-bloom-filter
             gcc: '16'
             domain: true
     name: kth ${{ matrix.name }}
