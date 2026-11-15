@@ -863,11 +863,18 @@ def methods(s: dict) -> None:
                  needed=("isvalid", "address", "scriptPubKey"),
                  same=lambda k, b: None if k.get("isvalid") is True else "isvalid is not true")
     def txout_same(k, b):
-        # kth adds its own confirmations_ticks; every field BCHN gives is the same.
+        # kth adds its own confirmations_ticks, and the two nodes spell a
+        # script's asm differently; every other field BCHN gives is the same.
         extra = sorted(set(k) - set(b) - {"confirmations_ticks"})
         if extra:
             return f"fields BCHN does not have: {extra}"
-        return None if all(k.get(key) == value for key, value in b.items()) else "differs from BCHN"
+
+        def plain(script):
+            return {key: value for key, value in (script or {}).items() if key != "asm"}
+
+        differing = sorted(key for key, value in b.items()
+                           if (plain(k.get(key)) != plain(value) if key == "scriptPubKey" else k.get(key) != value))
+        return f"differs from BCHN in {differing}" if differing else None
 
     method_check("gettxout", [txid, s["unspent_n"]], "Explorer route", same=txout_same)
     method_check("gettxout", [txid, s["unspent_n"], False], "Explorer route", same=txout_same)
