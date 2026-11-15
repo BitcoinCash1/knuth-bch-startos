@@ -8,7 +8,7 @@ import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 const ALLOW_DOWNGRADE = false
 
 export const current = VersionInfo.of({
-  version: '1.7.0:0',
+  version: '1.7.0:1',
   releaseNotes:
     'Upstream v1.7.0. Tempnet is removed: it ended on 15 November 2026, when ' +
     'its tests moved to chipnet.',
