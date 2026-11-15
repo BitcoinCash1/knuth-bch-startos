@@ -45,10 +45,10 @@
 | **Architectures** | Native `x86_64`; `aarch64` and `riscv64` use StartOS emulation of that image (`emulateMissing`). They are not native ARM or RISC-V builds. |
 | **Command** | `kth -c /data/kth.cfg --init_run --network <name>`; Tempnet uses `kth-tempnet` |
 
-The node build follows the RPC-enabled recipe merged in
-[k-nuth/docker-images#7](https://github.com/k-nuth/docker-images/pull/7), commit
-`54a66910d7acda68766899a75cbb0304d617cb0a`, with its pinned GCC toolchain and
-`rpc=True` / `tests=False` Conan options. The build stage upgrades Conan to the
+The node build follows the upstream recipe in
+[k-nuth/docker-images](https://github.com/k-nuth/docker-images) `kth/Dockerfile`, commit
+`8a75ca809d2cb8b25d13c8f58a8b8ea0fc8a5b56`, with its pinned GCC 16.2 toolchain and
+`rpc=jsonrpc` / `tests=False` Conan options (kth 1.6.0 and later need both). The build stage upgrades Conan to the
 newest 2.x release, as kth's own CI does: the pinned toolchain ships Conan
 2.24.0, and kth 1.5.0 pulls `openssl/4.1.0`, whose recipe requires Conan 2.25 or
 later. The released binary is unpatched. The package adds runtime utilities and
@@ -289,6 +289,6 @@ networks:
   regtest:  { peer: 18444, rpc: 18443, db: /data/regtest }
 config_keys_v1_3_0: [net.*, db.*, chain.*, node.*, rpc.*, log.*]
 db_mode: [full, blocks, pruned]   # not full_indexed/normal
-rpc_available: true               # when image built with rpc=True and toggle on
+rpc_available: true               # when image built with rpc=jsonrpc and toggle on
 schema_reference: bitcoin-cash-node-startos
 ```
