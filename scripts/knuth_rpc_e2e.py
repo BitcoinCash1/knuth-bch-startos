@@ -50,6 +50,9 @@ SHV = os.environ.get("KTH_SHV") == "1"
 # KTH_FILTERS=1 (compact filters served to light wallets): kth runs with
 # node.compact_filters and takes inbound P2P for the light client below.
 FILTERS = os.environ.get("KTH_FILTERS") == "1"
+# KTH_SCRIPT_FILTERS=1, with KTH_FILTERS=1: the branch serves the script
+# filter (filter type 1) too, with its range and proof messages.
+SCRIPT_FILTERS = FILTERS and os.environ.get("KTH_SCRIPT_FILTERS") == "1"
 # KTH_BLOOM=1 (bloom filters, BIP37): kth runs with node.bloom_filters and
 # takes inbound P2P; the same light client asks BCHN too.
 BLOOM = os.environ.get("KTH_BLOOM") == "1"
@@ -1587,8 +1590,35 @@ def row12_block_reads(s: dict) -> None:
         row(12, "Fulcrum", f"getrawtransaction [{txid[:12]}..., false] for a mempool tx", ok,
             {"kth": (kth[:40] + "...") if isinstance(kth, str) else error, "in BCHN's mempool": bchn is not None})
     kth, error = call(KTH, "getrawtransaction", s["coinbase_txid"], False)
-    row(12, "Fulcrum", "a confirmed tx without its block hash is error -5, which Fulcrum tolerates",
-        error is not None and error.get("code") == -5, {"kth": error})
+    if error is None:
+        # kth finds it through an output of it that is still unspent, and no
+        # transaction index. One with every output spent still needs its block
+        # hash: the coinbase the confirmed wallet transaction spent.
+        bchn = call(BCHN, "getrawtransaction", s["coinbase_txid"], False)[0]
+        found = isinstance(kth, str) and sha256d(bytes.fromhex(kth))[::-1].hex() == s["coinbase_txid"]
+        row(12, "Fulcrum", "a confirmed tx without its block hash is found through an unspent output",
+            found and kth == bchn,
+            {"kth": (kth[:40] + "...") if isinstance(kth, str) else kth, "same bytes as BCHN": kth == bchn})
+        located = call(KTH, "getrawtransaction", s["coinbase_txid"], True)[0] or {}
+        there = call(BCHN, "getrawtransaction", s["coinbase_txid"], True)[0] or {}
+        row(12, "BCH Explorer", "the same call, verbose: the block it is in and its confirmations",
+            located.get("blockhash") == there.get("blockhash") == s["tx_block"]
+            and located.get("confirmations") == there.get("confirmations"),
+            {"kth": {k: located.get(k) for k in ("blockhash", "confirmations")},
+             "bchn": {k: there.get(k) for k in ("blockhash", "confirmations")}})
+        spender = call(BCHN, "getrawtransaction", s["confirmed_txid"], True)[0] or {}
+        spent_txid = ((spender.get("vin") or [{}])[0]).get("txid")
+        outputs = [cli("gettxout", spent_txid, str(n)) for n in range(2)] if spent_txid else ["?"]
+        gone, gone_error = call(KTH, "getrawtransaction", spent_txid, False)
+        row(12, "Fulcrum", "a confirmed tx with every output spent still needs its block hash: error -5, "
+            "which Fulcrum tolerates",
+            spent_txid is not None and all(o in ("", "null") for o in outputs)
+            and gone is None and gone_error is not None and gone_error.get("code") == -5,
+            {"txid": spent_txid, "unspent outputs on BCHN": sum(o not in ("", "null") for o in outputs),
+             "kth": gone_error})
+    else:
+        row(12, "Fulcrum", "a confirmed tx without its block hash is error -5, which Fulcrum tolerates",
+            error.get("code") == -5, {"kth": error})
     for verbosity in (1, 2):
         kth, error = call(KTH, "getblock", blk, verbosity)
         bchn = call(BCHN, "getblock", blk, verbosity)[0]
@@ -2627,6 +2657,7 @@ def rows(s: dict) -> None:
                   row1_accept_found_block, row2_found_block_reaches_peers, row3_submitblock,
                   row21_template_provider, row23_template_flow, row22_noise, pr803_outbound_proxy,
                   shv_light_client, compact_filter_light_client, neutrino_wallet_client,
+                  script_filter_light_client,
                   bloom_filter_light_client, i2p_second_node, serve_second_node, announce_second_node,
                   compact_blocks_both_ways, row24_mining_protocol, pr874_long_polling):
         try:
@@ -2881,10 +2912,12 @@ def compact_filter_light_client(s: dict) -> None:
         # What is not answered: another filter type, a start above the stop
         # block, a range past the limit, a stop block nobody has.
         silent = True
-        for command, payload in ((b"getcfilters", b"\x01" + struct.pack("<I", 0) + hashes[tip]),
+        # A branch that serves the script filter answers type 1.
+        other = b"\x02" if SCRIPT_FILTERS else b"\x01"
+        for command, payload in ((b"getcfilters", other + struct.pack("<I", 0) + hashes[tip]),
                                  (b"getcfilters", b"\x00" + struct.pack("<I", 5) + hashes[4]),
                                  (b"getcfheaders", b"\x00" + struct.pack("<I", 3) + b"\x11" * 32),
-                                 (b"getcfcheckpt", b"\x01" + hashes[tip])):
+                                 (b"getcfcheckpt", other + hashes[tip])):
             peer.send(command, payload)
         if tip >= 1000:
             peer.send(b"getcfilters", b"\x00" + struct.pack("<I", 0) + hashes[1000])
@@ -2948,6 +2981,384 @@ def neutrino_wallet_client(s: dict) -> None:
         seen["error"] = f"{type(error).__name__}: {error}"
     row(1004, client, "it syncs block headers and filter headers to kth's tip, takes the filter of the "
         "wallet block, finds a script that block pays and not another, and fetches the block", ok, seen)
+
+
+def sf_leaf(key: bytes, tx_index: int, index: int, kind: int) -> bytes:
+    """A leaf of a script filter's entry tree: the key, the transaction index
+    and the input or output index, and the kind (0 a created output's script,
+    1 a spent output's script, 2 and 3 the same for a token category)."""
+    return key + struct.pack("<II", tx_index, index) + bytes([kind])
+
+
+def sf_leaf_order(leaf: bytes):
+    return (leaf[:32], struct.unpack("<II", leaf[32:40]), leaf[40])
+
+
+def sf_next_level(level: list[bytes]) -> list[bytes]:
+    out = [hashlib.sha256(b"\x01" + level[i] + level[i + 1]).digest() for i in range(0, len(level) - 1, 2)]
+    if len(level) % 2:
+        out.append(level[-1])
+    return out
+
+
+def sf_root(leaves: list[bytes]) -> bytes:
+    """The root of the tree: a leaf hashes with 0x00 in front, two nodes with
+    0x01, and a node with no partner moves up unchanged."""
+    if not leaves:
+        return bytes(32)
+    level = [hashlib.sha256(b"\x00" + leaf).digest() for leaf in leaves]
+    while len(level) > 1:
+        level = sf_next_level(level)
+    return level[0]
+
+
+def sf_range_root(count: int, lo: int, run: list[bytes], hashes: list[bytes]) -> bytes:
+    """The root a consecutive run of leaves and its edge hashes rebuild, for a
+    tree of `count` leaves. Raises when the hashes are too few or too many."""
+    if not run or lo + len(run) > count:
+        raise ValueError("the run does not fit the tree")
+    nodes = [hashlib.sha256(b"\x00" + leaf).digest() for leaf in run]
+    left = list(hashes)
+    a, b, width = lo, lo + len(run) - 1, count
+    while width > 1:
+        if a % 2 == 1:
+            nodes.insert(0, left.pop(0))
+            a -= 1
+        if b % 2 == 0 and b + 1 < width:
+            nodes.append(left.pop(0))
+            b += 1
+        nodes = sf_next_level(nodes)
+        a //= 2
+        b //= 2
+        width = (width + 1) // 2
+    if left:
+        raise ValueError("hashes left over")
+    return nodes[0]
+
+
+def sf_fold(txid: bytes, index: int, branch: list[bytes]) -> bytes:
+    """A transaction hash and its Merkle branch, folded to the block's root."""
+    node = txid
+    for sibling in branch:
+        node = sha256d(sibling + node) if index % 2 else sha256d(node + sibling)
+        index //= 2
+    return node
+
+
+def sf_read_tx(data: bytes, o: int) -> tuple[bytes, list[tuple[bytes, int]], list[bytes], int]:
+    """A transaction in a message: its bytes, the outpoints its inputs spend,
+    its output scripts as serialized, and where it ends."""
+    start = o
+    o += 4
+    count, o = read_compact(data, o)
+    inputs = []
+    for _ in range(count):
+        inputs.append((data[o:o + 32], struct.unpack("<I", data[o + 32:o + 36])[0]))
+        size, o = read_compact(data, o + 36)
+        o += size + 4
+    count, o = read_compact(data, o)
+    scripts = []
+    for _ in range(count):
+        size, o = read_compact(data, o + 8)
+        scripts.append(data[o:o + size])
+        o += size
+    o += 4
+    if o > len(data):
+        raise ValueError("the transaction runs past the message")
+    return data[start:o], inputs, scripts, o
+
+
+def sf_read_hashes(data: bytes, o: int) -> tuple[list[bytes], int]:
+    count, o = read_compact(data, o)
+    if o + 32 * count > len(data):
+        raise ValueError("the hashes run past the message")
+    return [data[o + 32 * i:o + 32 * (i + 1)] for i in range(count)], o + 32 * count
+
+
+_SF_PREVIOUS: dict = {}
+
+
+def sf_previous_output(txid: str, n: int) -> dict:
+    """An output a block spends, from BCHN's transaction index."""
+    if txid not in _SF_PREVIOUS:
+        _SF_PREVIOUS[txid] = call(BCHN, "getrawtransaction", txid, True)[0]
+    return _SF_PREVIOUS[txid]["vout"][n]
+
+
+def sf_block_leaves(block: dict) -> list[bytes]:
+    """The leaves of a block's script filter, from BCHN's own reading of the
+    block and of the outputs it spends: one for each script that is not empty
+    and does not start with OP_RETURN, and one for each token category."""
+    leaves = []
+
+    def add(vout: dict, tx_index: int, index: int, spent: bool) -> None:
+        script = bytes.fromhex(vout["scriptPubKey"]["hex"])
+        if script and script[0] != 0x6a:
+            leaves.append(sf_leaf(hashlib.sha256(script).digest(), tx_index, index, 1 if spent else 0))
+        token = vout.get("tokenData")
+        if token:
+            category = bytes.fromhex(token["category"])[::-1]
+            leaves.append(sf_leaf(hashlib.sha256(b"\x01" + category).digest(), tx_index, index, 3 if spent else 2))
+
+    for at, tx in enumerate(block["tx"]):
+        if at != 0:
+            for j, vin in enumerate(tx["vin"]):
+                add(sf_previous_output(vin["txid"], vin["vout"]), at, j, True)
+        for j, vout in enumerate(tx["vout"]):
+            add(vout, at, j, False)
+    return sorted(leaves, key=sf_leaf_order)
+
+
+def script_filter_light_client(s: dict) -> None:
+    """A wallet that syncs script filters (filter type 1) from kth over P2P
+    and settles what a filter holds without downloading the block: the filter
+    header checkpoints and every filter hash, chained here; filters, hashed
+    against them and compared, root and values, with the filter built here
+    from BCHN's reading of the block and of the outputs it spends; the leaves
+    under one key (getcfrange), rebuilt to the root in front of the filter;
+    and the proof of a spent output's leaf (getcfproof), folded to block
+    headers BCHN gives."""
+    client = "script filter light client (filter type 1; getcfrange, getcfproof over P2P)"
+    if not SCRIPT_FILTERS:
+        return
+    tip = call(KTH, "getblockcount")[0]
+    hashes = [bytes.fromhex(call(BCHN, "getblockhash", h)[0])[::-1] for h in range(tip + 1)]
+    seen: dict = {"tip": tip}
+    ok = False
+    peer = None
+    try:
+        peer = LightPeer(KTH_P2P_PORT)
+
+        peer.send(b"getcfcheckpt", b"\x01" + hashes[tip])
+        reply = peer.collect((b"cfcheckpt",), 1, quiet=180.0, limit=900.0)
+        checkpoints = []
+        if reply:
+            body = reply[0][1]
+            count, o = read_compact(body, 33)
+            checkpoints = [body[o + 32 * i:o + 32 * (i + 1)] for i in range(count)]
+            seen["cfcheckpt"] = {"type": body[0], "headers": count}
+
+        header = bytes(32)
+        filter_hashes: list[bytes] = []
+        headers: list[bytes] = []
+        chained = True
+        start = 0
+        while start <= tip:
+            stop = min(tip, start + 1999)
+            peer.send(b"getcfheaders", b"\x01" + struct.pack("<I", start) + hashes[stop])
+            reply = peer.collect((b"cfheaders",), 1, quiet=120.0, limit=600.0)
+            body = reply[0][1] if reply else b""
+            count, o = read_compact(body, 65) if len(body) > 65 else (0, 0)
+            if (not reply or body[0] != 1 or body[1:33] != hashes[stop] or body[33:65] != header
+                    or count != stop - start + 1 or o + 32 * count != len(body)):
+                chained = False
+                seen["cfheaders wrong at"] = start
+                break
+            for i in range(count):
+                filter_hash = body[o + 32 * i:o + 32 * (i + 1)]
+                header = sha256d(filter_hash + header)
+                filter_hashes.append(filter_hash)
+                headers.append(header)
+            start = stop + 1
+        seen["filter hashes chained"] = len(filter_hashes)
+        checkpoints_ok = (chained and len(filter_hashes) == tip + 1 and len(checkpoints) == tip // 1000
+                          and all(checkpoints[i] == headers[(i + 1) * 1000] for i in range(len(checkpoints))))
+        seen["checkpoints are the chained headers at each 1000"] = checkpoints_ok
+
+        # Filters: the first blocks, the blocks around the wallet transactions
+        # (which spend earlier outputs), the tip.
+        wallet_height = s["tx_block_height"]
+        ranges = [(0, min(tip, 3)), (max(0, wallet_height - 1), min(tip, wallet_height + 1)), (tip, tip)]
+        compared = 0
+        spending_leaves = 0
+        roots: dict[int, bytes] = {}
+        expected_leaves: dict[int, list[bytes]] = {}
+        filters_ok = chained
+        for first, last in ranges:
+            peer.send(b"getcfilters", b"\x01" + struct.pack("<I", first) + hashes[last])
+            reply = peer.collect((b"cfilter",), last - first + 1, quiet=60.0, limit=300.0)
+            if len(reply) != last - first + 1:
+                filters_ok = False
+                seen[f"cfilters {first}..{last}"] = len(reply)
+                continue
+            for i, (_, body) in enumerate(reply):
+                height = first + i
+                size, o = read_compact(body, 33)
+                data = body[o:o + size]
+                if (body[0] != 1 or body[1:33] != hashes[height] or o + size != len(body) or size < 32
+                        or not chained or sha256d(data) != filter_hashes[height]):
+                    filters_ok = False
+                    seen["cfilter wrong at"] = height
+                    continue
+                block = call(BCHN, "getblock", hashes[height][::-1].hex(), 2)[0]
+                leaves = sf_block_leaves(block)
+                keys = {leaf[:32] for leaf in leaves}
+                n, values = gcs_values(data[32:])
+                if data[:32] != sf_root(leaves) or n != len(keys) or values != gcs_expected(hashes[height], keys):
+                    filters_ok = False
+                    seen["cfilter content differs at"] = height
+                    continue
+                roots[height] = data[:32]
+                expected_leaves[height] = leaves
+                spending_leaves += sum(1 for leaf in leaves if leaf[40] == 1)
+                compared += 1
+        seen["filters equal to the ones built from BCHN's data, root and values"] = compared
+        seen["leaves of spent outputs in them"] = spending_leaves
+
+        # The wallet block: every leaf, the leaves under one key, a key it
+        # does not have. Each answer rebuilds the root in front of the filter.
+        block_hash = hashes[wallet_height]
+        root = roots.get(wallet_height, b"")
+        leaves = expected_leaves.get(wallet_height, [])
+        paid = hashlib.sha256(bytes.fromhex(call(BCHN, "validateaddress", s["others"][0])[0]["scriptPubKey"])).digest()
+        absent = hashlib.sha256(bytes.fromhex("76a914" + "ab" * 20 + "88ac")).digest()
+
+        def ask_range(prefix: bytes, bits: int):
+            peer.send(b"getcfrange", b"\x01" + block_hash + struct.pack("<H", bits) + prefix)
+            reply = peer.collect((b"cfrange",), 1, quiet=30.0, limit=60.0)
+            if not reply:
+                return None
+            body = reply[0][1]
+            count, first = struct.unpack("<II", body[33:41])
+            held, o = read_compact(body, 41)
+            run = [body[o + 41 * i:o + 41 * (i + 1)] for i in range(held)]
+            o += 41 * held
+            before = after = None
+            if first > 0:
+                before, o = body[o:o + 41], o + 41
+            if first + held < count:
+                after, o = body[o:o + 41], o + 41
+            edge, o = sf_read_hashes(body, o)
+            whole = body[0] == 1 and body[1:33] == block_hash and o == len(body)
+            proved = [leaf for leaf in (before, *run, after) if leaf is not None]
+            rebuilt = sf_range_root(count, first - (1 if before else 0), proved, edge) if proved else bytes(32)
+            return {"count": count, "first": first, "run": run, "before": before, "after": after,
+                    "whole": whole, "root": rebuilt}
+
+        ranges_ok = bool(leaves) and bool(root)
+        every = ask_range(bytes(32), 0)
+        seen["getcfrange, no prefix"] = every and {"leaves": len(every["run"]), "of": every["count"]}
+        ranges_ok = ranges_ok and bool(every) and every["whole"] and every["run"] == leaves \
+            and every["root"] == root and every["before"] is None and every["after"] is None
+        one = ask_range(paid, 256)
+        under = [leaf for leaf in leaves if leaf[:32] == paid]
+        seen["getcfrange, the paid script's key"] = one and {"leaves": len(one["run"]), "first": one["first"]}
+        ranges_ok = ranges_ok and bool(one) and bool(under) and one["whole"] and one["run"] == under \
+            and one["root"] == root \
+            and (one["before"] is None or one["before"][:32] < paid) \
+            and (one["after"] is None or one["after"][:32] > paid)
+        missing = ask_range(absent, 256)
+        seen["getcfrange, a key the block does not have"] = missing and {
+            "leaves": len(missing["run"]), "first": missing["first"]}
+        ranges_ok = ranges_ok and bool(missing) and missing["whole"] and not missing["run"] \
+            and missing["root"] == root \
+            and (missing["before"] is None or missing["before"][:32] < absent) \
+            and (missing["after"] is None or missing["after"][:32] > absent) \
+            and (missing["before"] is not None or missing["after"] is not None)
+        seen["ranges rebuild the root in front of the filter"] = ranges_ok
+
+        # The proof of a spent output's leaf, checked against block headers
+        # from BCHN alone.
+        def merkle_root_of(block_hash_internal: bytes):
+            block_header = call(BCHN, "getblockheader", block_hash_internal[::-1].hex(), True)[0] or {}
+            if block_header.get("confirmations", 0) < 1:
+                return None
+            return bytes.fromhex(block_header["merkleroot"])[::-1]
+
+        def ask_proof(index: int):
+            peer.send(b"getcfproof", b"\x01" + block_hash + struct.pack("<I", index))
+            reply = peer.collect((b"cfproof",), 1, quiet=30.0, limit=60.0)
+            if not reply:
+                return None
+            body = reply[0][1]
+            count, at = struct.unpack("<II", body[33:41])
+            leaf = body[41:82]
+            branch, o = sf_read_hashes(body, 82)
+            tx, inputs, _, o = sf_read_tx(body, o)
+            tx_branch, o = sf_read_hashes(body, o)
+            out = {"count": count, "index": at, "leaf": leaf, "inputs": inputs, "origin": None,
+                   "leaf folds to the root": sf_range_root(count, at, [leaf], branch) == root,
+                   "transaction folds to the header": sf_fold(
+                       sha256d(tx), struct.unpack("<I", leaf[32:36])[0], tx_branch) == merkle_root_of(block_hash)}
+            if leaf[40] in (1, 3):
+                origin_block = body[o:o + 32]
+                origin_index, = struct.unpack("<I", body[o + 32:o + 36])
+                origin_tx, _, scripts, o = sf_read_tx(body, o + 36)
+                origin_branch, o = sf_read_hashes(body, o)
+                out["origin"] = {"block": origin_block, "txid": sha256d(origin_tx), "scripts": scripts,
+                                 "folds to its header": sf_fold(sha256d(origin_tx), origin_index, origin_branch)
+                                 == merkle_root_of(origin_block)}
+            out["whole"] = body[0] == 1 and body[1:33] == block_hash and o == len(body)
+            return out
+
+        proofs_ok = bool(leaves) and bool(root)
+        spent_at = next((i for i, leaf in enumerate(leaves) if leaf[40] == 1), None)
+        created_at = next((i for i, leaf in enumerate(leaves) if leaf[40] == 0), None)
+        spent = ask_proof(spent_at) if spent_at is not None else None
+        if spent and spent["origin"]:
+            input_index, = struct.unpack("<I", spent["leaf"][36:40])
+            previous_txid, previous_n = spent["inputs"][input_index]
+            origin = spent["origin"]
+            key_matches = (previous_txid == origin["txid"] and previous_n < len(origin["scripts"])
+                           and hashlib.sha256(origin["scripts"][previous_n]).digest() == spent["leaf"][:32])
+            seen["getcfproof, a spent output's leaf"] = {
+                "leaf": spent["index"], "of": spent["count"],
+                "leaf folds to the root": spent["leaf folds to the root"],
+                "transaction folds to the header": spent["transaction folds to the header"],
+                "created in block": origin["block"][::-1].hex(),
+                "creating transaction folds to its header": origin["folds to its header"],
+                "the output it names has the leaf's key": key_matches}
+            proofs_ok = proofs_ok and spent["whole"] and spent["leaf"] == leaves[spent_at] \
+                and spent["leaf folds to the root"] and spent["transaction folds to the header"] \
+                and origin["folds to its header"] and key_matches
+        else:
+            proofs_ok = False
+        created = ask_proof(created_at) if created_at is not None else None
+        seen["getcfproof, a created output's leaf"] = created and {
+            "leaf": created["index"], "leaf folds to the root": created["leaf folds to the root"],
+            "transaction folds to the header": created["transaction folds to the header"],
+            "another transaction": created["origin"] is not None}
+        proofs_ok = proofs_ok and bool(created) and created["whole"] and created["origin"] is None \
+            and created["leaf"] == leaves[created_at] and created["leaf folds to the root"] \
+            and created["transaction folds to the header"]
+        seen["proofs check against BCHN's block headers"] = proofs_ok
+
+        # What is not answered: the regular filter has no entry tree, a prefix
+        # with a bit past its length, a leaf past the last, an unknown filter
+        # type, a block nobody has.
+        loose = bytes([0x00, 0x01]) + bytes(30)
+        for command, payload in ((b"getcfrange", b"\x00" + block_hash + struct.pack("<H", 0) + bytes(32)),
+                                 (b"getcfrange", b"\x01" + block_hash + struct.pack("<H", 8) + loose),
+                                 (b"getcfrange", b"\x01" + b"\x11" * 32 + struct.pack("<H", 0) + bytes(32)),
+                                 (b"getcfproof", b"\x01" + block_hash + struct.pack("<I", len(leaves))),
+                                 (b"getcfproof", b"\x00" + block_hash + struct.pack("<I", 0)),
+                                 (b"getcfilters", b"\x02" + struct.pack("<I", 0) + hashes[tip]),
+                                 (b"getcfcheckpt", b"\x02" + hashes[tip])):
+            peer.send(command, payload)
+        silent = not peer.collect((b"cfrange", b"cfproof", b"cfilter", b"cfcheckpt"), None, quiet=4.0, limit=10.0)
+        seen["refused requests get no answer"] = silent
+        peer.send(b"getcfproof", b"\x01" + block_hash + struct.pack("<I", 0))
+        seen["answers after them"] = len(peer.collect((b"cfproof",), 1, quiet=30.0, limit=60.0)) == 1
+
+        # Stored for it: 64 bytes for every thousand blocks, in a file of its own.
+        stored = subprocess.run(["docker", "exec", "kth", "sh", "-c",
+                                 "wc -c < /data/e2e/script_filter_checkpoints"],
+                                capture_output=True, text=True).stdout.strip()
+        seen["checkpoint file bytes"] = stored
+        file_ok = stored.isdigit() and int(stored) == 64 * (tip // 1000)
+
+        ok = (checkpoints_ok and filters_ok and compared == sum(last - first + 1 for first, last in ranges)
+              and spending_leaves > 0 and ranges_ok and proofs_ok and silent and seen["answers after them"]
+              and file_ok)
+    except (OSError, ValueError, KeyError, IndexError, TypeError, struct.error) as error:
+        seen["error"] = f"{type(error).__name__}: {error}"
+    finally:
+        if peer is not None:
+            peer.close()
+    row(1005, client, "the script filter headers of the whole chain chain from zeros and match the checkpoints; "
+        "filters hash to them and equal, root and values, the ones built from BCHN's blocks and the outputs "
+        "they spend; a cfrange rebuilds the root in front of the filter; a cfproof folds to block headers "
+        "BCHN gives and names the output whose script the leaf is of; bad requests get no answer", ok, seen)
 
 
 def bloom_bits(elements: list[bytes], size: int = 64, functions: int = 5, tweak: int = 0) -> bytes:

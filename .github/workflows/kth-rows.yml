@@ -23,17 +23,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # The script filter (filter type 1) carried onto the compact filter
-        # stack: its entry tree and builder, the transaction Merkle branch, and
-        # the source that builds it from a stored block and its undo record,
-        # on top of the regular filter, the messages and the serving code. The
-        # domain, blockchain and node suites hold its tests. Row 36 runs as
-        # 43653555904 and BIP37 as 43653265427.
-          - name: script-filter-type1
+        # The script filter (filter type 1) served: its range and proof
+        # messages, the chain read that gives a block with the outputs it
+        # spends, and the service answering both filter types. Row 1005 is a
+        # wallet that checks filters, ranges and proofs against BCHN's data;
+        # rows 1002 and 1004 run on the same node for the regular filter.
+          - name: script-filter-served
             branch: test/script-filter-type1
             gcc: '16'
             domain: true
             blockchain: true
+            filters: true
+            script_filters: true
+            neutrino: true
+            long: 2100
+        # Row 36 again, for the harness lines that now expect its answers: a
+        # confirmed transaction found through an unspent output, and one with
+        # every output spent still refused.
+          - name: getrawtransaction-unspent
+            branch: test/getrawtransaction-unspent
+            gcc: '16'
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -338,6 +347,7 @@ jobs:
           KTH_SHV: ${{ matrix.shv && '1' || '0' }}
           KTH_FILTERS: ${{ matrix.filters && '1' || '0' }}
           KTH_BLOOM: ${{ matrix.bloom && '1' || '0' }}
+          KTH_SCRIPT_FILTERS: ${{ matrix.script_filters && '1' || '0' }}
           KTH_NEUTRINO_BIN: ${{ matrix.neutrino && format('{0}/neutrino-client', github.workspace) || '' }}
           KTH_STALL: ${{ matrix.stall && '1' || '0' }}
           KTH_LONG: ${{ matrix.long || '0' }}
