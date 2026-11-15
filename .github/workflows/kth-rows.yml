@@ -23,27 +23,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # The script filter (type 1) as three branches, each on the ones it
-        # builds on: the filter and its entry tree, the tree messages, and
-        # serving, which reads the spent outputs through the getblock fee
-        # branch's reader. The fee alone ran as 43657257382.
-          - name: script-filter
-            branch: test/sf-filter
+        # The Job Declaration failover list (#833) and its Tor and I2P routes
+        # (#993) merged, with a latency limit that fits each entry's route and
+        # a Reconnect that stays on I2P. The script filter's three branches
+        # run as 43676639655.
+          - name: jd-route-latency
+            branch: test/jd-route-latency
             gcc: '16'
-            domain: true
-          - name: script-filter-messages
-            branch: test/sf-messages
-            gcc: '16'
-            domain: true
-          - name: script-filter-serving
-            branch: test/sf-serving
-            gcc: '16'
-            domain: true
-            blockchain: true
-            filters: true
-            script_filters: true
-            neutrino: true
-            long: 2100
+            network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
