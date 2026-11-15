@@ -23,18 +23,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Master 5b230a17 (#814's connected height, #928, #930, #950, #962,
-        # #969, #983-#985) merged into #816. jd-route-latency ran as
-        # 43677791525, the script filter's three branches as 43676639655.
+        # Master 5b230a17 merged into #816, with its compact block test's
+        # peers queued as inbound (#950 admits one outbound session per
+        # address). The merge alone ran as 43726629810: domain, blockchain,
+        # network suites and every end-to-end row green, one node test red.
           - name: 816-m5b230a17
             branch: test/816-m5b230a17
             gcc: '16'
-            domain: true
-            blockchain: true
             serve: true
             announce: true
             compact: true
-            network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
