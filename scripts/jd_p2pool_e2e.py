@@ -141,6 +141,9 @@ PROXY_PORT = 19050
 # Seconds to keep mining after the row passed, so kth's JD health over a
 # slow route has time to show.
 SOAK_SECONDS = int(os.environ.get("KTH_JD_SOAK_SECONDS") or "0")
+# KTH_JD_MODE: sv2.jd.mode for kth, full-template unless set. coinbase-only is
+# kth's own default; P2Pool takes it from this computer's addresses.
+JD_MODE = os.environ.get("KTH_JD_MODE") or "full-template"
 
 
 class Socks5Relay:
@@ -381,7 +384,9 @@ def http_json(path: str):
 
 def port_open(port: int) -> bool:
     try:
-        with socket.create_connection(("127.0.0.1", port), timeout=2):
+        # A netem-delayed port takes a whole round trip to accept: up to 6 s
+        # in the slowest row.
+        with socket.create_connection(("127.0.0.1", port), timeout=15):
             return True
     except OSError:
         return False
@@ -735,7 +740,7 @@ def start_kth(image: str, src: Path, binary: str, solo: str, identity: str | Non
             "--sv2.jd.jds_address", f"127.0.0.1:{P2POOL_SV2}",
             "--sv2.jd.jds_authority_public_key", SV2_PUBLIC,
             "--sv2.jd.user_identity", identity,
-            "--sv2.jd.mode", "full-template",
+            "--sv2.jd.mode", JD_MODE,
             "--sv2.jd.response_timeout_seconds", "10",
         ]
     EVIDENCE["kth_argv"] = argv
