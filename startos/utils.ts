@@ -7,14 +7,13 @@ export const rpcInterfaceId = 'rpc'
 export const rootDir = '/data'
 
 // ── Network types ─────────────────────────────────────────────────────────────
-// Keep Tempnet after Chipnet in the network dropdowns.
+// Order matches BCHN StartOS: mainnet → testnets → scalenet → chipnet → regtest.
 export const NETWORKS = [
   'mainnet',
   'testnet3',
   'testnet4',
   'scalenet',
   'chipnet',
-  'tempnet',
   'regtest',
 ] as const
 export type Network = (typeof NETWORKS)[number]
@@ -26,7 +25,6 @@ export const networkPorts: Record<Network, { rpc: number; peer: number }> = {
   testnet4: { rpc: 28332, peer: 28333 },
   scalenet: { rpc: 38332, peer: 38333 },
   chipnet: { rpc: 48332, peer: 48333 },
-  tempnet: { rpc: 48332, peer: 48333 },
   regtest: { rpc: 18443, peer: 18444 },
 }
 
@@ -41,7 +39,6 @@ export const networkName: Record<Network, string> = {
   testnet4: 'testnet4',
   scalenet: 'scalenet',
   chipnet: 'chipnet',
-  tempnet: 'tempnet',
   regtest: 'regtest',
 }
 
@@ -56,22 +53,7 @@ export const networkDbDir = (network: Network): string =>
 export const networkHostsFile = (network: Network): string =>
   network === 'mainnet'
     ? `${rootDir}/peers.dat`
-    : network === 'tempnet'
-      // The Tempnet binary uses net.hosts_file for its unified peer database.
-      ? `${rootDir}/tempnet/peers-tempnet.dat`
-      : `${rootDir}/${network}/peers.dat`
-
-// Tempnet shares chipnet's network magic, ports and DNS seeds. Those seeds
-// return chipnet nodes, which Tempnet rejects at the fork (block 327,989, as
-// "bad-diffbits") and bans, so a node that only finds them stalls there with no
-// peers. These are the known Tempnet nodes from the Tempnet BCHN build's
-// TEMPNET.md (github.com/9500/bchn-tempnet, list of 2026-10-18), kept as
-// persistent peers. Remove them with the rest of Tempnet after 2026-11-15.
-export const tempnetPeers: readonly string[] = [
-  '15.204.253.47:48335',
-  '15.204.228.134:48333',
-  '135.148.26.244:48333',
-]
+    : `${rootDir}/${network}/peers.dat`
 
 // ── Port (mainnet default, kept for backward compat) ──────────────────────────
 export const peerPort = networkPorts.mainnet.peer
