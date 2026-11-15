@@ -23,13 +23,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # The Job Declaration failover list (#833) and its Tor and I2P routes
-        # (#993) merged, with a latency limit that fits each entry's route and
-        # a Reconnect that stays on I2P. The script filter's three branches
-        # run as 43676639655.
-          - name: jd-route-latency
-            branch: test/jd-route-latency
+        # Master 5b230a17 (#814's connected height, #928, #930, #950, #962,
+        # #969, #983-#985) merged into #816. jd-route-latency ran as
+        # 43677791525, the script filter's three branches as 43676639655.
+          - name: 816-m5b230a17
+            branch: test/816-m5b230a17
             gcc: '16'
+            domain: true
+            blockchain: true
+            serve: true
+            announce: true
+            compact: true
             network: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
