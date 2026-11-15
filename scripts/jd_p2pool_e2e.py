@@ -59,7 +59,9 @@ import re
 import shutil
 import socket
 import subprocess
+import struct
 import sys
+import threading
 import time
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
@@ -129,6 +131,142 @@ _next_id = 0
 P2POOL = None
 DEVICE = None
 HANDLES: list = []
+
+# KTH_JD_PROXY=1: kth reaches everything outbound, its JD upstreams and its
+# BCHN peer alike, through a SOCKS5 relay on this port (net.proxy), as it does
+# through Tor. A netem delay on P2Pool's SV2 port then sits on the relay's
+# connections onward, as Tor's relays would.
+PROXY = os.environ.get("KTH_JD_PROXY") == "1"
+PROXY_PORT = 19050
+# Seconds to keep mining after the row passed, so kth's JD health over a
+# slow route has time to show.
+SOAK_SECONDS = int(os.environ.get("KTH_JD_SOAK_SECONDS") or "0")
+
+
+class Socks5Relay:
+    """TEST ONLY. A minimal SOCKS5 server (RFC 1928, with RFC 1929 username and
+    password) that relays to the requested destination and records each
+    request: what kth asked for and the credentials it sent."""
+
+    def __init__(self, port: int):
+        self.port, self.requests, self.lock = port, [], threading.Lock()
+        self.server = socket.create_server(("127.0.0.1", port))
+
+    def start(self) -> None:
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self) -> None:
+        while True:
+            try:
+                client, _ = self.server.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._serve, args=(client,), daemon=True).start()
+
+    @staticmethod
+    def _read(sock: socket.socket, n: int) -> bytes:
+        data = b""
+        while len(data) < n:
+            chunk = sock.recv(n - len(data))
+            if not chunk:
+                raise ConnectionError("closed")
+            data += chunk
+        return data
+
+    def _serve(self, client: socket.socket) -> None:
+        record: dict = {}
+        try:
+            _, count = self._read(client, 2)
+            methods = list(self._read(client, count))
+            method = 0x02 if 0x02 in methods else 0x00
+            client.sendall(bytes([5, method]))
+            if method == 0x02:
+                self._read(client, 1)
+                record["user"] = self._read(client, self._read(client, 1)[0]).decode(errors="replace")
+                self._read(client, self._read(client, 1)[0])
+                client.sendall(b"\x01\x00")
+            _, command, _, kind = self._read(client, 4)
+            if kind == 1:
+                host = socket.inet_ntoa(self._read(client, 4))
+            elif kind == 3:
+                host = self._read(client, self._read(client, 1)[0]).decode()
+            else:
+                host = socket.inet_ntop(socket.AF_INET6, self._read(client, 16))
+            port = struct.unpack(">H", self._read(client, 2))[0]
+            record.update({"command": command, "address_type": kind, "host": host, "port": port,
+                           "at": round(time.monotonic(), 1)})
+            upstream = socket.create_connection((host, port), timeout=30)
+            upstream.settimeout(None)
+            client.sendall(b"\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00")
+        except (OSError, ValueError, ConnectionError) as error:
+            record["error"] = str(error)
+            client.close()
+            with self.lock:
+                self.requests.append(record)
+            return
+        with self.lock:
+            self.requests.append(record)
+
+        def pipe(source: socket.socket, sink: socket.socket) -> None:
+            try:
+                while chunk := source.recv(65536):
+                    sink.sendall(chunk)
+            except OSError:
+                pass
+            for s in (source, sink):
+                try:
+                    s.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+        threading.Thread(target=pipe, args=(client, upstream), daemon=True).start()
+        threading.Thread(target=pipe, args=(upstream, client), daemon=True).start()
+
+
+RELAY: Socks5Relay | None = None
+
+
+def jd_health() -> dict:
+    """What kth's JD client logged about the health of its pool: how often a
+    late answer demoted it, how often it went solo, and what it declared."""
+    text = kth_log_text()
+    lines = [line for line in text.splitlines() if "[sv2 jd]" in line]
+
+    def count(needle: str) -> int:
+        return sum(1 for line in lines if needle in line)
+
+    health = {
+        "accepted_declarations": len(ACCEPTED.findall(text)),
+        "latency_demotions": count("latency exceeded threshold"),
+        "setup_latency": count("setup latency exceeded threshold"),
+        "declaration_latency": count("declaration latency exceeded threshold"),
+        "share_latency": count("upstream latency exceeded threshold"),
+        "backoff_lines": count("backoff"),
+        "solo_lines": sum(1 for line in lines if any(solo in line for solo in SOLO_LINES)),
+        "recovered_lines": count("recovered; active"),
+        "response_deadline_expired": count("response deadline expired"),
+        "connection_failed": count("connection failed") + count("connection through the proxy failed"),
+        "first_latency_lines": [redact(line) for line in lines if "latency exceeded threshold" in line][:10],
+    }
+    if RELAY is not None:
+        with RELAY.lock:
+            requests = list(RELAY.requests)
+        health["proxy_requests"] = len(requests)
+        health["proxy_requests_to_p2pool_sv2"] = sum(1 for r in requests if r.get("port") == P2POOL_SV2)
+        health["proxy_requests_failed"] = sum(1 for r in requests if "error" in r)
+        health["proxy_targets"] = sorted({f"{r.get('host')}:{r.get('port')}" for r in requests if "host" in r})
+    return health
+
+
+def soak(seconds: int) -> None:
+    """The row passed: keep the device mining and kth declaring for a while."""
+    progress(f"row {EVIDENCE['row']}: soaking for {seconds}s")
+    start = kth_height() or 0
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        ensure_kth()
+        ensure_p2pool()
+        time.sleep(5)
+    EVIDENCE["soak"] = {"seconds": seconds, "kth_height_before": start, "kth_height_after": kth_height()}
 SEEN_SNAPSHOTS: set = set()
 
 
@@ -582,6 +720,12 @@ def start_kth(image: str, src: Path, binary: str, solo: str, identity: str | Non
         "--sv2.static_key_file", "/data/sv2-static.key",
         "--sv2.authority_key_file", "/data/sv2-authority.key",
     ]
+    if PROXY:
+        global RELAY
+        if RELAY is None:
+            RELAY = Socks5Relay(PROXY_PORT)
+            RELAY.start()
+        argv += ["--net.proxy", f"127.0.0.1:{PROXY_PORT}"]
     if identity is not None:
         argv += [
             "--sv2.mining.enabled", "true", "--sv2.mining.address", solo,
@@ -1714,6 +1858,7 @@ def copy_tail(src: Path, dest: Path, limit: int = 400_000) -> None:
 
 
 def attach_logs() -> None:
+    EVIDENCE["jd_health"] = jd_health()
     EVIDENCE["kth_log_lines"] = matching_lines(
         kth_log_text(),
         ("[sv2 jd]", "Noise authority public key", "[sv2] Cannot start", "[sv2] failed",
@@ -1890,6 +2035,8 @@ def run() -> None:
             row25(device_bin, pubkey, solo)
         else:
             row25b(device_bin, pubkey, solo)
+            if SOAK_SECONDS > 0:
+                soak(SOAK_SECONDS)
     record_p2pool_api()
     EVIDENCE["heights"]["bchn_after"] = int(cli("getblockcount"))
     EVIDENCE["heights"]["kth_after"] = kth_height()

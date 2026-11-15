@@ -22,18 +22,40 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # #833's fixes from a day against a live pool (a silent handshake is
-          # retried like any failure; a recovered pool returns from solo without a
-          # new tip): row 25 on #833 and row 25w on the combination the Start9
-          # runs. The pool-fix and delay rows ran as 43472864667 and 43467817032.
-          - name: sv2s-833-row25
-            branch: test/sv2s-833
-            row: "25"
-            p2pool: alpha
-          - name: sv2s-881w-row25w
-            branch: test/sv2r-jd-881w-stale
+          # k-nuth/kth#1005 before and after, through a SOCKS5 relay (net.proxy)
+          # with a 2 s and a 3 s round trip to P2Pool, 15 more minutes of mining
+          # after the row passes. Both kth branches are the Start9's combination
+          # (failover + payout outputs + worker names) merged with #833 x #993;
+          # "after" adds #1005's own two commits and nothing else. #833's fixes
+          # on row 25 and row 25w ran in the run before this one.
+          - name: jdr-before-proxy-rt2000
+            branch: test/jdr-before
             row: "25w"
             p2pool: alpha
+            delay_ms: 1000
+            proxy: true
+            soak: 900
+          - name: jdr-after-proxy-rt2000
+            branch: test/jdr-after
+            row: "25w"
+            p2pool: alpha
+            delay_ms: 1000
+            proxy: true
+            soak: 900
+          - name: jdr-before-proxy-rt3000
+            branch: test/jdr-before
+            row: "25w"
+            p2pool: alpha
+            delay_ms: 1500
+            proxy: true
+            soak: 900
+          - name: jdr-after-proxy-rt3000
+            branch: test/jdr-after
+            row: "25w"
+            p2pool: alpha
+            delay_ms: 1500
+            proxy: true
+            soak: 900
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -275,6 +297,8 @@ jobs:
           fi
           export KTH_IMAGE="$IMAGE"
           export KTH_JD_ROW="${{ matrix.row }}"
+          export KTH_JD_PROXY="${{ matrix.proxy && '1' || '0' }}"
+          export KTH_JD_SOAK_SECONDS="${{ matrix.soak || '0' }}"
           export KTH_SRC="$PWD/kth-src"
           export KTH_BIN
           export P2POOL_BIN="$PWD/p2pool/target/release/p2poolv2"
