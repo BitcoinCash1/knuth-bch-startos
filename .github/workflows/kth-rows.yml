@@ -23,15 +23,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # BIP37 with node.bloom_filters on unless turned off, as k-nuth/kth#477
-        # settles, and the scoring reasons other Bitcoin Cash nodes give. The
-        # script filter and row 36 run as 43656021966.
-          - name: bip37-serving-default-on
-            branch: test/bip37-serving
+        # getblock <hash> 2 with each transaction's fee, read from the block's
+        # undo record. The harness compares every fee with BCHN's. BIP37 on by
+        # default runs as 43656296962, the script filter as 43656021966.
+          - name: getblock-fee
+            branch: test/getblock-fee
             gcc: '16'
-            domain: true
-            network: true
-            bloom: true
+            blockchain: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330

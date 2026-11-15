@@ -793,6 +793,10 @@ def methods(s: dict) -> None:
             return "tx list differs"
         if any("fee" not in t for t in kt[1:]):
             return "tx[].fee missing (Explorer reads it)"
+        if [t.get("fee") for t in kt[1:]] != [t.get("fee") for t in bt[1:]]:
+            return "tx[].fee differs from BCHN's"
+        if "fee" in kt[0]:
+            return "the coinbase has a fee field"
         return None
 
     method_check("getblock", [blk, 2], "Explorer!", same=verbose2_same)
@@ -858,8 +862,15 @@ def methods(s: dict) -> None:
     method_check("validateaddress", [s["addr"]], "ASICSeer!, Explorer route, Fulcrum admin",
                  needed=("isvalid", "address", "scriptPubKey"),
                  same=lambda k, b: None if k.get("isvalid") is True else "isvalid is not true")
-    method_check("gettxout", [txid, s["unspent_n"]], "Explorer route", same=eq)
-    method_check("gettxout", [txid, s["unspent_n"], False], "Explorer route", same=eq)
+    def txout_same(k, b):
+        # kth adds its own confirmations_ticks; every field BCHN gives is the same.
+        extra = sorted(set(k) - set(b) - {"confirmations_ticks"})
+        if extra:
+            return f"fields BCHN does not have: {extra}"
+        return None if all(k.get(key) == value for key, value in b.items()) else "differs from BCHN"
+
+    method_check("gettxout", [txid, s["unspent_n"]], "Explorer route", same=txout_same)
+    method_check("gettxout", [txid, s["unspent_n"], False], "Explorer route", same=txout_same)
     method_check("testmempoolaccept", [[s["fresh_tx_test"]]], "Explorer route")
     method_check("getindexinfo", [], "Explorer indexer! (unless -32601)", tolerated_codes=(-32601,))
     method_check("getchaintips", [], "Explorer (tolerated)")
