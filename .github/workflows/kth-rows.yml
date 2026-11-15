@@ -23,26 +23,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # The script filter (filter type 1) served: its range and proof
-        # messages, the chain read that gives a block with the outputs it
-        # spends, and the service answering both filter types. Row 1005 is a
-        # wallet that checks filters, ranges and proofs against BCHN's data;
-        # rows 1002 and 1004 run on the same node for the regular filter.
-          - name: script-filter-served
-            branch: test/script-filter-type1
+        # BIP37 with node.bloom_filters on unless turned off, as k-nuth/kth#477
+        # settles, and the scoring reasons other Bitcoin Cash nodes give. The
+        # script filter and row 36 run as 43656021966.
+          - name: bip37-serving-default-on
+            branch: test/bip37-serving
             gcc: '16'
             domain: true
-            blockchain: true
-            filters: true
-            script_filters: true
-            neutrino: true
-            long: 2100
-        # Row 36 again, for the harness lines that now expect its answers: a
-        # confirmed transaction found through an unspent output, and one with
-        # every output spent still refused.
-          - name: getrawtransaction-unspent
-            branch: test/getrawtransaction-unspent
-            gcc: '16'
+            network: true
+            bloom: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
