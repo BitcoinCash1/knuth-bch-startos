@@ -23,13 +23,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # getblock <hash> 2 with each transaction's fee, read from the block's
-        # undo record. The harness compares every fee with BCHN's. BIP37 on by
-        # default runs as 43656296962, the script filter as 43656021966.
-          - name: getblock-fee
-            branch: test/getblock-fee
+        # The script filter (type 1) as three branches, each on the ones it
+        # builds on: the filter and its entry tree, the tree messages, and
+        # serving, which reads the spent outputs through the getblock fee
+        # branch's reader. The fee alone ran as 43657257382.
+          - name: script-filter
+            branch: test/sf-filter
             gcc: '16'
+            domain: true
+          - name: script-filter-messages
+            branch: test/sf-messages
+            gcc: '16'
+            domain: true
+          - name: script-filter-serving
+            branch: test/sf-serving
+            gcc: '16'
+            domain: true
             blockchain: true
+            filters: true
+            script_filters: true
+            neutrino: true
+            long: 2100
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
