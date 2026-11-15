@@ -24,8 +24,8 @@ jobs:
         include:
           # k-nuth/kth#1005 before and after in coinbase-only, kth's default
           # sv2.jd.mode, through a SOCKS5 relay (net.proxy) with a 2 s and a 6 s
-          # round trip to P2Pool, 15 more minutes of mining after the row
-          # passes. Same two kth branches as run 43701597157 (full-template,
+          # round trip to P2Pool: a new BCHN tip every 30 s for 10 minutes, and
+          # kth's JD health counted; no mining device. Same two kth branches as run 43701597157 (full-template,
           # 2 s: 2 demotions before, 0 after).
           - name: jdr-before-coinbase-proxy-rt2000
             branch: test/jdr-before
@@ -34,7 +34,7 @@ jobs:
             mode: coinbase-only
             delay_ms: 1000
             proxy: true
-            soak: 900
+            watch: 600
           - name: jdr-before-coinbase-proxy-rt6000
             branch: test/jdr-before
             row: "25w"
@@ -42,7 +42,7 @@ jobs:
             mode: coinbase-only
             delay_ms: 3000
             proxy: true
-            soak: 900
+            watch: 600
           - name: jdr-after-coinbase-proxy-rt2000
             branch: test/jdr-after
             row: "25w"
@@ -50,7 +50,7 @@ jobs:
             mode: coinbase-only
             delay_ms: 1000
             proxy: true
-            soak: 900
+            watch: 600
           - name: jdr-after-coinbase-proxy-rt6000
             branch: test/jdr-after
             row: "25w"
@@ -58,7 +58,7 @@ jobs:
             mode: coinbase-only
             delay_ms: 3000
             proxy: true
-            soak: 900
+            watch: 600
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -303,6 +303,7 @@ jobs:
           export KTH_JD_PROXY="${{ matrix.proxy && '1' || '0' }}"
           export KTH_JD_SOAK_SECONDS="${{ matrix.soak || '0' }}"
           export KTH_JD_MODE="${{ matrix.mode || 'full-template' }}"
+          export KTH_JD_WATCH_SECONDS="${{ matrix.watch || '0' }}"
           export KTH_SRC="$PWD/kth-src"
           export KTH_BIN
           export P2POOL_BIN="$PWD/p2pool/target/release/p2poolv2"

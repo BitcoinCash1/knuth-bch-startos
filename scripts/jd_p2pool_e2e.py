@@ -144,6 +144,36 @@ SOAK_SECONDS = int(os.environ.get("KTH_JD_SOAK_SECONDS") or "0")
 # KTH_JD_MODE: sv2.jd.mode for kth, full-template unless set. coinbase-only is
 # kth's own default; P2Pool takes it from this computer's addresses.
 JD_MODE = os.environ.get("KTH_JD_MODE") or "full-template"
+# KTH_JD_WATCH_SECONDS: instead of mining to a credited share and a block,
+# give BCHN a new tip every 30 s for this long and count what kth's JD client
+# does with each one through the slow route. No mining device.
+WATCH_SECONDS = int(os.environ.get("KTH_JD_WATCH_SECONDS") or "0")
+
+
+def watch_declarations(seconds: int) -> None:
+    """New tips for `seconds`, one every 30 s; kth declares each to the pool.
+    The verdict is in jd_health: accepted declarations against demotions."""
+    progress(f"row {EVIDENCE['row']}: watching declarations for {seconds}s, a new tip every 30s")
+    start = time.monotonic()
+    first = None
+    while time.monotonic() - start < 180:
+        ensure_kth()
+        ensure_p2pool()
+        if ACCEPTED.search(kth_log_text()):
+            first = round(time.monotonic() - start, 1)
+            break
+        time.sleep(1)
+    funder = EVIDENCE["addresses"]["funder"]
+    tips = 0
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        ensure_kth()
+        ensure_p2pool()
+        bitcoin_cli(BCHN_DIR, BCHN[1], ["generatetoaddress", "1", funder], timeout=60)
+        tips += 1
+        time.sleep(30)
+    EVIDENCE["watch"] = {"seconds": seconds, "tips": tips, "first_accepted_after_s": first}
+    progress(f"row {EVIDENCE['row']}: {tips} tips; first accepted declaration after {first}s")
 
 
 class Socks5Relay:
@@ -2039,8 +2069,11 @@ def run() -> None:
         if row == "25":
             row25(device_bin, pubkey, solo)
         else:
-            row25b(device_bin, pubkey, solo)
-            if SOAK_SECONDS > 0:
+            if WATCH_SECONDS > 0:
+                watch_declarations(WATCH_SECONDS)
+            else:
+                row25b(device_bin, pubkey, solo)
+            if SOAK_SECONDS > 0 and WATCH_SECONDS == 0:
                 soak(SOAK_SECONDS)
     record_p2pool_api()
     EVIDENCE["heights"]["bchn_after"] = int(cli("getblockcount"))
