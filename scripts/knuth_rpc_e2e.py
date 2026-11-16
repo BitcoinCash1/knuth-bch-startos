@@ -2722,7 +2722,7 @@ def rows(s: dict) -> None:
                   row1_accept_found_block, row2_found_block_reaches_peers, row3_submitblock,
                   row21_template_provider, row23_template_flow, row22_noise, pr803_outbound_proxy,
                   shv_light_client, compact_filter_light_client, neutrino_wallet_client,
-                  script_filter_light_client, explorer_p2p_client,
+                  script_filter_light_client, explorer_p2p_client, vault_wallet_filters,
                   bloom_filter_light_client, i2p_second_node, serve_second_node, announce_second_node,
                   compact_blocks_both_ways, row24_mining_protocol, pr874_long_polling):
         try:
@@ -3051,7 +3051,8 @@ def neutrino_wallet_client(s: dict) -> None:
 def sf_leaf(key: bytes, tx_index: int, index: int, kind: int) -> bytes:
     """A leaf of a script filter's entry tree: the key, the transaction index
     and the input or output index, and the kind (0 a created output's script,
-    1 a spent output's script, 2 and 3 the same for a token category)."""
+    1 a spent output's script, 2 and 3 the same for a token category, 4 a
+    transaction of the block, with index 0)."""
     return key + struct.pack("<II", tx_index, index) + bytes([kind])
 
 
@@ -3150,10 +3151,22 @@ def sf_previous_output(txid: str, n: int) -> dict:
     return _SF_PREVIOUS[txid]["vout"][n]
 
 
+def sf_txid_key(txid: str) -> bytes:
+    """The key of a transaction's leaf: SHA256(0x02 || txid), the txid in the
+    order it is stored, as in an outpoint (display order reversed)."""
+    return hashlib.sha256(b"\x02" + bytes.fromhex(txid)[::-1]).digest()
+
+
+def sf_category_key(category: str) -> bytes:
+    """The key of a token category's leaf: SHA256(0x01 || category), stored order."""
+    return hashlib.sha256(b"\x01" + bytes.fromhex(category)[::-1]).digest()
+
+
 def sf_block_leaves(block: dict) -> list[bytes]:
     """The leaves of a block's script filter, from BCHN's own reading of the
     block and of the outputs it spends: one for each script that is not empty
-    and does not start with OP_RETURN, and one for each token category."""
+    and does not start with OP_RETURN, one for each token category, and one
+    for each transaction, the coinbase included."""
     leaves = []
 
     def add(vout: dict, tx_index: int, index: int, spent: bool) -> None:
@@ -3162,10 +3175,10 @@ def sf_block_leaves(block: dict) -> list[bytes]:
             leaves.append(sf_leaf(hashlib.sha256(script).digest(), tx_index, index, 1 if spent else 0))
         token = vout.get("tokenData")
         if token:
-            category = bytes.fromhex(token["category"])[::-1]
-            leaves.append(sf_leaf(hashlib.sha256(b"\x01" + category).digest(), tx_index, index, 3 if spent else 2))
+            leaves.append(sf_leaf(sf_category_key(token["category"]), tx_index, index, 3 if spent else 2))
 
     for at, tx in enumerate(block["tx"]):
+        leaves.append(sf_leaf(sf_txid_key(tx["txid"]), at, 0, 4))
         if at != 0:
             for j, vin in enumerate(tx["vin"]):
                 add(sf_previous_output(vin["txid"], vin["vout"]), at, j, True)
@@ -3342,6 +3355,7 @@ def script_filter_light_client(s: dict) -> None:
             tx, inputs, _, o = sf_read_tx(body, o)
             tx_branch, o = sf_read_hashes(body, o)
             out = {"count": count, "index": at, "leaf": leaf, "inputs": inputs, "origin": None,
+                   "txid": sha256d(tx),
                    "leaf folds to the root": sf_range_root(count, at, [leaf], branch) == root,
                    "transaction folds to the header": sf_fold(
                        sha256d(tx), struct.unpack("<I", leaf[32:36])[0], tx_branch) == merkle_root_of(block_hash)}
@@ -3388,6 +3402,28 @@ def script_filter_light_client(s: dict) -> None:
             and created["transaction folds to the header"]
         seen["proofs check against BCHN's block headers"] = proofs_ok
 
+        # Each transaction of the wallet block by its txid alone: the full key
+        # SHA256(0x02 || txid) gives the one leaf of that transaction (kind 4,
+        # its position, index 0), and the proof of that leaf is the
+        # transaction itself, folded to BCHN's block header.
+        txids = call(BCHN, "getblock", block_hash[::-1].hex(), 1)[0]["tx"]
+        txids_ok = bool(txids) and bool(root)
+        by_txid = 0
+        for position, txid in enumerate(txids):
+            key = sf_txid_key(txid)
+            wanted = sf_leaf(key, position, 0, 4)
+            answer = ask_range(key, 256)
+            good = (bool(answer) and answer["whole"] and answer["run"] == [wanted] and answer["root"] == root
+                    and (answer["before"] is None or answer["before"][:32] < key)
+                    and (answer["after"] is None or answer["after"][:32] > key))
+            proof = ask_proof(answer["first"]) if good else None
+            good = (good and bool(proof) and proof["whole"] and proof["leaf"] == wanted and proof["origin"] is None
+                    and proof["txid"] == bytes.fromhex(txid)[::-1] and proof["leaf folds to the root"]
+                    and proof["transaction folds to the header"])
+            by_txid += good
+            txids_ok = txids_ok and good
+        seen["getcfrange and getcfproof by txid alone"] = {"transactions": len(txids), "found and proved": by_txid}
+
         # What is not answered: the regular filter has no entry tree, a prefix
         # with a bit past its length, a leaf past the last, an unknown filter
         # type, a block nobody has.
@@ -3413,8 +3449,8 @@ def script_filter_light_client(s: dict) -> None:
         file_ok = stored.isdigit() and int(stored) == 64 * (tip // 1000)
 
         ok = (checkpoints_ok and filters_ok and compared == sum(last - first + 1 for first, last in ranges)
-              and spending_leaves > 0 and ranges_ok and proofs_ok and silent and seen["answers after them"]
-              and file_ok)
+              and spending_leaves > 0 and ranges_ok and proofs_ok and txids_ok and silent
+              and seen["answers after them"] and file_ok)
     except (OSError, ValueError, KeyError, IndexError, TypeError, struct.error) as error:
         seen["error"] = f"{type(error).__name__}: {error}"
     finally:
@@ -3423,7 +3459,8 @@ def script_filter_light_client(s: dict) -> None:
     row(1005, client, "the script filter headers of the whole chain chain from zeros and match the checkpoints; "
         "filters hash to them and equal, root and values, the ones built from BCHN's blocks and the outputs "
         "they spend; a cfrange rebuilds the root in front of the filter; a cfproof folds to block headers "
-        "BCHN gives and names the output whose script the leaf is of; bad requests get no answer", ok, seen)
+        "BCHN gives and names the output whose script the leaf is of; a txid's key alone gives that "
+        "transaction's one leaf and its proof; bad requests get no answer", ok, seen)
 
 
 def explorer_p2p_client(s: dict) -> None:
@@ -3465,6 +3502,164 @@ def explorer_p2p_client(s: dict) -> None:
     row(1008, client, "the explorer syncs kth's script filters over P2P; in block mode (no getcfrange or "
         "getcfproof) and in range mode the histories, funded and spent sums and unspent outputs of the wallet's "
         "addresses, OP_TRUE and an unused script equal BCHN's blocks, also after a new block", ok, seen)
+
+
+def vault_wallet_filters(s: dict) -> None:
+    """Wallets whose coins sit in each kind of locking script, served by kth's
+    script filter (filter type 1) over P2P with no index: Quantumroot vaults
+    (bitjson/quantumroot: the receive address and the quantum lock are P2SH32,
+    the transaction-shape check is P2SH20, and a post-quantum spend moves an
+    authorizing NFT), and P2PKH, P2SH and P2S wallets. BCHN makes one output
+    of each kind in one transaction, an NFT of a new token category at a P2SH32
+    output among them, and the next block spends them all, the NFT moving to
+    another P2SH32 output. kth's filters of both blocks, from getcfilters, must
+    equal the ones built here from BCHN's blocks, and match SHA256(script) of
+    each of those outputs and SHA256(0x01 || category) of the NFT in the block
+    that creates it and in the block that spends it, and each transaction's
+    own key, but not an unrelated script."""
+    client = "Quantumroot vaults, P2PKH, P2SH and P2S wallets (script filter over P2P, no index)"
+    if not SCRIPT_FILTERS:
+        return
+    seen: dict = {}
+    ok = False
+    peer = None
+    sats = 100_000_000
+    fee = 10_000
+
+    def script_of(address: str) -> bytes:
+        return bytes.fromhex(call(BCHN, "validateaddress", address)[0]["scriptPubKey"])
+
+    def p2sh20(redeem: bytes) -> bytes:
+        # BCHN's own HASH160 of the redeem script, through its P2SH address.
+        return script_of(json.loads(cli("decodescript", redeem.hex()))["p2sh"])
+
+    def p2sh32(redeem: bytes) -> bytes:
+        return b"\xaa\x20" + sha256d(redeem) + b"\x87"   # OP_HASH256 <32> OP_EQUAL
+
+    def nft(category: bytes, commitment: bytes) -> bytes:
+        # The CashTokens prefix of an immutable NFT with a commitment (HAS_NFT | HAS_COMMITMENT).
+        return b"\xef" + category + b"\x60" + compact_size(len(commitment)) + commitment
+
+    def raw_tx(inputs: list, outputs: list) -> str:
+        out = struct.pack("<I", 2) + compact_size(len(inputs))
+        for txid, n, script_sig in inputs:
+            out += (bytes.fromhex(txid)[::-1] + struct.pack("<I", n) + compact_size(len(script_sig)) + script_sig
+                    + b"\xff\xff\xff\xff")
+        out += compact_size(len(outputs))
+        for value, body in outputs:
+            out += struct.pack("<Q", value) + compact_size(len(body)) + body
+        return (out + struct.pack("<I", 0)).hex()
+
+    def signed(hex_tx: str) -> str:
+        result = json.loads(cli("signrawtransactionwithwallet", hex_tx))
+        if not result.get("complete"):
+            raise ValueError(f"the wallet did not sign: {json.dumps(result.get('errors'))[:200]}")
+        return result["hex"]
+
+    try:
+        # Output 0 of a wallet transaction: the transaction that spends it as
+        # its first input may make a new token category, whose id is that txid.
+        utxo = max(json.loads(cli("listunspent", "1")), key=lambda u: u["amount"])
+        in_sats = round(utxo["amount"] * sats)
+        parent_txid = cli("sendrawtransaction", signed(cli(
+            "createrawtransaction", json.dumps([{"txid": utxo["txid"], "vout": utxo["vout"]}]),
+            json.dumps({cli("getnewaddress"): round((in_sats - fee) / sats, 8)}))))
+        parent_value = in_sats - fee
+
+        category = bytes.fromhex(parent_txid)[::-1]
+        commitment = b"quantumroot"
+        token_value = 100_000
+        p2pkh = script_of(cli("getnewaddress"))
+        shape_check = p2sh20(b"\x51")              # Quantumroot's transaction-shape check: P2SH20
+        vault_receive = p2sh32(b"\x52")            # Quantumroot's receive address: P2SH32
+        vault_lock = p2sh32(b"\x53")               # the quantum lock that holds the authorizing NFT
+        vault_lock_next = p2sh32(b"\x54")          # where a post-quantum spend moves the NFT
+        bare = bytes.fromhex("52935487")           # P2S: OP_2 OP_ADD OP_4 OP_EQUAL, no template
+        unrelated = bytes.fromhex("76a914" + "cd" * 20 + "88ac")
+        change = script_of(cli("getnewaddress"))
+        create_txid = cli("sendrawtransaction", signed(raw_tx(
+            [(parent_txid, 0, b"")],
+            [(sats, p2pkh), (sats, shape_check), (sats, vault_receive), (sats, bare),
+             (token_value, nft(category, commitment) + vault_lock),
+             (parent_value - 4 * sats - token_value - fee, change)])))
+        create_hash = json.loads(cli("generatetoaddress", "1", s["addr"]))[0]
+
+        # The next block spends every one of them: the P2SH20, P2SH32 and P2S
+        # outputs by their scripts alone, the NFT on to the next lock, and the
+        # P2PKH output by the wallet's signature.
+        spend_txid = cli("sendrawtransaction", raw_tx(
+            [(create_txid, 1, push(b"\x51")), (create_txid, 2, push(b"\x52")), (create_txid, 3, b"\x52"),
+             (create_txid, 4, push(b"\x53"))],
+            [(token_value, nft(category, commitment) + vault_lock_next),
+             (3 * sats - fee, script_of(cli("getnewaddress")))]))
+        p2pkh_spend_txid = cli("sendrawtransaction", signed(cli(
+            "createrawtransaction", json.dumps([{"txid": create_txid, "vout": 0}]),
+            json.dumps({cli("getnewaddress"): round((sats - fee) / sats, 8)}))))
+        spend_hash = json.loads(cli("generatetoaddress", "1", s["addr"]))[0]
+        create_height = call(BCHN, "getblockheader", create_hash, True)[0]["height"]
+        spend_height = call(BCHN, "getblockheader", spend_hash, True)[0]["height"]
+        in_blocks = (create_txid in call(BCHN, "getblock", create_hash, 1)[0]["tx"]
+                     and {spend_txid, p2pkh_spend_txid} <= set(call(BCHN, "getblock", spend_hash, 1)[0]["tx"]))
+        seen["BCHN mined both"] = in_blocks
+        synced = wait_kth_height(spend_height, 300)
+        seen["kth at the spending block"] = synced
+
+        peer = LightPeer(KTH_P2P_PORT)
+        peer.send(b"getcfilters", b"\x01" + struct.pack("<I", create_height) + bytes.fromhex(spend_hash)[::-1])
+        reply = peer.collect((b"cfilter",), spend_height - create_height + 1, quiet=60.0, limit=300.0)
+        filters = {}
+        for _, body in reply:
+            size, o = read_compact(body, 33)
+            if body[0] == 1 and o + size == len(body):
+                filters[body[1:33]] = body[o:o + size]
+
+        sha = lambda script: hashlib.sha256(script).digest()
+        wanted = {
+            "P2PKH": sha(p2pkh),
+            "P2SH20 shape check": sha(shape_check),
+            "P2SH32 receive": sha(vault_receive),
+            "P2S": sha(bare),
+            "P2SH32 NFT lock": sha(vault_lock),
+            "NFT category": sf_category_key(parent_txid),
+        }
+        checks_ok = in_blocks and synced
+        for label, block_hash, extra in (
+                ("creating", create_hash, {"its txid": sf_txid_key(create_txid)}),
+                ("spending", spend_hash, {"its txid": sf_txid_key(spend_txid),
+                                          "P2PKH spend txid": sf_txid_key(p2pkh_spend_txid),
+                                          "next NFT lock": sha(vault_lock_next)})):
+            internal = bytes.fromhex(block_hash)[::-1]
+            data = filters.get(internal, b"")
+            leaves = sf_block_leaves(call(BCHN, "getblock", block_hash, 2)[0])
+            keys = {leaf[:32] for leaf in leaves}
+            n, values = gcs_values(data[32:]) if len(data) > 32 else (0, [])
+            equal = bool(data) and data[:32] == sf_root(leaves) and n == len(keys) \
+                and values == gcs_expected(internal, keys)
+            k0 = int.from_bytes(internal[:8], "little")
+            k1 = int.from_bytes(internal[8:16], "little")
+
+            def has(item: bytes) -> bool:
+                return (siphash24(k0, k1, item) * n * GCS_M) >> 64 in values
+
+            missing = [name for name, key in {**wanted, **extra}.items() if not has(key)]
+            stray = has(sha(unrelated))
+            seen[f"{label} block"] = {"equal to the reference": equal, "items": n, "missing": missing,
+                                      "unrelated script matches": stray}
+            checks_ok = checks_ok and equal and not missing and not stray
+        ok = checks_ok
+    except subprocess.CalledProcessError as error:
+        method = error.cmd[6] if len(error.cmd) > 6 else error.cmd
+        seen["error"] = f"{method}: {(error.stderr or '').strip()[:200]}"
+    except (OSError, ValueError, KeyError, IndexError, TypeError, struct.error) as error:
+        seen["error"] = f"{type(error).__name__}: {error}"
+    finally:
+        if peer is not None:
+            peer.close()
+    row(1009, client, "BCHN makes P2PKH, P2SH20, P2SH32 and P2S outputs and an NFT of a new category at a "
+        "P2SH32 output, and spends them all in the next block, the NFT to another P2SH32 output; kth's type 1 "
+        "filters of both blocks over P2P equal the reference built from BCHN's blocks and match each script, "
+        "the category and each txid in the block that creates and in the block that spends, and not an "
+        "unrelated script", ok, seen)
 
 
 def bloom_bits(elements: list[bytes], size: int = 64, functions: int = 5, tweak: int = 0) -> bytes:
