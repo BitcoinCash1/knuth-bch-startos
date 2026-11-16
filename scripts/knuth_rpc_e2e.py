@@ -59,6 +59,11 @@ BLOOM = os.environ.get("KTH_BLOOM") == "1"
 # KTH_NEUTRINO_BIN, with KTH_FILTERS=1: the built scripts/neutrino-client, a
 # wallet's node connection made with the gcash/neutrino library itself.
 NEUTRINO_BIN = os.environ.get("KTH_NEUTRINO_BIN") or ""
+# KTH_EXPLORER_BACKEND, with KTH_SCRIPT_FILTERS=1: the backend directory of a
+# built BCH Explorer (CyberAshven/bitcoin-cash-explorer, feat/p2p-light-client),
+# whose 'p2p' backend reads addresses from kth as a light client (row 1008,
+# scripts/explorer-p2p-e2e.js).
+EXPLORER_BACKEND = os.environ.get("KTH_EXPLORER_BACKEND") or ""
 KTH_P2P_PORT = 18555
 # KTH_STALL=1 (#773 row 27): kth reaches BCHN only through a relay that never
 # delivers kth's first request for blocks, so that request times out while the
@@ -2716,7 +2721,7 @@ def rows(s: dict) -> None:
                   row1_accept_found_block, row2_found_block_reaches_peers, row3_submitblock,
                   row21_template_provider, row23_template_flow, row22_noise, pr803_outbound_proxy,
                   shv_light_client, compact_filter_light_client, neutrino_wallet_client,
-                  script_filter_light_client,
+                  script_filter_light_client, explorer_p2p_client,
                   bloom_filter_light_client, i2p_second_node, serve_second_node, announce_second_node,
                   compact_blocks_both_ways, row24_mining_protocol, pr874_long_polling):
         try:
@@ -3418,6 +3423,47 @@ def script_filter_light_client(s: dict) -> None:
         "filters hash to them and equal, root and values, the ones built from BCHN's blocks and the outputs "
         "they spend; a cfrange rebuilds the root in front of the filter; a cfproof folds to block headers "
         "BCHN gives and names the output whose script the leaf is of; bad requests get no answer", ok, seen)
+
+
+def explorer_p2p_client(s: dict) -> None:
+    """The BCH Explorer's 'p2p' backend as a light client of kth
+    (scripts/explorer-p2p-e2e.js): it syncs kth's script filters over P2P
+    into its own filter store, then reads address histories from them, in
+    block mode (matching blocks downloaded whole, no getcfrange or getcfproof)
+    and in range mode (getcfrange and getcfproof), and compares each history,
+    funded and spent sum and set of unspent outputs with BCHN's reading of
+    every block. BCHN then mines one block to the wallet, which kth and the
+    explorer must follow. Before that, the script asks kth the requests the
+    filter store relies on one by one, so the log says what kth did."""
+    client = "BCH Explorer p2p backend (script filters and blocks over P2P)"
+    if not SCRIPT_FILTERS or not EXPLORER_BACKEND:
+        return
+    targets = [{"name": "the wallet's mining address", "address": s["addr"]}]
+    targets += [{"name": f"wallet address {i + 1} (paid in block {s['tx_block_height']})", "address": a}
+                for i, a in enumerate(s["others"])]
+    targets.append({"name": "OP_TRUE, the coinbase script of the blocks the rows mine", "script": "51"})
+    env = dict(os.environ, EXPLORER_BACKEND=EXPLORER_BACKEND, KTH_P2P=f"127.0.0.1:{KTH_P2P_PORT}",
+               KTH_RPC=f"{KTH[0]}:{KTH[1]}", BCHN_RPC=f"{BCHN[0]}:{BCHN[1]}", RPC_AUTH="e2e:e2e",
+               TARGETS=json.dumps(targets), MINE_TO=s["addr"], OUT_DIR=str(OUT / "explorer-p2p"))
+    seen: dict = {}
+    ok = False
+    try:
+        run = subprocess.run(["node", str(Path(__file__).with_name("explorer-p2p-e2e.js"))], env=env,
+                             capture_output=True, text=True, timeout=1500)
+        (OUT / "explorer-p2p.log").write_text(run.stdout + run.stderr)
+        print(run.stdout[-12000:] + run.stderr[-3000:], flush=True)
+        summary = next((json.loads(line[len("SUMMARY "):]) for line in reversed(run.stdout.splitlines())
+                        if line.startswith("SUMMARY ")), None)
+        if summary is None:
+            seen = {"exit": run.returncode, "output": (run.stdout + run.stderr)[-300:]}
+        else:
+            seen = {"failed": summary["failed"], "passed": summary["passed"], "knuth": summary["knuth"]}
+        ok = run.returncode == 0 and bool(summary and summary.get("ok"))
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+        seen["error"] = f"{type(error).__name__}: {error}"
+    row(1008, client, "the explorer syncs kth's script filters over P2P; in block mode (no getcfrange or "
+        "getcfproof) and in range mode the histories, funded and spent sums and unspent outputs of the wallet's "
+        "addresses, OP_TRUE and an unused script equal BCHN's blocks, also after a new block", ok, seen)
 
 
 def bloom_bits(elements: list[bytes], size: int = 64, functions: int = 5, tweak: int = 0) -> bytes:
