@@ -9,8 +9,8 @@ name: kth rows from #773, build, tests and client checks
 # check of its row. It runs when this file changes, or by hand.
 on:
   push:
-    # The txid leaf runs: every push of this branch, the script's rows included.
-    branches: [e2e/txid-kth]
+    # The input prefix filter runs (filter type 2): every push of this branch.
+    branches: [e2e/rpa]
   workflow_dispatch:
 
 permissions:
@@ -23,29 +23,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Filter type 1 with a transaction leaf (kind 4) for every transaction:
-        # the change on #1002 and merged up into #1003 and #1004. #1004 runs
-        # every filter row, the Neutrino wallet library, the 2,100-block chain,
-        # the BCH Explorer's p2p backend (row 1008) and the vault wallets'
-        # scripts (row 1009).
-          - name: txid-script-compact-filter
-            branch: test/txid-1002
-            gcc: '16'
-            domain: true
-          - name: txid-script-filter-messages
-            branch: test/txid-1003
-            gcc: '16'
-            domain: true
-          - name: txid-script-filter-serving
-            branch: test/txid-1004
+        # Filter type 2, the input prefix filter for reusable payment
+        # addresses, stacked on #1004 with the transaction leaves: every
+        # filter row, the Neutrino wallet library, the 2,100-block chain and
+        # the RPA wallet row (1010). The BCH Explorer row is left out.
+          - name: input-prefix-filter
+            branch: test/rpa-type2
             gcc: '16'
             domain: true
             blockchain: true
             filters: true
             script_filters: true
+            rpa_filters: true
             neutrino: true
             long: 2100
-            explorer_p2p: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -376,6 +367,7 @@ jobs:
           KTH_FILTERS: ${{ matrix.filters && '1' || '0' }}
           KTH_BLOOM: ${{ matrix.bloom && '1' || '0' }}
           KTH_SCRIPT_FILTERS: ${{ matrix.script_filters && '1' || '0' }}
+          KTH_RPA_FILTERS: ${{ matrix.rpa_filters && '1' || '0' }}
           KTH_NEUTRINO_BIN: ${{ matrix.neutrino && format('{0}/neutrino-client', github.workspace) || '' }}
           KTH_EXPLORER_BACKEND: ${{ matrix.explorer_p2p && format('{0}/explorer/backend', github.workspace) || '' }}
           KTH_STALL: ${{ matrix.stall && '1' || '0' }}

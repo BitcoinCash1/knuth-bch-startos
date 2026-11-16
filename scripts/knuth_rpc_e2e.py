@@ -15,6 +15,7 @@ Standard library only.
 from __future__ import annotations
 
 import base64
+import bisect
 import hashlib
 import json
 import os
@@ -53,6 +54,11 @@ FILTERS = os.environ.get("KTH_FILTERS") == "1"
 # KTH_SCRIPT_FILTERS=1, with KTH_FILTERS=1: the branch serves the script
 # filter (filter type 1) too, with its range and proof messages.
 SCRIPT_FILTERS = FILTERS and os.environ.get("KTH_SCRIPT_FILTERS") == "1"
+# KTH_RPA_FILTERS=1, with KTH_FILTERS=1: the branch serves the input prefix
+# filter (filter type 2) for wallets of reusable payment addresses (row 1010).
+RPA_FILTERS = FILTERS and os.environ.get("KTH_RPA_FILTERS") == "1"
+# The first filter type the branch does not serve.
+UNSERVED_TYPE = b"\x03" if RPA_FILTERS else b"\x02" if SCRIPT_FILTERS else b"\x01"
 # KTH_BLOOM=1 (bloom filters, BIP37): kth runs with node.bloom_filters and
 # takes inbound P2P; the same light client asks BCHN too.
 BLOOM = os.environ.get("KTH_BLOOM") == "1"
@@ -2722,7 +2728,7 @@ def rows(s: dict) -> None:
                   row1_accept_found_block, row2_found_block_reaches_peers, row3_submitblock,
                   row21_template_provider, row23_template_flow, row22_noise, pr803_outbound_proxy,
                   shv_light_client, compact_filter_light_client, neutrino_wallet_client,
-                  script_filter_light_client, explorer_p2p_client, vault_wallet_filters,
+                  script_filter_light_client, explorer_p2p_client, vault_wallet_filters, rpa_wallet_filters,
                   bloom_filter_light_client, i2p_second_node, serve_second_node, announce_second_node,
                   compact_blocks_both_ways, row24_mining_protocol, pr874_long_polling):
         try:
@@ -2977,8 +2983,8 @@ def compact_filter_light_client(s: dict) -> None:
         # What is not answered: another filter type, a start above the stop
         # block, a range past the limit, a stop block nobody has.
         silent = True
-        # A branch that serves the script filter answers type 1.
-        other = b"\x02" if SCRIPT_FILTERS else b"\x01"
+        # A branch answers the filter types it serves.
+        other = UNSERVED_TYPE
         for command, payload in ((b"getcfilters", other + struct.pack("<I", 0) + hashes[tip]),
                                  (b"getcfilters", b"\x00" + struct.pack("<I", 5) + hashes[4]),
                                  (b"getcfheaders", b"\x00" + struct.pack("<I", 3) + b"\x11" * 32),
@@ -3433,8 +3439,8 @@ def script_filter_light_client(s: dict) -> None:
                                  (b"getcfrange", b"\x01" + b"\x11" * 32 + struct.pack("<H", 0) + bytes(32)),
                                  (b"getcfproof", b"\x01" + block_hash + struct.pack("<I", len(leaves))),
                                  (b"getcfproof", b"\x00" + block_hash + struct.pack("<I", 0)),
-                                 (b"getcfilters", b"\x02" + struct.pack("<I", 0) + hashes[tip]),
-                                 (b"getcfcheckpt", b"\x02" + hashes[tip])):
+                                 (b"getcfilters", UNSERVED_TYPE + struct.pack("<I", 0) + hashes[tip]),
+                                 (b"getcfcheckpt", UNSERVED_TYPE + hashes[tip])):
             peer.send(command, payload)
         silent = not peer.collect((b"cfrange", b"cfproof", b"cfilter", b"cfcheckpt"), None, quiet=4.0, limit=10.0)
         seen["refused requests get no answer"] = silent
@@ -3660,6 +3666,440 @@ def vault_wallet_filters(s: dict) -> None:
         "filters of both blocks over P2P equal the reference built from BCHN's blocks and match each script, "
         "the category and each txid in the block that creates and in the block that spends, and not an "
         "unrelated script", ok, seen)
+
+
+# ---- filter type 2: the input prefix filter, for reusable payment addresses -------
+#
+# A payment to a reusable payment address is found by one of its inputs: the
+# sender grinds one of the first 30 inputs of the transaction until the first 4
+# to 16 bits of SHA256d(the input as serialized) equal bits of the receiver's
+# scan key. The filter of a block holds the first two bytes (big-endian) of that
+# hash for the first 30 inputs of every transaction after the coinbase, sorted
+# and distinct, Rice coded. Written here from the spec alone: it is the
+# reference kth's filters are checked against, and scripts/rpa_filter_vectors.py
+# makes the test vectors with it.
+
+RPA_INPUTS = 30
+RPA_RICE_SCALE = 45426  # round(65536 * ln 2)
+
+
+def rpa_input_bytes(txid_internal: bytes, vout: int, script_sig: bytes, sequence: int) -> bytes:
+    """An input as it stands in its transaction."""
+    return (txid_internal + struct.pack("<I", vout) + compact_size(len(script_sig)) + script_sig
+            + struct.pack("<I", sequence))
+
+
+def rpa_value(serialized_input: bytes) -> int:
+    """The first two bytes of SHA256d(input), most significant first."""
+    digest = sha256d(serialized_input)
+    return digest[0] * 256 + digest[1]
+
+
+def rpa_values_of(transactions: list[list[bytes]]) -> list[int]:
+    """S of a block, from the serialized inputs of each transaction after the
+    coinbase: the values of the first 30 inputs of each, sorted, each once."""
+    return sorted({rpa_value(serialized) for inputs in transactions for serialized in inputs[:RPA_INPUTS]})
+
+
+def rpa_block_values(block: dict) -> list[int]:
+    """S of a block, from BCHN's own reading of it (getblock verbosity 2)."""
+    return rpa_values_of([[rpa_input_bytes(bytes.fromhex(vin["txid"])[::-1], vin["vout"],
+                                           bytes.fromhex(vin["scriptSig"]["hex"]), vin["sequence"])
+                           for vin in tx["vin"]] for tx in block["tx"][1:]])
+
+
+def rpa_rice_parameter(n: int) -> int:
+    """k = floor(log2(floor(45426 / N))), and 0 when that quotient is 0."""
+    quotient = RPA_RICE_SCALE // n
+    return quotient.bit_length() - 1 if quotient else 0
+
+
+def rpa_rice_bits(k: int, gaps: list[int]) -> str:
+    """Each gap: gap >> k one-bits, a zero-bit, the low k bits, most significant first."""
+    return "".join("1" * (gap >> k) + "0" + (format(gap & ((1 << k) - 1), f"0{k}b") if k else "")
+                   for gap in gaps)
+
+
+def rpa_pack_bits(bits: str) -> bytes:
+    """Most significant bit first, the last byte padded with zero-bits."""
+    bits += "0" * (-len(bits) % 8)
+    return bytes(int(bits[i:i + 8], 2) for i in range(0, len(bits), 8))
+
+
+def rpa_encode(values: list[int]) -> bytes:
+    """The one encoding of a set: CompactSize N, then, when N > 0, k in one
+    byte and the Rice-coded gaps (the first from 0)."""
+    values = sorted(set(values))
+    out = compact_size(len(values))
+    if not values:
+        return out
+    k = rpa_rice_parameter(len(values))
+    gaps = [b - a for a, b in zip([0] + values[:-1], values)]
+    return out + bytes([k]) + rpa_pack_bits(rpa_rice_bits(k, gaps))
+
+
+def rpa_decode(data: bytes) -> list[int]:
+    """The values of a served filter. Raises ValueError, naming the rule, for
+    bytes that are not the one encoding of a set."""
+    if not data:
+        raise ValueError("truncated")
+    width = {0xfd: 2, 0xfe: 4, 0xff: 8}.get(data[0], 0)
+    if len(data) < 1 + width:
+        raise ValueError("truncated")
+    n = int.from_bytes(data[1:1 + width], "little") if width else data[0]
+    if width and n < {2: 0xfd, 4: 0x10000, 8: 0x100000000}[width]:
+        raise ValueError("count not in its shortest form")
+    if n > 65536:
+        raise ValueError("count above 65,536")
+    o = 1 + width
+    if n == 0:
+        if o != len(data):
+            raise ValueError("trailing bytes")
+        return []
+    if o >= len(data):
+        raise ValueError("truncated")
+    k = data[o]
+    if k > 15:
+        raise ValueError("k above 15")
+    stream = data[o + 1:]
+    total = len(stream) * 8
+    pos = 0
+
+    def bit() -> int:
+        nonlocal pos
+        if pos >= total:
+            raise ValueError("truncated")
+        one = (stream[pos // 8] >> (7 - pos % 8)) & 1
+        pos += 1
+        return one
+
+    values: list[int] = []
+    previous = 0
+    for i in range(n):
+        quotient = 0
+        while bit():
+            quotient += 1
+            if previous + (quotient << k) > 65535:
+                raise ValueError("value above 65,535")
+        low = 0
+        for _ in range(k):
+            low = low << 1 | bit()
+        gap = quotient << k | low
+        if i and gap == 0:
+            raise ValueError("gap of 0 after the first value")
+        previous += gap
+        if previous > 65535:
+            raise ValueError("value above 65,535")
+        values.append(previous)
+    while pos % 8:
+        if bit():
+            raise ValueError("padding bit set")
+    if pos != total:
+        raise ValueError("trailing bytes")
+    return values
+
+
+def rpa_has_prefix(values: list[int], prefix: int, bits: int) -> bool:
+    """Whether S has a value in [p << (16 - b), (p + 1) << (16 - b)): one test
+    on the sorted values."""
+    low, high = prefix << (16 - bits), (prefix + 1) << (16 - bits)
+    at = bisect.bisect_left(values, low)
+    return at < len(values) and values[at] < high
+
+
+def rpa_read_block(data: bytes) -> list[tuple[str, list[bytes]]]:
+    """A block as it comes on the wire: each transaction's txid (display
+    order) and its inputs as serialized."""
+    count, o = read_compact(data, 80)
+    transactions = []
+    for _ in range(count):
+        start = o
+        n_in, o = read_compact(data, o + 4)
+        inputs = []
+        for _ in range(n_in):
+            begin = o
+            size, o = read_compact(data, o + 36)
+            o += size + 4
+            inputs.append(data[begin:o])
+        n_out, o = read_compact(data, o)
+        for _ in range(n_out):
+            size, o = read_compact(data, o + 8)
+            o += size
+        o += 4
+        if o > len(data):
+            raise ValueError("a transaction runs past the block")
+        transactions.append((sha256d(data[start:o])[::-1].hex(), inputs))
+    if o != len(data):
+        raise ValueError("bytes after the last transaction")
+    return transactions
+
+
+def rpa_wallet_filters(s: dict) -> None:
+    """Wallets of reusable payment addresses, served by kth's input prefix
+    filter (filter type 2) over P2P in block mode: no request names a prefix.
+    BCHN's wallet signs, again and again with another sequence, a payment
+    whose input 0 is ground until SHA256d(input 0) starts with a chosen 16-bit
+    prefix, then another to a chosen 8-bit prefix, and a transaction of 31
+    inputs whose 31st value is not among the first 30's; each is mined in a
+    block of its own. Every type 2 filter kth serves must equal the one built
+    here from BCHN's reading of the same block, the filter headers must chain
+    from zeros to kth's checkpoints, the 4, 8, 12 and 16-bit prefixes of each
+    ground input must find exactly the blocks the reference finds, the
+    payment's among them, prefixes absent from a block must not find it, and
+    the block downloaded from kth must rebuild its filter and hold the
+    payment."""
+    client = "reusable payment address wallets (input prefix filter, type 2, over P2P, block mode)"
+    if not RPA_FILTERS:
+        return
+    seen: dict = {}
+    ok = False
+    peer = None
+    sats = 100_000_000
+    fee = 10_000
+    chosen16, chosen8 = 0x5250, 0x41
+
+    def script_of(address: str) -> bytes:
+        return bytes.fromhex(call(BCHN, "validateaddress", address)[0]["scriptPubKey"])
+
+    def ground(utxo: dict, target: int, bits: int) -> tuple[str, bytes, int]:
+        """Signs the payment with sequence 0x80000000 + n (no relative lock)
+        for n = 0, 1, ... in batches until SHA256d(input 0) starts with the
+        target bits: the signed transaction, input 0, and how many were signed."""
+        value = round(utxo["amount"] * sats) - fee
+        pay_to = script_of(cli("getnewaddress"))
+        outpoint = bytes.fromhex(utxo["txid"])[::-1] + struct.pack("<I", utxo["vout"])
+        signed = 0
+        while signed < 1_500_000:
+            batch = []
+            for n in range(signed, signed + 2000):
+                raw = (struct.pack("<I", 2) + b"\x01" + outpoint + b"\x00" + struct.pack("<I", 0x80000000 | n)
+                       + b"\x01" + struct.pack("<Q", value) + compact_size(len(pay_to)) + pay_to
+                       + struct.pack("<I", 0))
+                batch.append({"jsonrpc": "1.0", "id": n, "method": "signrawtransactionwithwallet",
+                              "params": [raw.hex()]})
+            reply = post(BCHN, json.dumps(batch).encode(), timeout=900)
+            if not isinstance(reply["json"], list):
+                raise ValueError(f"the batch was not answered: {reply.get('transport') or reply['status']}")
+            signed += len(batch)
+            for item in sorted(reply["json"], key=lambda i: i["id"]):
+                result = item.get("result") or {}
+                if not result.get("complete"):
+                    raise ValueError(f"the wallet did not sign: {json.dumps(item.get('error'))[:200]}")
+                data = bytes.fromhex(result["hex"])
+                size, o = read_compact(data, 41)
+                first_input = data[5:o + size + 4]
+                if rpa_value(first_input) >> (16 - bits) == target:
+                    return result["hex"], first_input, item["id"] + 1
+        raise ValueError(f"no signature gave the {bits}-bit prefix in {signed} tries")
+
+    def mine_alone(hex_tx: str) -> tuple[str, str]:
+        txid = cli("sendrawtransaction", hex_tx)
+        block = json.loads(cli("generatetoaddress", "1", s["addr"]))[0]
+        if call(BCHN, "getblock", block, 1)[0]["tx"][1:] != [txid]:
+            raise ValueError(f"block {block} holds more than {txid}")
+        return txid, block
+
+    try:
+        # Anything left in BCHN's mempool goes into a block first, so each
+        # transaction below has a block of its own.
+        cli("generatetoaddress", "1", s["addr"])
+        coins = sorted((u for u in json.loads(cli("listunspent", "1"))
+                        if u["scriptPubKey"].startswith("76a914") and u["amount"] >= 1),
+                       key=lambda u: -u["amount"])
+        started = time.monotonic()
+        hex16, input16, tries16 = ground(coins[0], chosen16, 16)
+        hex8, input8, tries8 = ground(coins[1], chosen8, 8)
+        seen["grinding"] = {"16-bit signatures": tries16, "8-bit signatures": tries8,
+                            "seconds": round(time.monotonic() - started)}
+        value16, value8 = rpa_value(input16), rpa_value(input8)
+        txid16, block16 = mine_alone(hex16)
+        txid8, block8 = mine_alone(hex8)
+
+        # 31 outputs of the wallet, then one transaction that spends them all,
+        # its 31st input's sequence changed until that input's value is not
+        # among the first 30's.
+        payees = {cli("getnewaddress"): 0.1 for _ in range(31)}
+        funding = cli("sendmany", "", json.dumps(payees))
+        cli("generatetoaddress", "1", s["addr"])
+        outs = [u for u in json.loads(cli("listunspent", "1")) if u["txid"] == funding and u["address"] in payees]
+        if len(outs) != 31:
+            raise ValueError(f"{len(outs)} of the 31 funding outputs found")
+        pay_to = script_of(cli("getnewaddress"))
+        for n in range(100):
+            raw = struct.pack("<I", 2) + compact_size(31)
+            for i, u in enumerate(outs):
+                raw += (bytes.fromhex(u["txid"])[::-1] + struct.pack("<I", u["vout"]) + b"\x00"
+                        + struct.pack("<I", (0xffffffff - n) if i == 30 else 0xffffffff))
+            raw += b"\x01" + struct.pack("<Q", 31 * 10_000_000 - fee) + compact_size(len(pay_to)) + pay_to
+            raw += struct.pack("<I", 0)
+            hex31 = json.loads(cli("signrawtransactionwithwallet", raw.hex()))["hex"]
+            data = bytes.fromhex(hex31)
+            o = 5
+            serialized = []
+            for _ in range(31):
+                size, at = read_compact(data, o + 36)
+                serialized.append(data[o:at + size + 4])
+                o = at + size + 4
+            first30 = sorted({rpa_value(x) for x in serialized[:30]})
+            value31 = rpa_value(serialized[30])
+            if value31 not in first30:
+                break
+        txid31, block31 = mine_alone(hex31)
+        tip = call(BCHN, "getblockheader", block31, True)[0]["height"]
+        seen["kth at the tip"] = wait_kth_height(tip, 300)
+        heights = {name: call(BCHN, "getblockheader", h, True)[0]["height"]
+                   for name, h in (("16-bit payment", block16), ("8-bit payment", block8), ("31 inputs", block31))}
+        seen["blocks"] = heights
+        hashes = [bytes.fromhex(call(BCHN, "getblockhash", h)[0])[::-1] for h in range(tip + 1)]
+        reference = [rpa_block_values(call(BCHN, "getblock", hashes[h][::-1].hex(), 2)[0]) for h in range(tip + 1)]
+        seen["blocks with values"] = sum(1 for values in reference if values)
+
+        peer = LightPeer(KTH_P2P_PORT)
+        # The checkpoints, asked again while kth's pass has not reached the tip.
+        checkpoints = None
+        for _ in range(10):
+            peer.send(b"getcfcheckpt", b"\x02" + hashes[tip])
+            reply = peer.collect((b"cfcheckpt",), 1, quiet=30.0, limit=60.0)
+            if reply:
+                body = reply[0][1]
+                count, o = read_compact(body, 33)
+                if body[0] == 2 and body[1:33] == hashes[tip] and o + 32 * count == len(body):
+                    checkpoints = [body[o + 32 * i:o + 32 * (i + 1)] for i in range(count)]
+                break
+        seen["cfcheckpt headers"] = None if checkpoints is None else len(checkpoints)
+
+        header = bytes(32)
+        filter_hashes: list[bytes] = []
+        headers: list[bytes] = []
+        chained = True
+        start = 0
+        while start <= tip:
+            stop = min(tip, start + 1999)
+            peer.send(b"getcfheaders", b"\x02" + struct.pack("<I", start) + hashes[stop])
+            reply = peer.collect((b"cfheaders",), 1, quiet=120.0, limit=600.0)
+            body = reply[0][1] if reply else b""
+            count, o = read_compact(body, 65) if len(body) > 65 else (0, 0)
+            if (not reply or body[0] != 2 or body[1:33] != hashes[stop] or body[33:65] != header
+                    or count != stop - start + 1 or o + 32 * count != len(body)):
+                chained = False
+                seen["cfheaders wrong at"] = start
+                break
+            for i in range(count):
+                filter_hash = body[o + 32 * i:o + 32 * (i + 1)]
+                header = sha256d(filter_hash + header)
+                filter_hashes.append(filter_hash)
+                headers.append(header)
+            start = stop + 1
+        checkpoints_ok = (chained and checkpoints is not None and len(filter_hashes) == tip + 1
+                          and len(checkpoints) == tip // 1000
+                          and all(checkpoints[i] == headers[(i + 1) * 1000] for i in range(len(checkpoints))))
+        seen["filter headers chain from zeros to the checkpoints"] = checkpoints_ok
+
+        # Every filter of the chain, 1,000 a request.
+        served: dict[int, list[int]] = {}
+        filters_ok = chained
+        start = 0
+        while start <= tip:
+            stop = min(tip, start + 999)
+            peer.send(b"getcfilters", b"\x02" + struct.pack("<I", start) + hashes[stop])
+            reply = peer.collect((b"cfilter",), stop - start + 1, quiet=60.0, limit=600.0)
+            if len(reply) != stop - start + 1:
+                filters_ok = False
+                seen[f"cfilters {start}..{stop}"] = len(reply)
+            for i, (_, body) in enumerate(reply):
+                height = start + i
+                size, o = read_compact(body, 33)
+                data = body[o:o + size]
+                good = (body[0] == 2 and body[1:33] == hashes[height] and o + size == len(body) and chained
+                        and sha256d(data) == filter_hashes[height] and data == rpa_encode(reference[height]))
+                try:
+                    good = good and rpa_decode(data) == reference[height]
+                except ValueError:
+                    good = False
+                if not good:
+                    filters_ok = False
+                    seen.setdefault("cfilter differs at", height)
+                    continue
+                served[height] = rpa_decode(data)
+            start = stop + 1
+        filters_ok = filters_ok and len(served) == tip + 1
+        seen["filters equal to the reference, byte for byte"] = len(served)
+
+        # A wallet's scan: each prefix finds the blocks the reference finds,
+        # and the payment's block among them.
+        scans_ok = filters_ok
+        scans = {}
+        for label, value, height in (("16-bit payment", value16, heights["16-bit payment"]),
+                                     ("8-bit payment", value8, heights["8-bit payment"])):
+            for bits in (4, 8, 12, 16):
+                prefix = value >> (16 - bits)
+                found = [h for h in range(tip + 1) if rpa_has_prefix(served.get(h, []), prefix, bits)]
+                expected = [h for h in range(tip + 1) if rpa_has_prefix(reference[h], prefix, bits)]
+                scans[f"{label}, {bits} bits"] = len(found)
+                scans_ok = scans_ok and found == expected and height in found
+        seen["blocks each prefix finds"] = scans
+        seen["ground values"] = {"16-bit": f"{value16:04x}", "8-bit": f"{value8:04x}"}
+        scans_ok = scans_ok and value16 == chosen16 and value8 >> 8 == chosen8
+
+        # Prefixes a block does not have do not find it.
+        absent = {}
+        for label, height in heights.items():
+            for bits in (4, 8, 12, 16):
+                prefix = next((p for p in range(1 << bits) if not rpa_has_prefix(reference[height], p, bits)), None)
+                miss = prefix is not None and not rpa_has_prefix(served.get(height, []), prefix, bits)
+                absent[f"{label}, {bits} bits"] = None if prefix is None else f"{prefix:x}"
+                scans_ok = scans_ok and miss
+        seen["absent prefixes, not found"] = absent
+
+        # The first 30 inputs only.
+        thirty_ok = (served.get(heights["31 inputs"]) == first30 and value31 not in first30
+                     and not rpa_has_prefix(served.get(heights["31 inputs"], []), value31, 16))
+        seen["31 inputs: the first 30 values, not the 31st"] = {"31st": f"{value31:04x}", "ok": thirty_ok}
+
+        # The wallet downloads the payment's block from kth, rebuilds the
+        # values from it, and finds its payment.
+        peer.send(b"getdata", compact_size(1) + struct.pack("<I", 2) + hashes[heights["16-bit payment"]])
+        reply = peer.collect((b"block",), 1, quiet=30.0, limit=60.0)
+        transactions = rpa_read_block(reply[0][1]) if reply else []
+        rebuilt = rpa_values_of([inputs for _, inputs in transactions[1:]])
+        paying = [txid for txid, inputs in transactions[1:]
+                  if any(rpa_value(x) == chosen16 for x in inputs[:RPA_INPUTS])]
+        download_ok = bool(transactions) and rebuilt == served.get(heights["16-bit payment"]) and txid16 in paying
+        seen["downloaded block rebuilds its filter and holds the payment"] = download_ok
+
+        # No entry tree for type 2, and no type 3.
+        for command, payload in ((b"getcfrange", b"\x02" + hashes[tip] + struct.pack("<H", 0) + bytes(32)),
+                                 (b"getcfproof", b"\x02" + hashes[tip] + struct.pack("<I", 0)),
+                                 (b"getcfilters", b"\x03" + struct.pack("<I", 0) + hashes[tip]),
+                                 (b"getcfcheckpt", b"\x03" + hashes[tip])):
+            peer.send(command, payload)
+        silent = not peer.collect((b"cfrange", b"cfproof", b"cfilter", b"cfcheckpt"), None, quiet=4.0, limit=10.0)
+        seen["refused requests get no answer"] = silent
+        peer.send(b"getcfilters", b"\x02" + struct.pack("<I", tip) + hashes[tip])
+        answers = len(peer.collect((b"cfilter",), 1, quiet=30.0, limit=60.0)) == 1
+        seen["answers after them"] = answers
+
+        stored = subprocess.run(["docker", "exec", "kth", "sh", "-c",
+                                 "wc -c < /data/e2e/input_prefix_filter_checkpoints"],
+                                capture_output=True, text=True).stdout.strip()
+        seen["checkpoint file bytes"] = stored
+        file_ok = stored.isdigit() and int(stored) == 64 * (tip // 1000)
+
+        ok = bool(seen["kth at the tip"] and checkpoints_ok and filters_ok and scans_ok and thirty_ok
+                  and download_ok and silent and answers and file_ok)
+    except subprocess.CalledProcessError as error:
+        method = error.cmd[6] if len(error.cmd) > 6 else error.cmd
+        seen["error"] = f"{method}: {(error.stderr or '').strip()[:200]}"
+    except (OSError, ValueError, KeyError, IndexError, TypeError, struct.error) as error:
+        seen["error"] = f"{type(error).__name__}: {error}"
+    finally:
+        if peer is not None:
+            peer.close()
+    row(1010, client, "BCHN signs payments whose input 0 is ground to a chosen 16-bit and 8-bit prefix, and a "
+        "31-input transaction; every type 2 filter kth serves equals the reference built from BCHN's blocks, "
+        "the headers chain from zeros to the checkpoints, each 4/8/12/16-bit prefix of a ground input finds "
+        "the reference's blocks with the payment's among them, absent prefixes do not, the 31st input is left "
+        "out, and the block downloaded from kth rebuilds its filter and holds the payment", ok, seen)
 
 
 def bloom_bits(elements: list[bytes], size: int = 64, functions: int = 5, tweak: int = 0) -> bytes:
