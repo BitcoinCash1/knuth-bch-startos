@@ -23,14 +23,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # getrawtransaction verbosity 2 and patterns (#941 merged into #1001,
-        # then the change), compared with BCHN field by field. getblockstats
-        # and getindexinfo run as 43802836926.
-          - name: getrawtransaction-v2
-            branch: test/getrawtransaction-v2
+        # getrawtransaction verbosity 2 and patterns in BCHN's flat form (#941
+        # merged into #1001, then the change), compared with BCHN field by
+        # field; getblockstats again with every value compared with BCHN's
+        # (it and getindexinfo passed as 43802836926).
+          - name: getrawtransaction-v2b
+            branch: test/getrawtransaction-v2b
             gcc: '16'
             domain: true
             blockchain: true
+          - name: getblockstats
+            branch: test/getblockstats
+            gcc: '16'
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330

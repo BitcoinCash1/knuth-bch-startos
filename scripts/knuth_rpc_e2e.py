@@ -879,6 +879,13 @@ def methods(s: dict) -> None:
     method_check("getrawtransaction", [txid, 2, blk], "Explorer (block hash)", same=bchn_fields_equal)
     method_check("getrawtransaction", [s["mempool_txids"][0], 2, "", True], "Explorer! (mempool tx)",
                  same=bchn_fields_equal)
+    # Every statistic of the block of wallet transactions and of the tip, value
+    # for value, by hash and by height.
+    tip_height = call(BCHN, "getblockcount")[0]
+    method_check("getblockstats", [blk], "Explorer (values)", same=bchn_fields_equal,
+                 label=f"getblockstats [tx block] values")
+    method_check("getblockstats", [tip_height], "Explorer (values, by height)", same=bchn_fields_equal,
+                 label=f"getblockstats [{tip_height}] values")
 
     def mempool_same(k, b):
         missing = sorted(set(b) - set(k)) if isinstance(b, list) else None
