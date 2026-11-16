@@ -56,7 +56,9 @@ if (!BACKEND || !fs.existsSync(path.join(BACKEND, 'dist/api/bitcoin/p2p/light-cl
   finish(2);
 }
 // The explorer's logger reads its config at load; a minimal one, logging to stdout only.
-const configFile = path.join(OUT_DIR, 'explorer-config.json');
+// Absolute, since the explorer's config.js require()s it and would read a
+// relative path as a module name.
+const configFile = path.resolve(OUT_DIR, 'explorer-config.json');
 fs.mkdirSync(OUT_DIR, { recursive: true });
 fs.writeFileSync(configFile, JSON.stringify({ SYSLOG: { ENABLED: false }, EXPLORER: { STDOUT_LOG_MIN_PRIORITY: 'info' } }));
 process.env.EXPLORER_CONFIG_FILE = configFile;

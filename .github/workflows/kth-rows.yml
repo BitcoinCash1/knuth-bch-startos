@@ -23,12 +23,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # getrawtransaction verbosity 2 with patterns compared with BCHN again,
-        # patternAsm now set aside like asm (43805411777 stopped at its
-        # spelling). The explorer row runs as the run of ab4f664.
-          - name: getrawtransaction-v2b
-            branch: test/getrawtransaction-v2b
+        # BCH Explorer's p2p backend as a light client of kth (row 1008), on
+        # the script filter's serving PR (#1004, a10b5163), with the Neutrino
+        # row and the 2,100-block chain the filter rows need for checkpoints
+        # (43809167883 ran without it, and the explorer script then failed to
+        # load its config from a relative path). getrawtransaction-v2b passed
+        # as 43811151382.
+          - name: script-filter-explorer
+            branch: test/sf-explorer
             gcc: '16'
+            filters: true
+            script_filters: true
+            neutrino: true
+            long: 2100
+            explorer_p2p: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
