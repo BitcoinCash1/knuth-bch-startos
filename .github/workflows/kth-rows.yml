@@ -9,8 +9,7 @@ name: kth rows from #773, build, tests and client checks
 # check of its row. It runs when this file changes, or by hand.
 on:
   push:
-    branches: [knuth-rpc-e2e]
-    paths: [.github/workflows/kth-rows.yml]
+    branches: [e2e/explorer-scan]
   workflow_dispatch:
 
 permissions:
@@ -25,9 +24,10 @@ jobs:
         include:
         # #1004 with the maintainer's #1001 (a6a49791, master merged in)
         # merged in, with every filter row, the Neutrino wallet library, the
-        # 2,100-block chain and the BCH Explorer's p2p backend (row 1008).
-        # The 16 master merges run as the run of ebcb41d.
-          - name: m-sf-serving-explorer
+        # 2,100-block chain and the BCH Explorer's p2p backend (row 1008)
+        # from test/p2p-scan: the native filter scan, cluster workers reading
+        # the filter store, and lookups by txid alone.
+          - name: m-sf-serving-explorer-scan
             branch: test/m-sf-serving
             gcc: '16'
             domain: true
@@ -37,6 +37,7 @@ jobs:
             neutrino: true
             long: 2100
             explorer_p2p: true
+            explorer_branch: test/p2p-scan
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -328,8 +329,9 @@ jobs:
         shell: bash
       # Row 1008: the BCH Explorer's 'p2p' backend as a light client of kth.
       # Only its light client (dist/api/bitcoin/p2p and what that imports) is
-      # compiled; the rest of the backend needs the native GBT addon, which
-      # the light client does not use. The backend requires Node.js 26.
+      # compiled, with the native filter scan addon it uses; the rest of the
+      # backend needs the native GBT addon, which the light client does not
+      # use. The backend requires Node.js 26.
       - name: Set up Node.js for the BCH Explorer
         if: matrix.explorer_p2p
         uses: actions/setup-node@v7
@@ -341,12 +343,15 @@ jobs:
           git clone --depth 1 --branch "${{ matrix.explorer_branch || 'feat/p2p-light-client' }}" \
             https://github.com/CyberAshven/bitcoin-cash-explorer.git explorer
           git -C explorer log -1 --format='%H %s' | tee explorer-commit.txt
+          # The filter scan addon, built as the backend's preinstall builds it (rust-toolchain picks Rust).
+          (cd explorer/rust/filter-scan && npm run build-release && npm run to-backend)
           cd explorer/backend
-          # The lock file names the native addon as file:rust-gbt; a stub stands in for it.
+          # The lock file names the GBT addon as file:rust-gbt; a stub stands in for it.
           mkdir -p rust-gbt
           cp ../rust/gbt/package.json rust-gbt/
           echo 'module.exports = {};' > rust-gbt/index.js
           npx --yes pnpm@12.18.0 install --frozen-lockfile --ignore-scripts
+          node -e 'const { scanFilters } = require("rust-filter-scan"); console.log("filter scan addon:", typeof scanFilters)'
           npx tsc --outDir dist --rootDir src --module commonjs --target es2022 --moduleResolution node \
             --esModuleInterop --skipLibCheck --types node src/api/bitcoin/p2p/*.ts
           ls dist/api/bitcoin/p2p

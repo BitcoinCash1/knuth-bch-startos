@@ -3435,7 +3435,13 @@ def explorer_p2p_client(s: dict) -> None:
     funded and spent sum and set of unspent outputs with BCHN's reading of
     every block. BCHN then mines one block to the wallet, which kth and the
     explorer must follow. Before that, the script asks kth the requests the
-    filter store relies on one by one, so the log says what kth did."""
+    filter store relies on one by one, so the log says what kth did. Two
+    worker processes read the filter store as the explorer's cluster workers
+    do and must give the same histories, before and after the new block; the
+    first lookup's scan is timed natively and in TypeScript; a transaction
+    with every output spent is found by its txid alone from the filters'
+    transaction leaves (kind 4), or that check is skipped when kth's filters
+    have none."""
     client = "BCH Explorer p2p backend (script filters and blocks over P2P)"
     if not SCRIPT_FILTERS or not EXPLORER_BACKEND:
         return
@@ -3458,13 +3464,16 @@ def explorer_p2p_client(s: dict) -> None:
         if summary is None:
             seen = {"exit": run.returncode, "output": (run.stdout + run.stderr)[-300:]}
         else:
-            seen = {"failed": summary["failed"], "passed": summary["passed"], "knuth": summary["knuth"]}
+            seen = {"failed": summary["failed"], "passed": summary["passed"], "knuth": summary["knuth"],
+                    "skipped": summary.get("skipped", []), "timings": summary.get("timings", {})}
         ok = run.returncode == 0 and bool(summary and summary.get("ok"))
     except (OSError, ValueError, subprocess.TimeoutExpired) as error:
         seen["error"] = f"{type(error).__name__}: {error}"
     row(1008, client, "the explorer syncs kth's script filters over P2P; in block mode (no getcfrange or "
         "getcfproof) and in range mode the histories, funded and spent sums and unspent outputs of the wallet's "
-        "addresses, OP_TRUE and an unused script equal BCHN's blocks, also after a new block", ok, seen)
+        "addresses, OP_TRUE and an unused script equal BCHN's blocks, also after a new block; two reader "
+        "processes of the filter store give the same; the native scan finds what the TypeScript matcher finds; "
+        "a fully spent transaction is found by its txid alone when the filters have transaction leaves", ok, seen)
 
 
 def bloom_bits(elements: list[bytes], size: int = 64, functions: int = 5, tweak: int = 0) -> bytes:

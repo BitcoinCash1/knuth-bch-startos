@@ -7,6 +7,14 @@
 // Every history, funded and spent sum and set of unspent outputs is compared
 // with BCHN's own reading of every block over RPC.
 //
+// As the explorer runs with SPAWN_CLUSTER_PROCS above 0, two worker processes
+// read the filter store this process writes (FilterReader) and give the same
+// histories, before and after a new block. The first lookup is timed with the
+// native filter scan beside the TypeScript matcher it replaced, and both must
+// find the same blocks. A transaction whose outputs are all spent is looked up
+// by its txid alone from the filters' transaction leaves (kind 4), when kth's
+// filters have them; otherwise that check is skipped and says so.
+//
 // Run by knuth_rpc_e2e.py (row 1008). Environment:
 //   EXPLORER_BACKEND  the explorer's backend directory, built (dist/api/bitcoin/p2p/*.js)
 //   KTH_P2P           kth's P2P host:port (default 127.0.0.1:18555)
@@ -17,10 +25,12 @@
 //   MINE_TO           an address: BCHN mines one more block to it, which kth and
 //                     the explorer must follow (empty: no new block)
 //   OUT_DIR           where the filter store and the log go
-// Prints one PASS or FAIL line per check, and last a line "SUMMARY {json}".
-// Exits 0 when every check passed.
+//   WORKERS           how many reader processes (default 2)
+// Prints one PASS, FAIL or SKIP line per check, and last a line "SUMMARY {json}".
+// Exits 0 when every check passed (skipped checks do not fail the run).
 'use strict';
 
+const childProcess = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -34,19 +44,35 @@ const AUTH = 'Basic ' + Buffer.from(process.env.RPC_AUTH || 'e2e:e2e').toString(
 const TARGETS = JSON.parse(process.env.TARGETS || '[]');
 const MINE_TO = process.env.MINE_TO || '';
 const OUT_DIR = process.env.OUT_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'explorer-p2p-'));
+const WORKERS = Number(process.env.WORKERS || 2);
+const IS_WORKER = process.env.EXPLORER_P2P_WORKER === '1';
 const TIMEOUT = 30_000;
 
 const results = [];
+const skipped = [];
 const knuth = {};
 const counts = {};
+const timings = {};
 function check(name, ok, seen) {
   results.push({ name, ok: !!ok });
   console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${seen === undefined ? '' : ' ' + JSON.stringify(seen)}`);
   return !!ok;
 }
+function skip(name, reason) {
+  skipped.push({ name, reason });
+  console.log(`SKIP ${name} ${JSON.stringify({ reason })}`);
+}
 function finish(code) {
   const failed = results.filter((r) => !r.ok).map((r) => r.name);
-  const summary = { ok: code === 0 && failed.length === 0 && results.length > 0, passed: results.length - failed.length, failed, knuth, counts };
+  const summary = {
+    ok: code === 0 && failed.length === 0 && results.length > 0,
+    passed: results.length - failed.length,
+    failed,
+    skipped,
+    knuth,
+    counts,
+    timings,
+  };
   console.log('SUMMARY ' + JSON.stringify(summary));
   process.exit(summary.ok ? 0 : 1);
 }
@@ -60,14 +86,19 @@ if (!BACKEND || !fs.existsSync(path.join(BACKEND, 'dist/api/bitcoin/p2p/light-cl
 // relative path as a module name.
 const configFile = path.resolve(OUT_DIR, 'explorer-config.json');
 fs.mkdirSync(OUT_DIR, { recursive: true });
-fs.writeFileSync(configFile, JSON.stringify({ SYSLOG: { ENABLED: false }, EXPLORER: { STDOUT_LOG_MIN_PRIORITY: 'info' } }));
+if (!IS_WORKER) {
+  fs.writeFileSync(configFile, JSON.stringify({ SYSLOG: { ENABLED: false }, EXPLORER: { STDOUT_LOG_MIN_PRIORITY: 'info' } }));
+}
 process.env.EXPLORER_CONFIG_FILE = configFile;
 const p2p = (m) => require(path.join(BACKEND, 'dist/api/bitcoin/p2p', m));
 const { P2PPeer, P2PTimeoutError } = p2p('peer.js');
-const { FilterStore } = p2p('filter-store.js');
+const { FilterReader, FilterStore } = p2p('filter-store.js');
 const { LightClient, summarize } = p2p('light-client.js');
+const { gcsMatch } = p2p('gcs.js');
+const { txKey } = p2p('script-filter.js');
 const { NETWORKS, NODE_CF, ZERO_HASH, sha256, toDisplay } = p2p('wire.js');
 const { MSG_BLOCK, decodeHeaders, decodeNotFoundBlocks, encodeGetData, encodeGetHeaders } = p2p('messages.js');
+const STORE_DIR = path.join(OUT_DIR, 'filters');
 
 let rpcId = 0;
 async function rpc(hostPort, method, ...params) {
@@ -187,6 +218,99 @@ async function readBchn(from, to, blocks) {
   }
 }
 
+/** The filter scan the explorer had before the native one: the store's files read in order, gcsMatch per filter. */
+function typescriptScan(key, count) {
+  const index = fs.readFileSync(path.join(STORE_DIR, 'index.dat'));
+  const filters = fs.readFileSync(path.join(STORE_DIR, 'filters.dat'));
+  const heights = [];
+  let offset = 0;
+  for (let h = 0; h < count; h++) {
+    const length = index.readUInt32LE(h * 100 + 96);
+    if (length > 32 && gcsMatch(filters.subarray(offset + 32, offset + length), index.subarray(h * 100, h * 100 + 32), key)) {
+      heights.push(h);
+    }
+    offset += length;
+  }
+  return heights;
+}
+
+/**
+ * A worker as a cluster worker of the explorer has it: a FilterReader of the
+ * store the parent writes, its own P2P connection for blocks, and the
+ * histories the parent asks for, once the reader has the height it names.
+ */
+async function runWorker() {
+  const reader = new FilterReader(STORE_DIR, { network: 'regtest', pollInterval: 500 });
+  const peer = newPeer(`worker ${process.pid} blocks`);
+  const client = new LightClient(reader, peer, { mode: 'block', prefixBits: 256, maxHistoryTxs: 100000 });
+  await reader.open();
+  reader.start();
+  peer.start();
+  // Gone with the parent, as cluster workers are.
+  process.on('disconnect', () => process.exit(0));
+  process.send({ ready: true, tip: reader.tipHeight });
+  process.on('message', async (message) => {
+    if (message.cmd === 'stop') {
+      peer.stop();
+      await reader.stop();
+      process.exit(0);
+    }
+    const t0 = Date.now();
+    try {
+      const reached = await until(
+        `the reader to reach height ${message.tip}`,
+        async () => {
+          await client.refresh();
+          return reader.synced && reader.tipHeight >= message.tip;
+        },
+        120_000
+      );
+      const views = {};
+      for (const target of message.targets) {
+        views[target.name] = explorerView(await client.history(sha256(Buffer.from(target.script, 'hex'))));
+      }
+      const location = message.txid ? await client.locateTx(Buffer.from(message.txid, 'hex').reverse()) : undefined;
+      process.send({
+        reached,
+        tip: reader.tipHeight,
+        tipHash: reader.tipHeight >= 0 ? toDisplay(reader.hashAt(reader.tipHeight)) : '',
+        views,
+        location,
+        ms: Date.now() - t0,
+      });
+    } catch (e) {
+      process.send({ error: e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : String(e) });
+    }
+  });
+}
+
+/** Worker processes forked before the store exists, as the explorer's cluster starts its workers. */
+function startWorkers() {
+  const workers = [];
+  for (let i = 0; i < WORKERS; i++) {
+    const child = childProcess.fork(__filename, [], { env: { ...process.env, EXPLORER_P2P_WORKER: '1' }, stdio: 'inherit' });
+    const pending = [];
+    child.on('message', (message) => pending.shift()?.(message));
+    child.on('exit', (code) => {
+      for (const resolve of pending.splice(0)) {
+        resolve({ error: `worker exited with ${code}` });
+      }
+    });
+    const next = () => new Promise((resolve) => pending.push(resolve));
+    const ready = next();
+    workers.push({
+      child,
+      ready,
+      ask: (message) => {
+        const answer = next();
+        child.send(message);
+        return answer;
+      },
+    });
+  }
+  return workers;
+}
+
 async function main() {
   const tip = await bchn('getblockcount');
   const genesis = Buffer.from(await bchn('getblockhash', 0), 'hex').reverse();
@@ -253,10 +377,41 @@ async function main() {
   }
   targets.push({ name: 'an unused script', script: '76a914' + crypto.randomBytes(20).toString('hex') + '88ac' });
 
+  // The readers start before the store exists, as cluster workers start beside the primary.
+  const workers = WORKERS > 0 ? startWorkers() : [];
+  const askWorkers = async (label, height, extraBlocks, located) => {
+    const txid = located?.txid;
+    const answers = await Promise.all(workers.map((w) => w.ask({ tip: height, targets, txid })));
+    answers.forEach((answer, i) => {
+      const expected = Object.fromEntries(targets.map((t) => [t.name, truth(extraBlocks, t.script)]));
+      const same =
+        !answer.error &&
+        answer.reached &&
+        answer.tipHash === extraBlocks[height].hash &&
+        targets.every((t) => JSON.stringify(answer.views[t.name]) === JSON.stringify(expected[t.name])) &&
+        (!txid || (answer.location?.blockHash === located.blockHash && answer.location?.txIndex === located.txIndex));
+      check(
+        `[worker ${i + 1}${label}] a reader of the filter store the parent writes reaches height ${height} and gives BCHN's histories` +
+          (txid ? ' and the block of a transaction by its txid alone' : ''),
+        same,
+        answer.error
+          ? { error: answer.error }
+          : {
+              tip: answer.tip,
+              txs: Object.fromEntries(targets.map((t) => [t.name, answer.views[t.name]?.txs.length])),
+              location: answer.location,
+              ms: answer.ms,
+              ...(same ? {} : { tipHash: answer.tipHash, bchnHash: extraBlocks[height].hash }),
+            }
+      );
+    });
+    return answers;
+  };
+
   // The explorer's filter store, synced from kth; its peer also downloads blocks in block mode.
   const peer = newPeer('kth filters and blocks');
   const sentBlock = counted(peer, 'block mode and store');
-  const store = new FilterStore(path.join(OUT_DIR, 'filters'), peer, { network: 'regtest', pollInterval: 2000 });
+  const store = new FilterStore(STORE_DIR, peer, { network: 'regtest', pollInterval: 2000 });
   const rangePeer = newPeer('kth ranges and proofs');
   const sentRange = counted(rangePeer, 'range mode');
   try {
@@ -287,6 +442,28 @@ async function main() {
     }
     check("the stored block hashes and Merkle roots equal BCHN's, every filter chains to its header", same);
 
+    // The first lookup's scan: the native addon over the store's files, beside the TypeScript matcher it replaced.
+    const keys = targets.map((t) => sha256(Buffer.from(t.script, 'hex')));
+    const scanStart = process.hrtime.bigint();
+    const native = await store.match(keys, 0, store.tipHeight + 1);
+    const nativeMs = Number(process.hrtime.bigint() - scanStart) / 1e6;
+    const tsStart = process.hrtime.bigint();
+    const typescript = keys.map((key) => typescriptScan(key, store.tipHeight + 1));
+    const typescriptMs = Number(process.hrtime.bigint() - tsStart) / 1e6;
+    timings.firstLookupScan = {
+      blocks: store.tipHeight + 1,
+      keys: keys.length,
+      filterBytes: fs.statSync(path.join(STORE_DIR, 'filters.dat')).size,
+      threads: os.availableParallelism(),
+      nativeMs: +nativeMs.toFixed(2),
+      typescriptMs: +typescriptMs.toFixed(2),
+    };
+    check(
+      'the native filter scan finds the blocks the TypeScript matcher finds, for every target in one pass',
+      JSON.stringify(native) === JSON.stringify(typescript),
+      { ...timings.firstLookupScan, matches: native.map((h) => h.length) }
+    );
+
     const clients = {
       block: new LightClient(store, peer, { mode: 'block', prefixBits: 256, maxHistoryTxs: 100000 }),
       range: new LightClient(store, rangePeer, { mode: 'range', prefixBits: 256, maxHistoryTxs: 100000 }),
@@ -305,6 +482,10 @@ async function main() {
         } catch (e) {
           error = e instanceof P2PTimeoutError ? `kth did not answer: ${e.message}` : e.message;
         }
+        const ms = Date.now() - t;
+        if (!label && target === targets[0]) {
+          timings[`firstLookup${mode === 'block' ? 'Block' : 'Range'}Mode`] = { target: target.name, ms };
+        }
         const delta = Object.fromEntries(Object.keys(sent).map((k) => [k, sent[k] - (before[k] || 0)]).filter(([, v]) => v));
         const rangeOrProof = (delta.getcfrange || 0) + (delta.getcfproof || 0);
         check(
@@ -321,7 +502,7 @@ async function main() {
                 unspent: got.unspent.length,
                 ...(JSON.stringify(got) === JSON.stringify(expected) ? {} : { expected: { ...expected, txs: expected.txs.slice(0, 5) }, got: { ...got, txs: got.txs.slice(0, 5) } }),
                 requests: delta,
-                ms: Date.now() - t,
+                ms,
               }
         );
       }
@@ -329,6 +510,73 @@ async function main() {
     await compare('block', '', blocks);
     await until('the range peer', () => rangePeer.isReady, 30_000);
     await compare('range', '', blocks);
+
+    // A confirmed transaction whose outputs are all spent: the newest such, which kth cannot find by its id alone.
+    const spentOutputs = new Set();
+    for (const block of blocks) {
+      for (const tx of block.tx) {
+        for (const input of tx.vin) {
+          if (!input.coinbase) {
+            spentOutputs.add(`${input.txid}:${input.vout}`);
+          }
+        }
+      }
+    }
+    let spentTx;
+    for (let h = tip; h >= 1 && !spentTx; h--) {
+      const tx = blocks[h].tx.find((t) => t.vout.length && t.vout.every((o) => spentOutputs.has(`${t.txid}:${o.n}`)));
+      if (tx) {
+        spentTx = { txid: tx.txid, height: h, blockHash: blocks[h].hash, txIndex: blocks[h].tx.indexOf(tx) };
+      }
+    }
+    const txidName = 'a transaction with every output spent is found by its txid alone from the transaction leaves (kind 4)';
+    if (!spentTx) {
+      skip(txidName, 'no confirmed transaction of the chain has all its outputs spent');
+    } else {
+      // Whether kth's filters have transaction leaves: the filter of the transaction's block must hold its key.
+      const filter = await store.readFilter(spentTx.height);
+      const key = txKey(Buffer.from(spentTx.txid, 'hex').reverse());
+      knuth.txLeaves = gcsMatch(filter.subarray(32), store.hashAt(spentTx.height), key);
+      if (!knuth.txLeaves) {
+        skip(
+          txidName,
+          `kth's filters have no transaction leaves (kind 4): the filter of block ${spentTx.height} does not hold the key of its transaction ${spentTx.txid}`
+        );
+      } else {
+        for (const mode of ['block', 'range']) {
+          const t = Date.now();
+          let location;
+          let error;
+          try {
+            location = await clients[mode].locateTx(Buffer.from(spentTx.txid, 'hex').reverse());
+          } catch (e) {
+            error = e.message;
+          }
+          let read;
+          if (location && KTH_RPC) {
+            read = await rpc(KTH_RPC, 'getrawtransaction', spentTx.txid, 2, location.blockHash).then(
+              (tx) => tx.txid,
+              (e) => `kth: ${e.message}`
+            );
+          }
+          check(
+            `[${mode}] ${txidName}, then read from kth with getrawtransaction <txid> 2 <blockhash>`,
+            !error &&
+              location &&
+              location.height === spentTx.height &&
+              location.blockHash === spentTx.blockHash &&
+              location.txIndex === spentTx.txIndex &&
+              (!KTH_RPC || read === spentTx.txid),
+            { expected: spentTx, location, error, read, ms: Date.now() - t }
+          );
+        }
+      }
+    }
+
+    if (workers.length) {
+      await Promise.all(workers.map((w) => w.ready));
+      await askWorkers('', tip, blocks, knuth.txLeaves ? spentTx : undefined);
+    }
 
     // A new block: BCHN mines it, kth takes it from BCHN, the explorer follows kth.
     if (MINE_TO) {
@@ -346,17 +594,30 @@ async function main() {
       await readBchn(height, height, blocks);
       await compare('block', ', after the new block', blocks);
       await compare('range', ', after the new block', blocks);
+      if (workers.length) {
+        await askWorkers(', after the new block', height, blocks);
+      }
     }
   } finally {
+    for (const w of workers) {
+      w.child.connected && w.child.send({ cmd: 'stop' });
+    }
     rangePeer.stop();
     peer.stop();
     await store.stop().catch(() => undefined);
   }
 }
 
-main()
-  .then(() => finish(0))
-  .catch((e) => {
-    check('the run completed', false, { error: e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : String(e) });
-    finish(2);
+if (IS_WORKER) {
+  runWorker().catch((e) => {
+    process.send?.({ error: e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : String(e) });
+    process.exit(2);
   });
+} else {
+  main()
+    .then(() => finish(0))
+    .catch((e) => {
+      check('the run completed', false, { error: e && e.stack ? e.stack.split('\n').slice(0, 3).join(' | ') : String(e) });
+      finish(2);
+    });
+}
