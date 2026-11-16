@@ -79,8 +79,8 @@ export const main = sdk.setupMain(async ({ effects }) => {
       'bchtest:qrzq5f9ltv70u4su7d40agd4nlnp8qlgqcma6x2tvp.kthjd,p2p=tp2pool:qrzq5f9ltv70u4su7d40agd4nlnp8qlgqcpjxs8987'
     const sv2Mode = 'full-template'
     const sv2ResponseTimeoutSeconds = '10'
-    // Written into the coinbase of every block this node builds (sv2.coinbase_tag).
-    const sv2CoinbaseTag = '/CyberAshven Knuth/'
+    // Node Settings -> Coinbase Tag (sv2.coinbase_tag); empty writes nothing.
+    const sv2CoinbaseTag = store?.coinbaseTag ?? ''
 
     knuthBinary = jdBinary
     knuthArgs.push(
@@ -116,8 +116,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
       sv2Mode,
       '--sv2.jd.response_timeout_seconds',
       sv2ResponseTimeoutSeconds,
-      '--sv2.coinbase_tag',
-      sv2CoinbaseTag,
+      ...(sv2CoinbaseTag ? ['--sv2.coinbase_tag', sv2CoinbaseTag] : []),
     )
   }
 

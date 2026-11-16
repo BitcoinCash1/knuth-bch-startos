@@ -34,6 +34,7 @@ export const configure = sdk.Action.withInput(
       ipcEnabled: store?.ipcEnabled ?? true,
       utxozEnabled: store?.utxozEnabled ?? true,
       torEnabled: store?.torEnabled ?? false,
+      coinbaseTag: store?.coinbaseTag || null,
     }
   },
 
@@ -69,6 +70,7 @@ export const configure = sdk.Action.withInput(
       ipcEnabled: input.ipcEnabled ?? true,
       utxozEnabled: input.utxozEnabled ?? true,
       torEnabled: input.torEnabled ?? false,
+      coinbaseTag: input.coinbaseTag ?? '',
     })
 
     // rpcEnabled/ipcEnabled/utxozEnabled/torEnabled live in store.json, which
