@@ -852,14 +852,15 @@ def methods(s: dict) -> None:
     method_check("getrawtransaction", [s["mempool_txids"][0], False], "Fulcrum! (mempool tx)", same=eq)
 
     def bchn_fields_equal(k, b, path=""):
-        """Every field BCHN gives, kth gives with the same value; asm aside (its
-        spelling differs) and kth's own extra fields allowed. The first
-        difference, or None."""
+        """Every field BCHN gives, kth gives with the same value; asm and a byte
+        code pattern's patternAsm aside (kth spells opcodes its own way, as the
+        getblock patterns check above also allows) and kth's own extra fields
+        allowed. The first difference, or None."""
         if isinstance(b, dict):
             if not isinstance(k, dict):
                 return f"{path or '.'} is not an object"
             for key, value in b.items():
-                if key == "asm":
+                if key in ("asm", "patternAsm"):
                     continue
                 if key not in k:
                     return f"{path}.{key} missing"
