@@ -222,17 +222,25 @@ async function main() {
     genesisHeader.answered && knuth.getheadersEmptyLocator.isGenesis,
     knuth.getheadersEmptyLocator
   );
-  const genesisBlock = await ask(probe, 'getdata', encodeGetData([{ type: MSG_BLOCK, hash: genesis }]), (m) => {
-    if (m.command === 'block') {
-      return { value: 'block' };
-    }
-    if (m.command === 'notfound' && decodeNotFoundBlocks(m.payload).some((h) => h.equals(genesis))) {
-      return { value: 'notfound' };
-    }
-    return false;
-  });
-  knuth.getdataBlock = genesisBlock.answered ? genesisBlock.value : genesisBlock.what;
-  check('kth serves a block to getdata (block mode downloads matching blocks)', genesisBlock.value === 'block', knuth.getdataBlock);
+  const askBlock = (hash) =>
+    ask(probe, 'getdata', encodeGetData([{ type: MSG_BLOCK, hash }]), (m) => {
+      if (m.command === 'block') {
+        return { value: 'block' };
+      }
+      if (m.command === 'notfound' && decodeNotFoundBlocks(m.payload).some((h) => h.equals(hash))) {
+        return { value: 'notfound' };
+      }
+      return false;
+    });
+  // Block mode downloads blocks the filters match, never the genesis block,
+  // which every client already has; so block 1 is the check, and what kth
+  // answers for the genesis block is only recorded.
+  const blockOne = Buffer.from(await bchn('getblockhash', 1), 'hex').reverse();
+  const firstBlock = await askBlock(blockOne);
+  knuth.getdataBlock = firstBlock.answered ? firstBlock.value : firstBlock.what;
+  check('kth serves a block to getdata (block mode downloads matching blocks)', firstBlock.value === 'block', knuth.getdataBlock);
+  const genesisBlock = await askBlock(genesis);
+  knuth.getdataGenesisBlock = genesisBlock.answered ? genesisBlock.value : genesisBlock.what;
   probe.stop();
 
   // BCHN's own reading of every block.
