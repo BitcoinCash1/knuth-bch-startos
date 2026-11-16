@@ -324,6 +324,31 @@ jobs:
           cd scripts/neutrino-client
           go build -o "$GITHUB_WORKSPACE/neutrino-client" .
         shell: bash
+      # Row 1008: the BCH Explorer's 'p2p' backend as a light client of kth.
+      # Only its light client (dist/api/bitcoin/p2p and what that imports) is
+      # compiled; the rest of the backend needs the native GBT addon, which
+      # the light client does not use. The backend requires Node.js 26.
+      - name: Set up Node.js for the BCH Explorer
+        if: matrix.explorer_p2p
+        uses: actions/setup-node@v7
+        with:
+          node-version: '26'
+      - name: Build the BCH Explorer's p2p light client
+        if: matrix.explorer_p2p
+        run: |
+          git clone --depth 1 --branch "${{ matrix.explorer_branch || 'feat/p2p-light-client' }}" \
+            https://github.com/CyberAshven/bitcoin-cash-explorer.git explorer
+          git -C explorer log -1 --format='%H %s' | tee explorer-commit.txt
+          cd explorer/backend
+          # The lock file names the native addon as file:rust-gbt; a stub stands in for it.
+          mkdir -p rust-gbt
+          cp ../rust/gbt/package.json rust-gbt/
+          echo 'module.exports = {};' > rust-gbt/index.js
+          npx --yes pnpm@12.18.0 install --frozen-lockfile --ignore-scripts
+          npx tsc --outDir dist --rootDir src --module commonjs --target es2022 --moduleResolution node \
+            --esModuleInterop --skipLibCheck --types node src/api/bitcoin/p2p/*.ts
+          ls dist/api/bitcoin/p2p
+        shell: bash
       - name: Run the end-to-end checks against this kth
         run: python3 scripts/knuth_rpc_e2e.py e2e-out
         env:
@@ -341,6 +366,7 @@ jobs:
           KTH_BLOOM: ${{ matrix.bloom && '1' || '0' }}
           KTH_SCRIPT_FILTERS: ${{ matrix.script_filters && '1' || '0' }}
           KTH_NEUTRINO_BIN: ${{ matrix.neutrino && format('{0}/neutrino-client', github.workspace) || '' }}
+          KTH_EXPLORER_BACKEND: ${{ matrix.explorer_p2p && format('{0}/explorer/backend', github.workspace) || '' }}
           KTH_STALL: ${{ matrix.stall && '1' || '0' }}
           KTH_LONG: ${{ matrix.long || '0' }}
         shell: bash
@@ -350,6 +376,7 @@ jobs:
           name: kth-${{ matrix.name }}
           path: |
             kth-commit.txt
+            explorer-commit.txt
             test-status.txt
             node-tests.log
             domain-tests.log
