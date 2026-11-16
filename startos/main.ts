@@ -5,7 +5,6 @@ import {
   networkName,
   networkDbDir,
   networkHostsFile,
-  tempnetPeers,
   Network,
 } from './utils'
 import { storeJson } from './fileModels/store.json'
@@ -22,7 +21,6 @@ export const main = sdk.setupMain(async ({ effects }) => {
   const network: Network = store?.network ?? 'mainnet'
   const { rpc: rpcPort } = networkPorts[network]
   const netName = networkName[network]
-  const knuthBinary = network === 'tempnet' ? 'kth-tempnet' : 'kth'
   const netLabel = network.charAt(0).toUpperCase() + network.slice(1)
   const dataDir = networkDbDir(network)
   const torEnabled = store?.torEnabled ?? false
@@ -53,12 +51,6 @@ export const main = sdk.setupMain(async ({ effects }) => {
     '--network',
     netName,
   ]
-
-  // Command-line peers are not written to kth.cfg, so nothing carries over
-  // when the node is switched back to chipnet.
-  if (network === 'tempnet') {
-    for (const peer of tempnetPeers) knuthArgs.push('--net.peer', peer)
-  }
 
   // kth tells chipnet from testnet4 (same network magic) only by
   // net.inbound_port == 48333, and kth.cfg is read after --network, so a port
@@ -226,7 +218,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
 
   async function nodeIsUp(): Promise<boolean> {
     try {
-      const res = await knuthSub.exec(['sh', '-c', `pgrep -x ${knuthBinary} >/dev/null`])
+      const res = await knuthSub.exec(['sh', '-c', 'pgrep -x kth >/dev/null'])
       return res.exitCode === 0
     } catch {
       return false
@@ -238,7 +230,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
       .addDaemon('primary', {
         subcontainer: knuthSub,
         exec: {
-          command: [knuthBinary, ...knuthArgs],
+          command: ['kth', ...knuthArgs],
           // 5 min left the UI "Stopped" while kth kept running, so Delete
           // Peer List / Delete Test Network Data never actually took effect.
           sigtermTimeout: 45_000,

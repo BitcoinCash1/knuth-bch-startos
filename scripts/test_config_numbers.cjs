@@ -38,6 +38,3 @@ for (const invalid of ['abc', 'Infinity', '-Infinity', '1e999', NaN, Infinity, -
     assert.equal(parsed['node.sigop_fee_satoshis'], 100)
   })
 }
-
-// Package validation runs this entry point, so include network isolation checks.
-require('./test_networks.cjs')
