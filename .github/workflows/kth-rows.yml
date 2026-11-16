@@ -9,7 +9,7 @@ name: kth rows from #773, build, tests and client checks
 # check of its row. It runs when this file changes, or by hand.
 on:
   push:
-    branches: [knuth-rpc-e2e]
+    branches: [e2e/coinbase-tag]
     paths: [.github/workflows/kth-rows.yml]
   workflow_dispatch:
 
@@ -23,20 +23,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #1004 with the maintainer's #1001 (a6a49791, master merged in)
-        # merged in, with every filter row, the Neutrino wallet library, the
-        # 2,100-block chain and the BCH Explorer's p2p backend (row 1008).
-        # The 16 master merges run as the run of ebcb41d.
-          - name: m-sf-serving-explorer
-            branch: test/m-sf-serving
+        # sv2.coinbase_tag (d5a56d51) on the Start9's chipnet build 6c0ccaea.
+          - name: coinbase-tag
+            branch: test/coinbase-tag
             gcc: '16'
-            domain: true
-            blockchain: true
-            filters: true
-            script_filters: true
-            neutrino: true
-            long: 2100
-            explorer_p2p: true
+            sv2: true
+            noise: true
+            sv2_mining: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
