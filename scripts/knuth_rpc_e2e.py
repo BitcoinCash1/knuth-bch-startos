@@ -3759,8 +3759,8 @@ def rpa_decode(data: bytes) -> list[int]:
     if o >= len(data):
         raise ValueError("truncated")
     k = data[o]
-    if k > 15:
-        raise ValueError("k above 15")
+    if k != rpa_rice_parameter(n):
+        raise ValueError("k not the one its count gives")
     stream = data[o + 1:]
     total = len(stream) * 8
     pos = 0

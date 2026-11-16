@@ -10,7 +10,7 @@ name: kth rows from #773, build, tests and client checks
 on:
   push:
     # The input prefix filter runs (filter type 2): every push of this branch.
-    branches: [e2e/rpa]
+    branches: [e2e/rpa-k]
   workflow_dispatch:
 
 permissions:
@@ -28,7 +28,7 @@ jobs:
         # filter row, the Neutrino wallet library, the 2,100-block chain and
         # the RPA wallet row (1010). The BCH Explorer row is left out.
           - name: input-prefix-filter
-            branch: test/rpa-type2
+            branch: test/rpa-canonical-k
             gcc: '16'
             domain: true
             blockchain: true
@@ -36,8 +36,7 @@ jobs:
             script_filters: true
             rpa_filters: true
             neutrino: true
-            long: 2100
-    name: kth ${{ matrix.name }}
+            long: 2100    name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
     env:

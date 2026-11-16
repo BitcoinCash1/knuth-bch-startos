@@ -139,6 +139,10 @@ def malformed() -> list[dict]:
          "N not in its shortest CompactSize form"),
         ("count above 65536", bytes.fromhex("fe01000100") + bytes([0]) + pack(bits(0, [0])),
          "N above 65,536"),
+        # The same set written with another k than the one N gives: a second
+        # encoding of one set, refused so each set has one filter and hash.
+        ("k below the one N gives", bytes([1, 0]) + pack(bits(0, [3])), "k not the one N gives"),
+        ("k one below the one N gives", bytes([1, 14]) + pack(bits(14, [3])), "k not the one N gives"),
     ]
     out = []
     for name, data, why in cases:
@@ -161,10 +165,6 @@ def accepted() -> list[dict]:
         ("two values", [1, 2], ref.rpa_encode([1, 2])),
         ("even values, k = 0", even, ref.rpa_encode(even)),
         ("every value", every, ref.rpa_encode(every)),
-        # Not the one encoding (N = 1 has k = 15), and not refused by the
-        # spec's rules: the filter hash differs from the canonical one, so the
-        # header chain tells them apart.
-        ("k not the one N gives", [3], bytes([1, 0]) + pack(ref.rpa_rice_bits(0, [3]))),
     ]
     out = []
     for name, values, data in cases:
