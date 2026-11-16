@@ -102,6 +102,9 @@ COMPACT = os.environ.get("KTH_COMPACT") == "1"
 # KTH_SV2_MINING=1 (#773 row 24, the Mining Protocol server): SRI's own CPU
 # mining_device mines on kth over Noise, and BCHN must accept its blocks.
 SV2_MINING = os.environ.get("KTH_SV2_MINING") == "1"
+# KTH_COINBASE_TAG (sv2.coinbase_tag): text kth writes into the coinbase of
+# every block it builds; row 24 then checks it in each block it mines.
+COINBASE_TAG = os.environ.get("KTH_COINBASE_TAG", "")
 # KTH_LONGPOLL=1 (k-nuth/kth#874): a getblocktemplate that sends its template's
 # longpollid back is held until BCHN mines a block. It mines one more block, so
 # it runs last and only when asked.
@@ -196,6 +199,7 @@ def start_kth() -> None:
                       if SV2 else []),
                     *(["--sv2.mining.enabled", "true", "--sv2.mining.address", MINING_ADDRESS]
                       if SV2 and SV2_MINING else []),
+                    *(["--sv2.coinbase_tag", COINBASE_TAG] if SV2 and COINBASE_TAG else []),
                     *(["--sv2.noise", "true", "--sv2.static_key_file", "/data/sv2-static.key",
                        "--sv2.authority_key_file", "/data/sv2-authority.key"] if SV2 and NOISE else []),
                     *(["--net.proxy", f"127.0.0.1:{PROXY_PORT}"] if PROXY else []),
@@ -2634,8 +2638,15 @@ def row24_mining_protocol(s: dict) -> None:
         paid = [a for o in coinbase["vout"]
                 for a in (o["scriptPubKey"].get("addresses") or [o["scriptPubKey"].get("address")])
                 if a]
-        blocks.append({"height": height, "pays the configured address": MINING_ADDRESS in paid,
-                       "coinbase value": sum(o["value"] for o in coinbase["vout"])})
+        entry = {"height": height, "pays the configured address": MINING_ADDRESS in paid,
+                 "coinbase value": sum(o["value"] for o in coinbase["vout"])}
+        if COINBASE_TAG:
+            # The scriptSig starts with the BIP34 height push; the tag follows it.
+            script = bytes.fromhex(coinbase["vin"][0]["coinbase"])
+            push = script[0] if 0 < script[0] < 0x4c else 0
+            entry["coinbase text"] = script[1 + push:1 + push + len(COINBASE_TAG)].decode(errors="replace")
+            entry["tag right after the height"] = entry["coinbase text"] == COINBASE_TAG
+        blocks.append(entry)
     seen["new BCHN blocks"] = blocks
     seen["kth tip is BCHN's"] = call(KTH, "getbestblockhash")[0] == cli("getbestblockhash")
     text = log.read_text(errors="replace") if log.exists() else ""
@@ -2644,6 +2655,7 @@ def row24_mining_protocol(s: dict) -> None:
         "new job": len(re.findall(r"(?i)NewMiningJob|new job", text)),
         "error": len(re.findall(r"(?i)error", text))}
     ok = (bool(blocks) and all(b["pays the configured address"] for b in blocks)
+          and all(b.get("tag right after the height", True) for b in blocks)
           and seen["kth tip is BCHN's"]
           and all(r["BCHN submitblock"] in (None, "already had it") for r in submitted))
     row(24, client, "an independent SV2 client mines on kth's Mining Protocol channel and finds blocks BCHN accepts",

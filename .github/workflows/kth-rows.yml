@@ -354,6 +354,7 @@ jobs:
           KTH_ANNOUNCE: ${{ matrix.announce && '1' || '0' }}
           KTH_COMPACT: ${{ matrix.compact && '1' || '0' }}
           KTH_SV2_MINING: ${{ matrix.sv2_mining && '1' || '0' }}
+          KTH_COINBASE_TAG: ${{ matrix.coinbase_tag || '' }}
           KTH_LONGPOLL: ${{ matrix.longpoll && '1' || '0' }}
           KTH_PROXY: ${{ matrix.proxy && '1' || '0' }}
           KTH_SHV: ${{ matrix.shv && '1' || '0' }}
