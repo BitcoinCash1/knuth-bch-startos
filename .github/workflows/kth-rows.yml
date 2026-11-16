@@ -23,7 +23,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # sv2.coinbase_tag (d5a56d51) on the Start9's chipnet build 6c0ccaea.
+        # sv2.coinbase_tag (8582780e, tag right after the height) on the Start9's chipnet build 6c0ccaea.
           - name: coinbase-tag
             branch: test/coinbase-tag
             gcc: '16'
