@@ -23,7 +23,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Filter type 2, the input prefix filter for reusable payment
+        # Filter type 2 (canonical Rice parameter), the input prefix filter for reusable payment
         # addresses, stacked on #1004 with the transaction leaves: every
         # filter row, the Neutrino wallet library, the 2,100-block chain and
         # the RPA wallet row (1010). The BCH Explorer row is left out.
