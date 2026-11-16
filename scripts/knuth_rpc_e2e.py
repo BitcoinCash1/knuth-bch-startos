@@ -2417,6 +2417,59 @@ def serve_second_node(s: dict) -> None:
         reached and seen["B's tip is A's"] and len(seen["BCHN's kth peers"]) == 1, seen)
 
 
+def genesis_block_reads(s: dict) -> None:
+    """The genesis block, which no node downloads: a peer asks kth and BCHN
+    for it with getdata, and each must send the block, the bytes BCHN's
+    getblock gives; then getblock of its hash on kth, raw and verbose, against
+    BCHN's own answers. A block kth does not hold is still notfound and -5."""
+    client = "peers and RPC clients reading the genesis block"
+    genesis = call(BCHN, "getblockhash", 0)[0]
+    raw = call(BCHN, "getblock", genesis, False)[0]
+    unknown = bytes([0x42]) * 32
+    seen: dict = {"genesis": genesis}
+    served: dict = {}
+    for name, port in (("kth", KTH_P2P_PORT), ("BCHN", 18444)):
+        peer = None
+        try:
+            peer = LightPeer(port)
+            peer.send(b"getdata", b"\x01" + struct.pack("<I", 2) + bytes.fromhex(genesis)[::-1])
+            replies = peer.collect((b"block", b"notfound"), 1, quiet=15.0, limit=60.0)
+            served[name] = {"commands": [c.decode() for c, _ in replies],
+                            "block is BCHN's genesis": [p.hex() for c, p in replies if c == b"block"] == [raw]}
+            # BCHN ignores a block it does not have; kth answers notfound.
+            peer.send(b"getdata", b"\x01" + struct.pack("<I", 2) + unknown)
+            replies = peer.collect((b"block", b"notfound"), 1, quiet=10.0, limit=30.0)
+            served[name]["unknown hash"] = [c.decode() for c, _ in replies]
+            served[name]["notfound names it"] = [p for c, p in replies if c == b"notfound"] == [
+                b"\x01" + struct.pack("<I", 2) + unknown]
+        except (OSError, ValueError) as error:
+            served[name] = {"error": f"{type(error).__name__}: {error}"}
+        finally:
+            if peer is not None:
+                peer.close()
+    seen["getdata"] = served
+    row(1009, client, "getdata of the genesis block: kth sends the block, as BCHN does; a block kth does not "
+        "hold is still notfound",
+        all(served.get(n, {}).get("block is BCHN's genesis") for n in ("kth", "BCHN"))
+        and served.get("kth", {}).get("notfound names it") is True, seen)
+
+    kth_raw, error = call(KTH, "getblock", genesis, False)
+    fields = ("hash", "confirmations", "size", "height", "version", "merkleroot", "tx", "time", "mediantime",
+              "nonce", "bits", "chainwork", "nTx", "previousblockhash", "nextblockhash")
+    kth_block, kth_error = call(KTH, "getblock", genesis, 1)
+    bchn_block = call(BCHN, "getblock", genesis, 1)[0] or {}
+    differs = ([k for k in fields if kth_block.get(k) != bchn_block.get(k)]
+               if kth_error is None and isinstance(kth_block, dict) else ["<error>"])
+    missing_error = call(KTH, "getblock", unknown[::-1].hex())[1] or {}
+    bchn_missing = call(BCHN, "getblock", unknown[::-1].hex())[1] or {}
+    row(1009, client, "getblock of the genesis hash: raw and verbose, as BCHN answers; an unknown hash is -5",
+        error is None and kth_raw == raw and not differs
+        and missing_error.get("code") == bchn_missing.get("code") == -5,
+        {"raw same as BCHN": kth_raw == raw if error is None else error, "verbose fields that differ": differs,
+         "height": (kth_block or {}).get("height") if isinstance(kth_block, dict) else None,
+         "unknown hash": {"kth": missing_error.get("code"), "BCHN": bchn_missing.get("code")}})
+
+
 def bchn_b_cli(*args) -> str:
     return subprocess.run(["bitcoin-cli", "-regtest", f"-datadir={BCHN_B_DIR}", "-rpcuser=e2e",
                            "-rpcpassword=e2e", f"-rpcport={BCHN_B[1]}", *args], check=True,
@@ -2717,7 +2770,7 @@ def pr874_long_polling(s: dict) -> None:
 def rows(s: dict) -> None:
     for check in (row10_relay_in, row17_rawmempool_verbose, row11_relay_out, pr795_fee_filter,
                   row6_validateaddress, row7_decoderawtransaction, row8_blockchaininfo, row9_chain,
-                  row12_block_reads, row13_gettxout, row14_getnetworkinfo, row15_help, row16_confirmations,
+                  row12_block_reads, genesis_block_reads, row13_gettxout, row14_getnetworkinfo, row15_help, row16_confirmations,
                   row18_estimatefee, row19_networkhashps, row20_getchaintips, row5_merkle, row4_getblocktemplate,
                   row1_accept_found_block, row2_found_block_reaches_peers, row3_submitblock,
                   row21_template_provider, row23_template_flow, row22_noise, pr803_outbound_proxy,

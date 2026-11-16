@@ -9,8 +9,7 @@ name: kth rows from #773, build, tests and client checks
 # check of its row. It runs when this file changes, or by hand.
 on:
   push:
-    branches: [knuth-rpc-e2e]
-    paths: [.github/workflows/kth-rows.yml]
+    branches: [e2e/genesis]
   workflow_dispatch:
 
 permissions:
@@ -23,20 +22,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #1004 with the maintainer's #1001 (a6a49791, master merged in)
-        # merged in, with every filter row, the Neutrino wallet library, the
-        # 2,100-block chain and the BCH Explorer's p2p backend (row 1008).
-        # The 16 master merges run as the run of ebcb41d.
-          - name: m-sf-serving-explorer
-            branch: test/m-sf-serving
+        # The genesis block in the block files (fix/genesis-block-body on
+        # master 4566c2b1): the domain, blockchain and C API exception barrier
+        # suites, and row 1009, getdata and getblock of the genesis block.
+          - name: genesis-block
+            branch: test/genesis-block
             gcc: '16'
             domain: true
             blockchain: true
-            filters: true
-            script_filters: true
-            neutrino: true
-            long: 2100
-            explorer_p2p: true
+            capi_barriers: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -133,13 +127,19 @@ jobs:
           if [ "${{ matrix.blockchain }}" = "true" ]; then TARGETS="$TARGETS kth_blockchain_test"; fi
           if [ "${{ matrix.network }}" = "true" ]; then TARGETS="$TARGETS kth_network_test"; fi
           if [ "${{ matrix.infrastructure }}" = "true" ]; then TARGETS="$TARGETS kth_infrastructure_test"; fi
+          # The C API exception barrier tests exist only with the barriers on.
+          CMAKE_EXTRA=""
+          if [ "${{ matrix.capi_barriers }}" = "true" ]; then
+            TARGETS="$TARGETS kth_capi_exception_test"
+            CMAKE_EXTRA="-DKTH_CAPI_EXCEPTION_BARRIERS=ON"
+          fi
           mkdir -p ccache conan2
           # 4 GB: the whole build with its tests overflowed 1.2 GB (65 of 545
           # hits). The sources are cloned fresh, so their times are new and
           # only their contents can be trusted.
           docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -v "$PWD/ccache:/ccache" \
             -v "$PWD/conan2:/root/.conan2" -w /src \
-            -e TARGETS="$TARGETS" -e CCACHE_DIR=/ccache -e CCACHE_MAXSIZE=4G -e CCACHE_BASEDIR=/src \
+            -e TARGETS="$TARGETS" -e CMAKE_EXTRA="$CMAKE_EXTRA" -e CCACHE_DIR=/ccache -e CCACHE_MAXSIZE=4G -e CCACHE_BASEDIR=/src \
             -e CCACHE_SLOPPINESS=include_file_mtime,include_file_ctime,time_macros "$IMAGE" \
             bash -euo pipefail -c '
               LAUNCH=""
@@ -167,7 +167,7 @@ jobs:
                 -o "utxoz/*:with_tests=False" -o "utxoz/*:with_benchmarks=False" \
                 -o "utxoz/*:with_large_benchmarks=False" \
                 -s compiler.cppstd=23 -s build_type=Release
-              cmake --preset conan-release -DGLOBAL_BUILD=ON -DENABLE_TEST=ON -DCMAKE_BUILD_TYPE=Release $LAUNCH
+              cmake --preset conan-release -DGLOBAL_BUILD=ON -DENABLE_TEST=ON -DCMAKE_BUILD_TYPE=Release $LAUNCH $CMAKE_EXTRA
               time cmake --build --preset conan-release -j"$(nproc)" --target $TARGETS
               if [ -n "$LAUNCH" ]; then ccache -s; fi
               # Only the built packages are worth keeping, not their build trees.
@@ -224,6 +224,19 @@ jobs:
           rc=$?
           tail -n 40 capi-tests.log
           echo "kth_capi_test exit $rc" | tee -a test-status.txt
+        shell: bash
+      - name: Run kth's C API exception barrier tests
+        if: matrix.capi_barriers
+        run: |
+          TEST=$(find kth-src/build -name kth_capi_exception_test -type f -perm -u+x | head -1)
+          echo "test binary: $TEST"
+          set +e
+          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w "/src/$(dirname "${TEST#kth-src/}")" "$IMAGE" \
+            bash -c "timeout --kill-after=30 1800 ./kth_capi_exception_test --reporter compact" > capi-barrier-tests.log 2>&1
+          rc=$?
+          tail -n 40 capi-barrier-tests.log
+          grep -n "failed:" capi-barrier-tests.log | head -40 || true
+          echo "kth_capi_exception_test exit $rc" | tee -a test-status.txt
         shell: bash
       - name: Run kth's blockchain test suite
         if: matrix.blockchain
@@ -383,6 +396,7 @@ jobs:
             node-tests.log
             domain-tests.log
             capi-tests.log
+            capi-barrier-tests.log
             blockchain-tests.log
             network-tests.log
             infrastructure-tests.log
