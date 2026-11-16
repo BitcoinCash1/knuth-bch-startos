@@ -23,18 +23,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # getrawtransaction verbosity 2 and patterns in BCHN's flat form (#941
-        # merged into #1001, then the change), compared with BCHN field by
-        # field; getblockstats again with every value compared with BCHN's
-        # (it and getindexinfo passed as 43802836926).
-          - name: getrawtransaction-v2b
-            branch: test/getrawtransaction-v2b
+        # BCH Explorer's p2p backend as a light client of kth (row 1008), on
+        # the script filter's serving PR (#1004, a10b5163), with the Neutrino
+        # row (1004) in the same job. getrawtransaction-v2b and getblockstats
+        # run as 43805411777.
+          - name: script-filter-explorer
+            branch: test/sf-explorer
             gcc: '16'
-            domain: true
-            blockchain: true
-          - name: getblockstats
-            branch: test/getblockstats
-            gcc: '16'
+            filters: true
+            script_filters: true
+            neutrino: true
+            explorer_p2p: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
