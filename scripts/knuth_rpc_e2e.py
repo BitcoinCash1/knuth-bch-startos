@@ -846,6 +846,40 @@ def methods(s: dict) -> None:
                  same=verbose_tx_same)
     method_check("getrawtransaction", [s["mempool_txids"][0], False], "Fulcrum! (mempool tx)", same=eq)
 
+    def bchn_fields_equal(k, b, path=""):
+        """Every field BCHN gives, kth gives with the same value; asm aside (its
+        spelling differs) and kth's own extra fields allowed. The first
+        difference, or None."""
+        if isinstance(b, dict):
+            if not isinstance(k, dict):
+                return f"{path or '.'} is not an object"
+            for key, value in b.items():
+                if key == "asm":
+                    continue
+                if key not in k:
+                    return f"{path}.{key} missing"
+                note = bchn_fields_equal(k[key], value, f"{path}.{key}")
+                if note:
+                    return note
+            return None
+        if isinstance(b, list):
+            if not isinstance(k, list) or len(k) != len(b):
+                return f"{path} has {len(k) if isinstance(k, list) else 'no'} entries, BCHN {len(b)}"
+            for i, (kv, bv) in enumerate(zip(k, b)):
+                note = bchn_fields_equal(kv, bv, f"{path}[{i}]")
+                if note:
+                    return note
+            return None
+        return None if k == b else f"{path}: kth {str(k)[:40]}, BCHN {str(b)[:40]}"
+
+    # Verbosity 2 (prevouts and fee) and patterns, the Explorer's form with the
+    # block hash its Electrum history gives, and for a mempool transaction.
+    method_check("getrawtransaction", [txid, 2, blk, True], "Explorer (block hash, patterns)",
+                 same=bchn_fields_equal)
+    method_check("getrawtransaction", [txid, 2, blk], "Explorer (block hash)", same=bchn_fields_equal)
+    method_check("getrawtransaction", [s["mempool_txids"][0], 2, "", True], "Explorer! (mempool tx)",
+                 same=bchn_fields_equal)
+
     def mempool_same(k, b):
         missing = sorted(set(b) - set(k)) if isinstance(b, list) else None
         return f"kth mempool lacks {len(missing)} of BCHN's {len(b)} txs" if missing else None

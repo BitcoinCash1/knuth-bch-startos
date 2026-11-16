@@ -23,15 +23,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # getblockstats (on #1001) and getindexinfo (on master), both read by
-        # BCH Explorer. #816 on master ran as 43731426602.
-          - name: getblockstats
-            branch: test/getblockstats
+        # getrawtransaction verbosity 2 and patterns (#941 merged into #1001,
+        # then the change), compared with BCHN field by field. getblockstats
+        # and getindexinfo run as 43802836926.
+          - name: getrawtransaction-v2
+            branch: test/getrawtransaction-v2
             gcc: '16'
+            domain: true
             blockchain: true
-          - name: getindexinfo
-            branch: test/getindexinfo
-            gcc: '16'
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
