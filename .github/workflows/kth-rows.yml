@@ -36,7 +36,8 @@ jobs:
             script_filters: true
             rpa_filters: true
             neutrino: true
-            long: 2100    name: kth ${{ matrix.name }}
+            long: 2100
+    name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
     env:
