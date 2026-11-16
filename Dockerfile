@@ -83,13 +83,13 @@ RUN conan profile detect --force \
 # TEST ONLY, Job Declaration client with failover (k-nuth/kth#832, #833, #834, #881) on chipnet against the BCH P2Pool pool.
 FROM --platform=linux/amd64 ${TOOLCHAIN_JD} AS kth-jd-build
 
-ARG JD_COMMIT=6c0ccaea
+ARG JD_COMMIT=d5a56d51
 ARG CURRENCY=BCH
 
 RUN pip install --no-cache-dir --upgrade "conan>=2.25,<3" "kthbuild>=4,<5"
 
 WORKDIR /src/kth
-RUN git clone --branch test/sv2r-jd-881w-stale --single-branch https://github.com/CyberAshven/kth.git . \
+RUN git clone --branch test/coinbase-tag --single-branch https://github.com/CyberAshven/kth.git . \
  && git checkout --detach ${JD_COMMIT}
 
 RUN conan profile detect --force \
