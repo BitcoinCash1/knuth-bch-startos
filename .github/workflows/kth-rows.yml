@@ -23,98 +23,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Master 4566c2b1 (#986, #988, #991, #998 and others) merged into the
-        # 16 PRs it left conflicting. getblockstats-v2 and getrawtransaction-v2c
-        # run as the run of 1ac5fee, the explorer row as the run of ac37823.
-          - name: m-noise
-            branch: test/m4566-noise
+        # #1004 with the maintainer's #1001 (a6a49791, master merged in)
+        # merged in, with every filter row, the Neutrino wallet library, the
+        # 2,100-block chain and the BCH Explorer's p2p backend (row 1008).
+        # The 16 master merges run as the run of ebcb41d.
+          - name: m-sf-serving-explorer
+            branch: test/m-sf-serving
             gcc: '16'
-            sv2: true
-            noise: true
-          - name: m-mining-channels
-            branch: test/m4566-mining-channels
-            gcc: '16'
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: m-jd-client
-            branch: test/m4566-jd-client
-            gcc: '16'
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: m-jd-failover
-            branch: test/m4566-jd-failover
-            gcc: '16'
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: m-jd-payout-outputs
-            branch: test/m4566-jd-payout-outputs
-            gcc: '16'
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: m-jd-large-templates
-            branch: test/m4566-jd-large-templates
-            gcc: '16'
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: m-tdp-large-templates
-            branch: test/m4566-tdp-large-templates
-            gcc: '16'
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: m-fee-refresh
-            branch: test/m4566-fee-refresh
-            gcc: '16'
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: m-worker-hashrate
-            branch: test/m4566-worker-hashrate
-            gcc: '16'
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: m-jd-tor-i2p
-            branch: test/m4566-jd-tor-i2p
-            gcc: '16'
-            network: true
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: m-jd-route-latency
-            branch: test/m4566-jd-route-latency
-            gcc: '16'
-            network: true
-            sv2: true
-            noise: true
-            sv2_mining: true
-          - name: m-testmempoolaccept
-            branch: test/m4566-testmempoolaccept
-            gcc: '16'
+            domain: true
             blockchain: true
-          - name: m-longpoll
-            branch: test/m4566-longpoll
-            gcc: '16'
-            longpoll: true
-          - name: m-bip37-serve-wallets
-            branch: test/m4566-bip37-serve-wallets
-            gcc: '16'
-            domain: true
-            network: true
-            bloom: true
-          - name: m-script-compact-filter
-            branch: test/m4566-script-compact-filter
-            gcc: '16'
-            domain: true
-          - name: m-script-filter-messages
-            branch: test/m4566-script-filter-messages
-            gcc: '16'
-            domain: true
+            filters: true
+            script_filters: true
+            neutrino: true
+            long: 2100
+            explorer_p2p: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
