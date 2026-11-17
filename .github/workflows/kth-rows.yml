@@ -9,8 +9,8 @@ name: kth rows from #773, build, tests and client checks
 # check of its row. It runs when this file changes, or by hand.
 on:
   push:
-    # The input prefix filter runs (filter type 2): every push of this branch.
-    branches: [e2e/rpa-k]
+    # Wallet support in the node (k-nuth/kth#1013 stack): every push of this branch.
+    branches: [e2e/light]
   workflow_dispatch:
 
 permissions:
@@ -23,12 +23,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Filter type 2 (canonical Rice parameter), the input prefix filter for reusable payment
-        # addresses, stacked on #1004 with the transaction leaves: every
-        # filter row, the Neutrino wallet library, the 2,100-block chain and
-        # the RPA wallet row (1010). The BCH Explorer row is left out.
-          - name: input-prefix-filter
-            branch: test/rpa-canonical-k
+        # Wallet support in the node, on the input prefix filter (#1013) with
+        # the transaction leaves: the #1013 entry's flags on test/light-client.
+          - name: wallet
+            branch: test/light-client
             gcc: '16'
             domain: true
             blockchain: true
@@ -168,7 +166,10 @@ jobs:
                 -o "utxoz/*:with_large_benchmarks=False" \
                 -s compiler.cppstd=23 -s build_type=Release
               cmake --preset conan-release -DGLOBAL_BUILD=ON -DENABLE_TEST=ON -DCMAKE_BUILD_TYPE=Release $LAUNCH
-              time cmake --build --preset conan-release -j"$(nproc)" --target $TARGETS
+              # Every compile error of a run in one log: the build goes on past a failed file.
+              KEEP="-k"
+              if grep -qs "^CMAKE_GENERATOR:INTERNAL=Ninja" $(find build -name CMakeCache.txt | head -1); then KEEP="-k 0"; fi
+              time cmake --build --preset conan-release -j"$(nproc)" --target $TARGETS -- $KEEP
               if [ -n "$LAUNCH" ]; then ccache -s; fi
               # Only the built packages are worth keeping, not their build trees.
               conan cache clean "*" --source --build --download --temp || true
