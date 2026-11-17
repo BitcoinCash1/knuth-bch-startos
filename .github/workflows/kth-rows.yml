@@ -29,17 +29,25 @@ jobs:
         # it; and in UTXO-Z reference mode, where undo entries point into the
         # block files and the funding transactions are read and checked.
           - name: getblock-fee
-            branch: test/1001-cr
+            branch: test/1001-cr3
             gcc: '16'
             blockchain: true
           - name: getblock-fee-no-rpc
-            branch: test/1001-cr
+            branch: test/1001-cr3
             gcc: '16'
             blockchain: true
             rpc: none
             no_e2e: true
           - name: getblock-fee-reference
-            branch: test/1001-cr
+            branch: test/1001-cr3
+            gcc: '16'
+            blockchain: true
+            reference: true
+            no_e2e: true
+          # The PR head without the fix, in reference mode: what fails there
+          # without this change.
+          - name: getblock-fee-reference-base
+            branch: test/1001-base
             gcc: '16'
             blockchain: true
             reference: true
