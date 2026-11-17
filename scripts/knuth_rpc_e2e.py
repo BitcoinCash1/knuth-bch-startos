@@ -4218,38 +4218,78 @@ def bloom_filter_light_client(s: dict) -> None:
 class ElectrumClient:
     """An Electrum protocol connection as a wallet makes it: newline-delimited
     JSON-RPC over TCP. It counts the bytes it receives and keeps the
-    notifications that arrive between answers."""
+    notifications that arrive, with the time each arrived."""
 
     def __init__(self, port: int, timeout: float = 300):
+        self.timeout = timeout
         self.sock = socket.create_connection(("127.0.0.1", port), timeout=timeout)
         self.buffer = b""
         self.received = 0
         self.next_id = 0
         self.notifications: list = []
 
-    def call(self, method: str, *params) -> tuple:
-        """(result, error, milliseconds)."""
-        self.next_id += 1
-        wanted = self.next_id
-        started = time.monotonic()
-        self.sock.sendall(json.dumps({"jsonrpc": "2.0", "id": wanted, "method": method,
-                                      "params": list(params)}).encode() + b"\n")
-        while True:
-            while b"\n" not in self.buffer:
-                chunk = self.sock.recv(1 << 16)
-                if not chunk:
-                    raise OSError(f"{method}: the server closed the connection")
-                self.received += len(chunk)
-                self.buffer += chunk
+    def _lines(self):
+        """The complete lines received so far; notifications are kept aside."""
+        while b"\n" in self.buffer:
             line, self.buffer = self.buffer.split(b"\n", 1)
             if not line.strip():
                 continue
             message = json.loads(line)
-            if message.get("id") == wanted:
-                return (message.get("result"), message.get("error"),
-                        round((time.monotonic() - started) * 1000, 1))
-            if "method" in message:
-                self.notifications.append(message)
+            if "method" in message and "id" not in message:
+                self.notifications.append((time.monotonic(), message))
+            else:
+                yield message
+
+    def call(self, method: str, *params) -> tuple:
+        """(result, error, milliseconds). One dict is sent as named parameters."""
+        self.next_id += 1
+        wanted = self.next_id
+        started = time.monotonic()
+        named = len(params) == 1 and isinstance(params[0], dict)
+        self.sock.sendall(json.dumps({"jsonrpc": "2.0", "id": wanted, "method": method,
+                                      "params": params[0] if named else list(params)}).encode() + b"\n")
+        while True:
+            for message in self._lines():
+                if message.get("id") == wanted:
+                    return (message.get("result"), message.get("error"),
+                            round((time.monotonic() - started) * 1000, 1))
+            chunk = self.sock.recv(1 << 16)
+            if not chunk:
+                raise OSError(f"{method}: the server closed the connection")
+            self.received += len(chunk)
+            self.buffer += chunk
+
+    def listen(self, seconds: float, done=lambda: False) -> None:
+        """Takes notifications for up to `seconds`, or until `done()`."""
+        deadline = time.monotonic() + seconds
+        try:
+            while time.monotonic() < deadline and not done():
+                for _ in self._lines():
+                    pass
+                if done():
+                    break
+                self.sock.settimeout(max(0.05, min(0.5, deadline - time.monotonic())))
+                try:
+                    chunk = self.sock.recv(1 << 16)
+                except socket.timeout:
+                    continue
+                if not chunk:
+                    break
+                self.received += len(chunk)
+                self.buffer += chunk
+            for _ in self._lines():
+                pass
+        finally:
+            self.sock.settimeout(self.timeout)
+
+    def last_notification(self, method: str, key=None, after: float = 0.0) -> tuple:
+        """(arrival time, params) of the last notification of `method` since
+        `after` whose first parameter is `key` (any when None), or (None, None)."""
+        for arrived, message in reversed(self.notifications):
+            params = message.get("params") or [None]
+            if arrived >= after and message.get("method") == method and (key is None or params[0] == key):
+                return arrived, params
+        return None, None
 
     def close(self) -> None:
         try:
@@ -4355,15 +4395,19 @@ def parity(f: ElectrumClient, b: ElectrumClient, group: str, data: bool, method:
 def electrum_bridge_parity(s: dict) -> None:
     """Row 1011. Electrum wallets get the same answers from bch-electrum-bridge,
     a P2P light client of kth (script filters with transaction keys, input
-    prefix filters, whole blocks and relay), as from Fulcrum on BCHN, for the
-    same chain and scripts: headers, every scripthash call, transactions by
-    ID alone (a fully spent one too), Merkle proofs, IDs by position, unspent
-    outputs, reusable payment address searches, double-spend proofs and
-    broadcasts. Each call goes twice to each server, for the time of the first
-    answer and of a repeated one. The row also measures what each side stores
-    and downloads, and how long the bridge's filters take from genesis and
-    from a wallet birthday."""
-    client = "Electrum wallets (bch-electrum-bridge on kth over P2P, against Fulcrum 2.1.4 on BCHN)"
+    prefix filters, whole blocks and relay) with BCHN as a relay peer (its
+    mempool and double-spend proofs, which kth does not give), as from
+    Fulcrum on BCHN, for the same chain and scripts: headers, every scripthash
+    call, transactions by ID alone (a fully spent one too, and verbose),
+    Merkle proofs, IDs by position, unspent outputs, reusable payment address
+    searches, double-spend proofs, broadcasts, and the notifications of the
+    script, transaction, header and double-spend proof subscriptions. Each
+    call goes twice to each server, for the time of the first answer and of a
+    repeated one. The row also measures what each side stores and downloads,
+    and how long the bridge's filters take from genesis and from a wallet
+    birthday. A second bridge, on kth alone, shows what kth by itself gives."""
+    client = ("Electrum wallets (bch-electrum-bridge on kth over P2P, BCHN a relay peer, "
+              "against Fulcrum 2.1.4 on BCHN)")
     if not (ELECTRUM_BRIDGE and FULCRUM and SCRIPT_FILTERS and RPA_FILTERS):
         return
     RESULTS["parity"] = []
@@ -4418,21 +4462,27 @@ def electrum_bridge_parity(s: dict) -> None:
         measure_sync = {"Fulcrum, whole chain over BCHN's RPC":
                         None if at_tip is None else round(time.monotonic() - started, 2)}
 
-        def start_bridge(name: str, port: int, *extra: str) -> tuple[ElectrumClient, float | None]:
+        def start_bridge(name: str, port: int, peers: tuple, *extra: str) -> tuple[ElectrumClient, float | None]:
             started = time.monotonic()
             processes.append(subprocess.Popen(
                 [ELECTRUM_BRIDGE, "--network", "regtest", "--datadir", f"/tmp/bridge-{name}",
-                 "--peer", f"127.0.0.1:{KTH_P2P_PORT}", "--listen", f"127.0.0.1:{port}", *extra],
+                 *[a for peer in peers for a in ("--peer", peer)], "--listen", f"127.0.0.1:{port}", *extra],
                 stdout=open(OUT / f"bridge-{name}.log", "w"), stderr=subprocess.STDOUT))
             connection = electrum_connect(port, 120)
             clients.append(connection)
             synced = electrum_at_tip(connection, tip, 900, bridge=True)
             return connection, None if synced is None else round(time.monotonic() - started, 2)
 
-        b, measure_sync["bridge filters from genesis"] = start_bridge("genesis", BRIDGE_PORTS[0])
+        # The bridge the calls go to has kth (filters, blocks, relay) and BCHN
+        # (relay, its mempool and double-spend proofs; never asked for
+        # filters) as peers, as a bridge on the network would have nodes of
+        # both. The one from a birthday has kth alone.
+        kth_peer, bchn_peer_addr = f"127.0.0.1:{KTH_P2P_PORT}", "127.0.0.1:18444"
+        b, measure_sync["bridge filters from genesis"] = start_bridge(
+            "genesis", BRIDGE_PORTS[0], (kth_peer, bchn_peer_addr))
         birthday = tip - 150
-        late, measure_sync[f"bridge filters from birthday {birthday}"] = start_bridge(
-            "birthday", BRIDGE_PORTS[1], "--birthday", str(birthday))
+        late, measure_sync[f"bridge filters from birthday {birthday}, kth alone"] = start_bridge(
+            "birthday", BRIDGE_PORTS[1], (kth_peer,), "--birthday", str(birthday))
         measure["filter sync seconds"] = measure_sync
         seen["synced"] = {k: v is not None for k, v in measure_sync.items()}
 
@@ -4448,16 +4498,18 @@ def electrum_bridge_parity(s: dict) -> None:
             rows = server.call("blockchain.scripthash.get_mempool", sh)[0]
             return isinstance(rows, list) and any(r.get("tx_hash") == txid for r in rows)
 
+        early_hash = hashes["payee 2 (paid before the servers started)"]
         deadline = time.monotonic() + 60
-        while time.monotonic() < deadline and not all(
+        while time.monotonic() < deadline and not (all(
                 in_mempool(server, hashes[name], txid) for server in (f, b)
-                for name, txid in (("payee 0", m1), ("payee 1", m2))):
+                for name, txid in (("payee 0", m1), ("payee 1", m2))) and in_mempool(b, early_hash, early)):
             time.sleep(0.5)
         seen["relayed payments in both mempools"] = all(
             in_mempool(server, hashes[name], txid) for server in (f, b) for name, txid in (("payee 0", m1),
                                                                                            ("payee 1", m2)))
-        seen["payment from before the start, in the bridge's mempool"] = in_mempool(
-            b, hashes["payee 2 (paid before the servers started)"], early)
+        seen["payment from before the start, in the bridge's mempool"] = in_mempool(b, early_hash, early)
+        seen["kth alone: payment from before the start, in that bridge's mempool"] = in_mempool(
+            late, early_hash, early)
 
         # Server and headers.
         parity(f, b, "server", False, "server.features", repeat=False,
@@ -4527,10 +4579,49 @@ def electrum_bridge_parity(s: dict) -> None:
         parity(f, b, "rpa: absent", True, "blockchain.rpa.get_history", "0000", tip - 59)
         parity(f, b, "rpa: limits", True, "blockchain.rpa.get_history", "5", tip - 59)
 
+        # Subscriptions, on a connection of their own to each server: a
+        # script with a payment in the mempool, that payment, the tip, and the
+        # double-spend proof of a transaction not sent yet. Each notification
+        # must be the same.
+        sf, sb = electrum_connect(FULCRUM_PORT, 30), electrum_connect(BRIDGE_PORTS[0], 30)
+        clients += [sf, sb]
+
+        def subscription_parity(key: str, method: str, sub_key, since: float, seconds: float) -> None:
+            """The last notification since `since` from each server, once both
+            sent one and two more seconds brought no other."""
+            def first_at(server):
+                for arrived, message in server.notifications:
+                    params = message.get("params") or [None]
+                    if arrived >= since and message.get("method") == method and (
+                            sub_key is None or params[0] == sub_key):
+                        return arrived
+                return None
+            for server in (sf, sb):
+                server.listen(seconds, lambda server=server: first_at(server) is not None)
+                server.listen(2)
+            (f_at, f_params), (b_at, b_params) = (server.last_notification(method, sub_key, since)
+                                                  for server in (sf, sb))
+            f_at, b_at = first_at(sf), first_at(sb)
+            differences = json_diff(f_params, b_params)
+            if f_params is None or b_params is None:
+                differences = [f"no notification from {'Fulcrum' if f_params is None else 'the bridge'}"]
+            RESULTS["parity"].append({
+                "group": "subscription", "method": method, "params": [key], "data": True,
+                "same": not differences, "differences": differences,
+                "fulcrum": json.dumps(f_params)[:600], "bridge": json.dumps(b_params)[:600],
+                "ms": {"fulcrum": [None if f_at is None else round((f_at - since) * 1000, 1), None],
+                       "bridge": [None if b_at is None else round((b_at - since) * 1000, 1), None]}})
+
         # A double spend of a P2PKH coin: the first spend through BCHN's RPC,
         # the second to BCHN over P2P, where BCHN makes a proof of it.
         coin = new_coin()
         first_hex, second_hex = spend(coin, cli("getnewaddress")), spend(coin, cli("getnewaddress"), 0.002)
+        first_id = sha256d(bytes.fromhex(first_hex))[::-1].hex()
+        for server in (sf, sb):
+            server.call("blockchain.headers.subscribe")
+        parity(sf, sb, "subscription", True, "blockchain.transaction.dsproof.subscribe", first_id, repeat=False)
+        parity(sf, sb, "subscription", True, "blockchain.scripthash.subscribe", hashes["payee 0"], repeat=False)
+        parity(sf, sb, "subscription", True, "blockchain.transaction.subscribe", m1, repeat=False)
         first = cli("sendrawtransaction", first_hex)
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline and not all(
@@ -4548,9 +4639,12 @@ def electrum_bridge_parity(s: dict) -> None:
                     proof_seconds[name] = round(time.monotonic() - started, 1)
             time.sleep(0.5)
         seen["double-spend proof seen after seconds"] = proof_seconds
+        seen["kth alone: double-spend proof at that bridge"] = bool(
+            late.call("blockchain.transaction.dsproof.get", first)[0])
         seen["BCHN's proof"] = (call(BCHN, "getdsproof", first)[0] or {}).get("dspid")
         parity(f, b, "double-spend proof", True, "blockchain.transaction.dsproof.get", first)
         parity(f, b, "double-spend proof", True, "blockchain.transaction.dsproof.list")
+        subscription_parity("the proof arrives", "blockchain.transaction.dsproof.subscribe", first_id, started, 30)
         stats = b.call("light_client.stats")[0]
         seen["bridge peers"] = stats.get("peers") if isinstance(stats, dict) else None
 
@@ -4575,6 +4669,23 @@ def electrum_bridge_parity(s: dict) -> None:
         parity(f, b, "broadcast", False, "blockchain.transaction.broadcast", one, repeat=False)
         parity(f, b, "broadcast", True, "blockchain.transaction.broadcast", "00", repeat=False)
         parity(f, b, "server", False, "daemon.passthrough", "getblockcount", [], repeat=False)
+        parity(f, b, "server", False, "daemon.passthrough", {"method": "getblockcount", "params": []},
+               repeat=False)
+        parity(f, b, "server", False, "server.ping", repeat=False)
+        parity(f, b, "server", False, "server.peers.subscribe", repeat=False)
+        parity(f, b, "server", False, "server.donation_address", repeat=False)
+        parity(f, b, "server", False, "server.banner", repeat=False)
+        parity(f, b, "fees", False, "mempool.get_info", repeat=False)
+
+        # A block: the tip, the payment's height, the script's status, and the
+        # proof that the block settles, notified by each server.
+        mined_at = time.monotonic()
+        cli("generatetoaddress", "1", wallet)
+        seen["block for the subscriptions"] = tip + 1
+        subscription_parity("a block", "blockchain.headers.subscribe", None, mined_at, 60)
+        subscription_parity("a block", "blockchain.transaction.subscribe", m1, mined_at, 30)
+        subscription_parity("a block", "blockchain.scripthash.subscribe", hashes["payee 0"], mined_at, 30)
+        subscription_parity("a block", "blockchain.transaction.dsproof.subscribe", first_id, mined_at, 30)
 
         # What it cost each side.
         latency: dict = {}
@@ -4607,7 +4718,20 @@ def electrum_bridge_parity(s: dict) -> None:
         }
         late_stats = late.call("light_client.stats")[0]
         stats = b.call("light_client.stats")[0]
+        # Fulcrum reads every block from BCHN's RPC as hex: at least twice
+        # each block's size, before the JSON around it.
+        block_sizes = sum(call(BCHN, "getblock", call(BCHN, "getblockhash", h)[0], 1)[0]["size"]
+                          for h in range(int(cli("getblockcount")) + 1))
+
+        def p2p_total(st) -> int | None:
+            return (sum(st.get(k) or 0 for k in ("header_bytes", "filter_bytes", "block_bytes"))
+                    if isinstance(st, dict) else None)
+
         measure["downloaded bytes"] = {
+            "Fulcrum, every block from BCHN's RPC (hex, at least)": 2 * block_sizes,
+            "bridge from genesis, headers + filters + blocks over P2P": p2p_total(stats),
+            f"bridge from birthday {birthday}, headers + filters + blocks over P2P (no wallet calls)":
+                p2p_total(late_stats),
             "bridge from genesis, over P2P": stats,
             f"bridge from birthday {birthday}, over P2P (no wallet calls)": late_stats,
             "the wallet, from Fulcrum": f.received,
@@ -4635,11 +4759,12 @@ def electrum_bridge_parity(s: dict) -> None:
                 process.kill()
         (OUT / "bridge-parity.json").write_text(json.dumps({"seen": seen, "measure": measure,
                                                             "calls": RESULTS.get("parity", [])}, indent=1))
-    row(1011, client, "Fulcrum on BCHN and the bridge on kth, both synced to the same chain, give the same "
-        "answer to every data call (headers, each scripthash call for five scripts, raw transactions by ID "
-        "alone with a fully spent one, Merkle proofs, IDs by position, unspent outputs, RPA searches over "
-        "every 60-block window, RPA mempool, double-spend proofs, broadcasts); shapes, times, storage and "
-        "downloads are reported", ok, seen)
+    row(1011, client, "Fulcrum on BCHN and the bridge on kth (BCHN a relay peer), both synced to the same "
+        "chain, give the same answer to every data call (headers, each scripthash call for five scripts, raw "
+        "transactions by ID alone with a fully spent one, Merkle proofs, IDs by position, unspent outputs, RPA "
+        "searches over every 60-block window, RPA mempool, double-spend proofs, broadcasts) and the same "
+        "notifications (script, transaction, tip, double-spend proof); shapes, times, storage and downloads "
+        "are reported, and what a bridge on kth alone misses", ok, seen)
 
 
 def report() -> str:
