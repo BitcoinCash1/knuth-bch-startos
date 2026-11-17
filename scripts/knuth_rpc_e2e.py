@@ -78,6 +78,10 @@ WALLET_IMAGE = os.environ.get("KTH_WALLET_IMAGE") or ""
 # Row 1012: kth's own wallet support, answered from its own chain behind the
 # node's local Electrum listener (node.wallet_electrum).
 NODE_WALLET_PORT = 50002
+# KTH_FULCRUM_BIN=<path> (row 1013): a Fulcrum release on BCHN, compared
+# method by method with kth-wallet's answers, and both measured.
+FULCRUM_BIN = os.environ.get("KTH_FULCRUM_BIN") or ""
+FULCRUM_PORT = 50003
 KTH_P2P_PORT = 18555
 # KTH_STALL=1 (#773 row 27): kth reaches BCHN only through a relay that never
 # delivers kth's first request for blocks, so that request times out while the
@@ -4252,6 +4256,7 @@ class ElectrumLine:
         self.sock = socket.create_connection(("127.0.0.1", port), timeout=120)
         self.buffer = b""
         self.next_id = 0
+        self.received = 0
 
     def ask(self, method: str, *params):
         self.next_id += 1
@@ -4264,11 +4269,19 @@ class ElectrumLine:
                     raise ConnectionError("the listener closed")
                 self.buffer += chunk
             line, self.buffer = self.buffer.split(b"\n", 1)
+            self.received += len(line) + 1
             answer = json.loads(line)
             if answer.get("id") == self.next_id:
                 if "error" in answer:
                     raise ValueError(f"{method}: {answer['error']}")
                 return answer["result"]
+
+    def answer(self, method: str, *params):
+        """The result, or the error object: what a method answers either way."""
+        try:
+            return {"result": self.ask(method, *params)}
+        except ValueError as error:
+            return {"error": str(error)}
 
     def close(self) -> None:
         self.sock.close()
@@ -4435,6 +4448,7 @@ def wallet_from_peers(s: dict) -> None:
         seen["sent"] = commands
         seen["leaks"] = leaks[:10]
         seen["output"] = "".join(output)[-1500:]
+        fulcrum_parity(electrum, data, output, targets, t1, t2, seen["synced"]["seconds"], tip)
         ok = (seen["fully spent"] and seen["txid alone"] and seen["merkle height"]
               and all(all(v for k, v in c.items() if k != "transactions") for c in checks.values())
               and seen["rpa"]["equal"] and seen["rpa"]["t2 found"] and not leaks and len(sent) > 0)
@@ -4455,6 +4469,166 @@ def wallet_from_peers(s: dict) -> None:
     row(1011, client, "kth-wallet syncs headers and filters over P2P and answers through its Electrum listener: "
         "histories, balances and unspent outputs equal BCHN's blocks; a fully spent transaction is found by its "
         "txid alone; an RPA prefix finds BCHN's transactions; no message names a watched script or txid", ok, seen)
+
+
+def du(path: str) -> int:
+    run = subprocess.run(["sudo", "du", "-sb", path], capture_output=True, text=True)
+    return int(run.stdout.split()[0]) if run.returncode == 0 and run.stdout else -1
+
+
+def fulcrum_parity(wallet, data: Path, output: list, targets: dict, t1: str, t2: str, sync_seconds, tip: int) -> None:
+    """Fulcrum against kth-wallet (row 1013): a Fulcrum release indexes BCHN's
+    chain, and every Electrum method a wallet or explorer calls is asked of
+    both and compared, every difference reported. Side by side: each
+    method's latency (first and repeated), storage (Fulcrum's database, the
+    kth node's filter checkpoints, kth-wallet's headers and filters), the
+    bytes kth-wallet downloaded against the bytes a Fulcrum client received,
+    and kth-wallet's sync from genesis against one from a birthday."""
+    client = "Electrum-protocol parity with Fulcrum, and the four measurements"
+    if not FULCRUM_BIN:
+        return
+    seen: dict = {}
+    ok = False
+    fulcrum = None
+    folder = Path("/tmp/fulcrum")
+    try:
+        subprocess.run(["sudo", "rm", "-rf", str(folder)], capture_output=True)
+        folder.mkdir(parents=True, exist_ok=True)
+        config = folder / "fulcrum.conf"
+        config.write_text("datadir = /tmp/fulcrum/db\nbitcoind = 127.0.0.1:18443\nrpcuser = e2e\nrpcpassword = e2e\n"
+                          f"tcp = 127.0.0.1:{FULCRUM_PORT}\npeering = false\nannounce = false\n"
+                          "rpa = true\nrpa_start_height = 0\n")
+        started = time.monotonic()
+        fulcrum = subprocess.Popen([FULCRUM_BIN, str(config)], stdout=open(OUT / "fulcrum.log", "w"),
+                                   stderr=subprocess.STDOUT)
+        other = None
+        while time.monotonic() < started + 600:
+            try:
+                other = ElectrumLine(FULCRUM_PORT)
+                if other.ask("blockchain.headers.get_tip")["height"] >= tip:
+                    break
+                other.close()
+                other = None
+            except (OSError, ValueError):
+                other = None
+            time.sleep(1)
+        if other is None:
+            raise ValueError("Fulcrum did not reach the tip")
+        seen["fulcrum sync seconds"] = round(time.monotonic() - started)
+
+        hashes = {name: hashlib.sha256(bytes.fromhex(script)).digest()[::-1].hex() for name, script in targets.items()}
+        verbose = call(BCHN, "getrawtransaction", t1, 1)[0]
+        height = call(BCHN, "getblock", verbose["blockhash"])[0]["height"]
+        raw_t2 = call(BCHN, "getrawtransaction", t2)[0]
+        prefix = f"{rpa_value(rpa_read_tx_input0(bytes.fromhex(raw_t2))) >> 8:02x}"
+        methods = [("server.ping",), ("blockchain.headers.get_tip",), ("blockchain.block.header", 5),
+                   ("blockchain.block.header", 5, tip), ("blockchain.block.headers", 0, 10),
+                   ("blockchain.block.headers", 1, 5, tip), ("blockchain.relayfee",), ("blockchain.estimatefee", 1),
+                   ("mempool.get_fee_histogram",),
+                   ("blockchain.transaction.get", t1), ("blockchain.transaction.get", t1, True),
+                   ("blockchain.transaction.get_merkle", t1), ("blockchain.transaction.get_merkle", t1, height),
+                   ("blockchain.transaction.get_height", t1), ("blockchain.transaction.get_confirmed_blockhash", t1),
+                   ("blockchain.transaction.id_from_pos", height, 0), ("blockchain.transaction.id_from_pos", height, 0, True),
+                   ("blockchain.utxo.get_info", t1, 0), ("blockchain.utxo.get_info", t2, 0),
+                   ("blockchain.rpa.get_history", prefix, 0), ("blockchain.rpa.get_mempool", prefix),
+                   ("blockchain.transaction.dsproof.list",)]
+        for name, hashed in hashes.items():
+            methods += [("blockchain.scripthash.get_history", hashed), ("blockchain.scripthash.get_history", hashed, 0, tip),
+                        ("blockchain.scripthash.get_balance", hashed), ("blockchain.scripthash.get_balance", hashed, "include_tokens"),
+                        ("blockchain.scripthash.listunspent", hashed), ("blockchain.scripthash.get_mempool", hashed),
+                        ("blockchain.scripthash.get_status", hashed), ("blockchain.scripthash.get_first_use", hashed)]
+        # Identity and policy, not answers about the chain: shown, not compared.
+        shown_only = [("server.version", "kth-e2e", "1.5"), ("server.features",), ("mempool.get_info",)]
+        differences = []
+        latency = {}
+        wallet_before = wallet.received
+        other_before = other.received
+        for method in methods:
+            name, args = method[0], method[1:]
+            timings = []
+            for client_line in (wallet, other):
+                first = time.monotonic()
+                answer = client_line.answer(name, *args)
+                elapsed = time.monotonic() - first
+                again = time.monotonic()
+                client_line.answer(name, *args)
+                timings.append((round(elapsed * 1000, 2), round((time.monotonic() - again) * 1000, 2)))
+                if client_line is wallet:
+                    mine = answer
+                else:
+                    theirs = answer
+            latency.setdefault(name, []).append({"kth first ms": timings[0][0], "kth repeated ms": timings[0][1],
+                                                 "fulcrum first ms": timings[1][0], "fulcrum repeated ms": timings[1][1]})
+            if mine != theirs:
+                differences.append({"call": [name, *args], "kth": json.dumps(mine)[:400], "fulcrum": json.dumps(theirs)[:400]})
+        seen["compared calls"] = len(methods)
+        seen["differences"] = differences
+        seen["latency"] = latency
+        seen["shown only"] = {m[0]: {"kth": json.dumps(wallet.answer(*m))[:300], "fulcrum": json.dumps(other.answer(*m))[:300]}
+                              for m in shown_only}
+
+        # Storage and bytes.
+        status = next((json.loads(line[len("status "):]) for line in reversed(output) if line.startswith("status ")), {})
+        seen["storage bytes"] = {
+            "fulcrum database": du("/tmp/fulcrum/db"),
+            "kth node filter checkpoints": sum(int(x) for x in subprocess.run(
+                ["docker", "exec", "kth", "sh", "-c", "cat /data/e2e/*filter_checkpoints | wc -c"],
+                capture_output=True, text=True).stdout.split() or ["-1"]),
+            "kth-wallet store (headers and filters)": du(str(data / "regtest")),
+        }
+        seen["bytes"] = {"kth-wallet received from peers (filters, blocks, headers, relay)": status.get("bytes_received"),
+                         "kth-wallet sent to peers": status.get("bytes_sent"),
+                         "kth-wallet blocks downloaded": status.get("blocks_downloaded"),
+                         "Fulcrum client received for the compared calls": other.received - other_before,
+                         "kth-wallet listener answered for the compared calls": wallet.received - wallet_before}
+
+        # Sync from genesis (row 1011's run) against one from a birthday.
+        birthday = max(0, tip - 50)
+        second = Path("/tmp/kth-wallet-birthday")
+        subprocess.run(["sudo", "rm", "-rf", str(second)], capture_output=True)
+        second.mkdir(parents=True, exist_ok=True)
+        source = Path("kth-src").resolve()
+        binary = "/src/" + str(Path(WALLET_BIN).resolve().relative_to(source))
+        began = time.monotonic()
+        late = subprocess.Popen(
+            ["docker", "run", "--rm", "--name", "kth-wallet-birthday", "--network", "host", "--platform", "linux/amd64",
+             "-v", f"{source}:/src:ro", "-v", f"{second}:/data", WALLET_IMAGE, binary, "--network", "regtest",
+             "--directory", "/data", "--peer", f"127.0.0.1:{KTH_P2P_PORT}", "--electrum", "127.0.0.1:0",
+             "--birthday", str(birthday)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        synced_late = None
+        while time.monotonic() < began + 300:
+            line = late.stdout.readline()
+            if not line:
+                break
+            if line.startswith("status "):
+                now = json.loads(line[len("status "):])
+                if now.get("synced"):
+                    synced_late = round(time.monotonic() - began, 2)
+                    seen["birthday store bytes"] = now.get("filter_bytes")
+                    break
+        subprocess.run(["docker", "stop", "-t", "10", "kth-wallet-birthday"], capture_output=True)
+        seen["sync seconds"] = {"from genesis": sync_seconds, f"from birthday {birthday}": synced_late}
+        other.close()
+        ok = not differences and synced_late is not None
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        seen["error"] = f"{type(error).__name__}: {error}"
+    finally:
+        if fulcrum is not None:
+            fulcrum.terminate()
+            try:
+                fulcrum.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                fulcrum.kill()
+    row(1013, client, "every compared Electrum call answers as Fulcrum answers on the same chain; latency, storage, "
+        "bytes and birthday sync are reported side by side", ok, seen)
+
+
+def rpa_read_tx_input0(data: bytes) -> bytes:
+    """The first input of a serialized transaction, as it stands in it."""
+    count, o = read_compact(data, 4)
+    begin = o
+    size, o = read_compact(data, o + 36)
+    return data[begin:o + size + 4]
 
 
 def node_wallet_equal(peer_answers, targets, t1, rpa) -> None:

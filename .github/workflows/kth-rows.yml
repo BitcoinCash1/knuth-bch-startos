@@ -36,6 +36,7 @@ jobs:
             neutrino: true
             wallet: true
             capi: true
+            fulcrum: true
             long: 2100
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -367,6 +368,18 @@ jobs:
           echo "KTH_WALLET_BIN=$WALLET" >> "$GITHUB_ENV"
           echo "KTH_WALLET_IMAGE=$IMAGE" >> "$GITHUB_ENV"
         shell: bash
+      # Row 1013: a Fulcrum release, pinned by version and SHA-256, on BCHN.
+      - name: Fetch Fulcrum 2.1.4
+        if: matrix.fulcrum
+        run: |
+          TARBALL=Fulcrum-2.1.4-x86_64-linux.tar.gz
+          SHA256=faf7cb36266c1694c834ad551d9592c0aef357bca66fdb5efdfe0d131c4b38ae
+          curl -fsSLO --retry 6 --retry-delay 10 --retry-all-errors "https://github.com/cculianu/Fulcrum/releases/download/v2.1.4/$TARBALL"
+          echo "$SHA256  $TARBALL" | sha256sum -c
+          mkdir -p fulcrum && tar xzf "$TARBALL" -C fulcrum --strip-components=1
+          ls -l fulcrum
+          echo "KTH_FULCRUM_BIN=$PWD/fulcrum/Fulcrum" >> "$GITHUB_ENV"
+        shell: bash
       - name: Run the end-to-end checks against this kth
         run: python3 scripts/knuth_rpc_e2e.py e2e-out
         env:
@@ -396,6 +409,7 @@ jobs:
           path: |
             kth-commit.txt
             explorer-commit.txt
+            e2e-out/fulcrum.log
             test-status.txt
             node-tests.log
             domain-tests.log
