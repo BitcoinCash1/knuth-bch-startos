@@ -70,6 +70,11 @@ NEUTRINO_BIN = os.environ.get("KTH_NEUTRINO_BIN") or ""
 # whose 'p2p' backend reads addresses from kth as a light client (row 1008,
 # scripts/explorer-p2p-e2e.js).
 EXPLORER_BACKEND = os.environ.get("KTH_EXPLORER_BACKEND") or ""
+# KTH_WALLET_BIN=<path under kth-src> and KTH_WALLET_IMAGE=<toolchain image>
+# (row 1011): kth's wallet support answered from peers, run as kth-wallet in
+# the image it was built in, with its local Electrum listener.
+WALLET_BIN = os.environ.get("KTH_WALLET_BIN") or ""
+WALLET_IMAGE = os.environ.get("KTH_WALLET_IMAGE") or ""
 KTH_P2P_PORT = 18555
 # KTH_STALL=1 (#773 row 27): kth reaches BCHN only through a relay that never
 # delivers kth's first request for blocks, so that request times out while the
@@ -2729,6 +2734,7 @@ def rows(s: dict) -> None:
                   row21_template_provider, row23_template_flow, row22_noise, pr803_outbound_proxy,
                   shv_light_client, compact_filter_light_client, neutrino_wallet_client,
                   script_filter_light_client, explorer_p2p_client, vault_wallet_filters, rpa_wallet_filters,
+                  wallet_from_peers,
                   bloom_filter_light_client, i2p_second_node, serve_second_node, announce_second_node,
                   compact_blocks_both_ways, row24_mining_protocol, pr874_long_polling):
         try:
@@ -4233,6 +4239,209 @@ def report() -> str:
     if "kth_log" in RESULTS["setup"]:
         lines += ["", "## kth log tail", "", "```", RESULTS["setup"]["kth_log"], "```"]
     return "\n".join(lines)
+
+
+class ElectrumLine:
+    """TEST ONLY. Newline-delimited JSON-RPC to an Electrum-protocol listener."""
+
+    def __init__(self, port: int):
+        self.sock = socket.create_connection(("127.0.0.1", port), timeout=120)
+        self.buffer = b""
+        self.next_id = 0
+
+    def ask(self, method: str, *params):
+        self.next_id += 1
+        self.sock.sendall(json.dumps({"jsonrpc": "2.0", "id": self.next_id, "method": method,
+                                      "params": list(params)}).encode() + b"\n")
+        while True:
+            while b"\n" not in self.buffer:
+                chunk = self.sock.recv(65536)
+                if not chunk:
+                    raise ConnectionError("the listener closed")
+                self.buffer += chunk
+            line, self.buffer = self.buffer.split(b"\n", 1)
+            answer = json.loads(line)
+            if answer.get("id") == self.next_id:
+                if "error" in answer:
+                    raise ValueError(f"{method}: {answer['error']}")
+                return answer["result"]
+
+    def close(self) -> None:
+        self.sock.close()
+
+
+def wallet_from_peers(s: dict) -> None:
+    """kth's wallet support answered from peers (row 1011): kth-wallet keeps
+    headers and filters synced from kth and BCHN over P2P (BCHN serves no
+    script filters, so they come from kth) and downloads whole blocks where
+    its filters match, then answers through its local Electrum listener. For
+    the wallet's addresses, two addresses BCHN pays and spends here, and
+    OP_TRUE, histories, balances and unspent outputs must equal BCHN's
+    reading of every block; a transaction whose only output is spent must be
+    found by its txid alone, before anything about it is watched; the
+    transactions with an input in an RPA prefix must be BCHN's; and no
+    message it sent may name a watched script, script hash, txid or
+    transaction key."""
+    client = "wallet support from peers (kth-wallet: filters over P2P, whole blocks, Electrum listener)"
+    if not WALLET_BIN or not WALLET_IMAGE or not SCRIPT_FILTERS:
+        return
+    seen: dict = {}
+    ok = False
+    process = None
+    data = Path("/tmp/kth-wallet")
+    sats = 100_000_000
+    try:
+        subprocess.run(["sudo", "rm", "-rf", str(data)], capture_output=True)
+        data.mkdir(parents=True, exist_ok=True)
+        # A payment to A with A's output alone, then a spend of all of it to B:
+        # the first transaction is then fully spent.
+        a_address, b_address = cli("getnewaddress"), cli("getnewaddress")
+        coin = next(u for u in json.loads(cli("listunspent", "1"))
+                    if u["amount"] >= 1 and u["txid"] not in s["confirmed"])
+        value_a = round(coin["amount"] - 0.001, 8)
+        raw = cli("createrawtransaction", json.dumps([{"txid": coin["txid"], "vout": coin["vout"]}]),
+                  json.dumps({a_address: value_a}))
+        t1 = cli("sendrawtransaction", json.loads(cli("signrawtransactionwithwallet", raw))["hex"])
+        raw = cli("createrawtransaction", json.dumps([{"txid": t1, "vout": 0}]),
+                  json.dumps({b_address: round(value_a - 0.001, 8)}))
+        t2 = cli("sendrawtransaction", json.loads(cli("signrawtransactionwithwallet", raw))["hex"])
+        cli("generatetoaddress", "1", s["addr"])
+        tip = int(cli("getblockcount"))
+        seen["fully spent"] = cli("gettxout", t1, "0") in ("", "null")
+
+        source = Path("kth-src").resolve()
+        binary = "/src/" + str(Path(WALLET_BIN).resolve().relative_to(source))
+        started = time.monotonic()
+        process = subprocess.Popen(
+            ["docker", "run", "--rm", "--name", "kth-wallet", "--network", "host", "--platform", "linux/amd64",
+             "-v", f"{source}:/src:ro", "-v", f"{data}:/data", WALLET_IMAGE, binary,
+             "--network", "regtest", "--directory", "/data", "--peer", f"127.0.0.1:{KTH_P2P_PORT}",
+             "--peer", "127.0.0.1:18444", "--electrum", "127.0.0.1:0", "--sent-log", "/data/sent.log"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        output: list = []
+        port = None
+        deadline = time.monotonic() + 180
+        while port is None and time.monotonic() < deadline:
+            line = process.stdout.readline()
+            if not line:
+                break
+            output.append(line)
+            if line.startswith("electrum "):
+                port = int(line.split()[1])
+        if port is None:
+            raise ValueError(f"kth-wallet did not report its Electrum port: {''.join(output)[-500:]}")
+        threading.Thread(target=lambda: output.extend(process.stdout), daemon=True).start()
+        electrum = ElectrumLine(port)
+        height = -1
+        while time.monotonic() < started + 600:
+            height = electrum.ask("blockchain.headers.get_tip")["height"]
+            if height >= tip:
+                break
+            time.sleep(1)
+        seen["synced"] = {"height": height, "tip": tip, "seconds": round(time.monotonic() - started)}
+        if height < tip:
+            raise ValueError(f"kth-wallet reached {height}, not {tip}")
+
+        # The fully spent transaction, by its txid alone, before anything is watched.
+        looked_up = electrum.ask("blockchain.transaction.get", t1)
+        seen["txid alone"] = looked_up == call(BCHN, "getrawtransaction", t1)[0]
+        verbose = call(BCHN, "getrawtransaction", t1, 1)[0]
+        merkle = electrum.ask("blockchain.transaction.get_merkle", t1)
+        seen["merkle height"] = merkle["block_height"] == call(BCHN, "getblock", verbose["blockhash"])[0]["height"]
+
+        # BCHN's reading of every block: who received what, and what was spent.
+        def script_of(address: str) -> str:
+            return call(BCHN, "validateaddress", address)[0]["scriptPubKey"]
+        targets = {"mining address": script_of(s["addr"]), "A": script_of(a_address), "B": script_of(b_address),
+                   "OP_TRUE": "51"}
+        for i, other in enumerate(s["others"]):
+            targets[f"wallet address {i + 1}"] = script_of(other)
+        wanted = set(targets.values())
+        received: dict = {script: {} for script in wanted}
+        spent_by: dict = {}
+        history: dict = {script: set() for script in wanted}
+        rpa_blocks: list = []
+        for h in range(tip + 1):
+            block_hash = call(BCHN, "getblockhash", h)[0]
+            block = call(BCHN, "getblock", block_hash, 2)[0]
+            for position, tx in enumerate(block["tx"]):
+                for out in tx["vout"]:
+                    script = out["scriptPubKey"]["hex"]
+                    if script in wanted:
+                        received[script][(tx["txid"], out["n"])] = round(out["value"] * sats)
+                        history[script].add((tx["txid"], h))
+                if position > 0:
+                    for vin in tx["vin"]:
+                        spent_by[(vin["txid"], vin["vout"])] = (tx["txid"], h)
+            rpa_blocks.append((h, rpa_read_block(bytes.fromhex(call(BCHN, "getblock", block_hash, 0)[0]))))
+        for script in wanted:
+            for outpoint in received[script]:
+                if outpoint in spent_by:
+                    history[script].add(spent_by[outpoint])
+
+        checks = {}
+        for name, script in targets.items():
+            hashed = hashlib.sha256(bytes.fromhex(script)).digest()[::-1].hex()
+            got_history = {(item["tx_hash"], item["height"]) for item in
+                           electrum.ask("blockchain.scripthash.get_history", hashed) if item["height"] > 0}
+            unspent = {o: v for o, v in received[script].items() if o not in spent_by}
+            got_unspent = {(item["tx_hash"], item["tx_pos"]): item["value"] for item in
+                           electrum.ask("blockchain.scripthash.listunspent", hashed) if item["height"] > 0}
+            balance = electrum.ask("blockchain.scripthash.get_balance", hashed)
+            checks[name] = {"history": got_history == history[script], "transactions": len(history[script]),
+                            "unspent": got_unspent == unspent, "balance": balance["confirmed"] == sum(unspent.values())}
+        seen["targets"] = checks
+
+        # RPA: an 8-bit prefix of T2's first input; BCHN's blocks give every
+        # transaction with one of its first 30 inputs in it.
+        t2_inputs = next(inputs for _, txs in rpa_blocks for txid, inputs in txs if txid == t2)
+        prefix = rpa_value(t2_inputs[0]) >> 8
+        reference = {(txid, h) for h, txs in rpa_blocks for i, (txid, inputs) in enumerate(txs) if i > 0
+                     and any(rpa_value(item) >> 8 == prefix for item in inputs[:RPA_INPUTS])}
+        got_rpa = {(item["tx_hash"], item["height"]) for item in
+                   electrum.ask("blockchain.rpa.get_history", f"{prefix:02x}", 0) if item["height"] > 0}
+        seen["rpa"] = {"prefix": f"{prefix:02x}", "transactions": len(reference), "equal": got_rpa == reference,
+                       "t2 found": any(txid == t2 for txid, _ in got_rpa)}
+        electrum.close()
+
+        # What it sent: no request names a watched script, its hash, or the
+        # transaction looked up.
+        sent = (data / "sent.log").read_text().splitlines()
+        commands: dict = {}
+        leaks = []
+        secrets = {t1, bytes.fromhex(t1)[::-1].hex(),
+                   hashlib.sha256(b"\x02" + bytes.fromhex(t1)[::-1]).hexdigest()}
+        for script in wanted:
+            digest = hashlib.sha256(bytes.fromhex(script)).digest()
+            if len(script) > 4:
+                secrets.add(script)
+            secrets.update({digest.hex(), digest[::-1].hex()})
+        for line in sent:
+            command, _, payload = line.partition(" ")
+            commands[command] = commands.get(command, 0) + 1
+            if command in ("getcfrange", "getcfproof", "filterload", "filteradd", "filterclear"):
+                leaks.append(command)
+            leaks += [f"{command} names {secret[:16]}" for secret in secrets if secret in payload]
+        seen["sent"] = commands
+        seen["leaks"] = leaks[:10]
+        seen["output"] = "".join(output)[-1500:]
+        ok = (seen["fully spent"] and seen["txid alone"] and seen["merkle height"]
+              and all(all(v for k, v in c.items() if k != "transactions") for c in checks.values())
+              and seen["rpa"]["equal"] and seen["rpa"]["t2 found"] and not leaks and len(sent) > 0)
+    except (OSError, ValueError, KeyError, StopIteration, subprocess.SubprocessError) as error:
+        seen["error"] = f"{type(error).__name__}: {error}"
+    finally:
+        subprocess.run(["docker", "stop", "-t", "15", "kth-wallet"], capture_output=True)
+        if process is not None:
+            try:
+                process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        if (data / "sent.log").exists():
+            (OUT / "kth-wallet-sent.log").write_text((data / "sent.log").read_text()[-2000000:])
+    row(1011, client, "kth-wallet syncs headers and filters over P2P and answers through its Electrum listener: "
+        "histories, balances and unspent outputs equal BCHN's blocks; a fully spent transaction is found by its "
+        "txid alone; an RPA prefix finds BCHN's transactions; no message names a watched script or txid", ok, seen)
 
 
 def main() -> None:

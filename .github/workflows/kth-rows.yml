@@ -34,6 +34,8 @@ jobs:
             script_filters: true
             rpa_filters: true
             neutrino: true
+            wallet: true
+            capi: true
             long: 2100
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -131,6 +133,7 @@ jobs:
           if [ "${{ matrix.blockchain }}" = "true" ]; then TARGETS="$TARGETS kth_blockchain_test"; fi
           if [ "${{ matrix.network }}" = "true" ]; then TARGETS="$TARGETS kth_network_test"; fi
           if [ "${{ matrix.infrastructure }}" = "true" ]; then TARGETS="$TARGETS kth_infrastructure_test"; fi
+          if [ "${{ matrix.wallet }}" = "true" ]; then TARGETS="$TARGETS kth-wallet"; fi
           mkdir -p ccache conan2
           # 4 GB: the whole build with its tests overflowed 1.2 GB (65 of 545
           # hits). The sources are cloned fresh, so their times are new and
@@ -351,6 +354,16 @@ jobs:
           npx tsc --outDir dist --rootDir src --module commonjs --target es2022 --moduleResolution node \
             --esModuleInterop --skipLibCheck --types node src/api/bitcoin/p2p/*.ts
           ls dist/api/bitcoin/p2p
+        shell: bash
+      # Row 1011: kth's wallet support answered from peers, as kth-wallet,
+      # run in the image it was built in.
+      - name: Find kth-wallet
+        if: matrix.wallet
+        run: |
+          WALLET=$(find kth-src/build -name kth-wallet -type f -perm -u+x | head -1)
+          echo "kth-wallet: $WALLET"
+          echo "KTH_WALLET_BIN=$WALLET" >> "$GITHUB_ENV"
+          echo "KTH_WALLET_IMAGE=$IMAGE" >> "$GITHUB_ENV"
         shell: bash
       - name: Run the end-to-end checks against this kth
         run: python3 scripts/knuth_rpc_e2e.py e2e-out
