@@ -75,6 +75,9 @@ EXPLORER_BACKEND = os.environ.get("KTH_EXPLORER_BACKEND") or ""
 # the image it was built in, with its local Electrum listener.
 WALLET_BIN = os.environ.get("KTH_WALLET_BIN") or ""
 WALLET_IMAGE = os.environ.get("KTH_WALLET_IMAGE") or ""
+# Row 1012: kth's own wallet support, answered from its own chain behind the
+# node's local Electrum listener (node.wallet_electrum).
+NODE_WALLET_PORT = 50002
 KTH_P2P_PORT = 18555
 # KTH_STALL=1 (#773 row 27): kth reaches BCHN only through a relay that never
 # delivers kth's first request for blocks, so that request times out while the
@@ -196,6 +199,7 @@ def start_kth() -> None:
                     "4" if SHV or I2P or SERVE or ANNOUNCE or COMPACT or FILTERS or BLOOM else "0",
                     *(["--node.mmr_index", "true"] if SHV else []),
                     *(["--node.compact_filters", "true"] if FILTERS else []),
+                    *(["--node.wallet_electrum", f"127.0.0.1:{NODE_WALLET_PORT}"] if WALLET_BIN else []),
                     *(["--node.bloom_filters", "true"] if BLOOM else []),
                     "--net.outbound_connections", "1",
                     "--net.peer", (f"{BCHN_I2P.address}:0" if I2P
@@ -4390,7 +4394,12 @@ def wallet_from_peers(s: dict) -> None:
             balance = electrum.ask("blockchain.scripthash.get_balance", hashed)
             checks[name] = {"history": got_history == history[script], "transactions": len(history[script]),
                             "unspent": got_unspent == unspent, "balance": balance["confirmed"] == sum(unspent.values())}
+            answers = seen.setdefault("answers", {})
+            answers[name] = {"history": sorted(got_history), "unspent": sorted(got_unspent.items()),
+                             "balance": balance["confirmed"]}
         seen["targets"] = checks
+        seen["targets_scripts"] = targets
+        seen["t1"] = t1
 
         # RPA: an 8-bit prefix of T2's first input; BCHN's blocks give every
         # transaction with one of its first 30 inputs in it.
@@ -4402,6 +4411,7 @@ def wallet_from_peers(s: dict) -> None:
                    electrum.ask("blockchain.rpa.get_history", f"{prefix:02x}", 0) if item["height"] > 0}
         seen["rpa"] = {"prefix": f"{prefix:02x}", "transactions": len(reference), "equal": got_rpa == reference,
                        "t2 found": any(txid == t2 for txid, _ in got_rpa)}
+        seen["rpa_prefix"] = (f"{prefix:02x}", sorted(got_rpa))
         electrum.close()
 
         # What it sent: no request names a watched script, its hash, or the
@@ -4439,9 +4449,65 @@ def wallet_from_peers(s: dict) -> None:
                 process.kill()
         if (data / "sent.log").exists():
             (OUT / "kth-wallet-sent.log").write_text((data / "sent.log").read_text()[-2000000:])
+    node_wallet_equal(seen.get("answers"), seen.get("targets_scripts"), seen.get("t1"), seen.get("rpa_prefix"))
+    seen.pop("answers", None)
+    seen.pop("targets_scripts", None)
     row(1011, client, "kth-wallet syncs headers and filters over P2P and answers through its Electrum listener: "
         "histories, balances and unspent outputs equal BCHN's blocks; a fully spent transaction is found by its "
         "txid alone; an RPA prefix finds BCHN's transactions; no message names a watched script or txid", ok, seen)
+
+
+def node_wallet_equal(peer_answers, targets, t1, rpa) -> None:
+    """kth's own wallet support (row 1012): the node answers its wallet from
+    its own chain, behind its local Electrum listener, with no request to
+    any peer and nothing stored. Every answer of row 1011's targets must equal
+    what kth-wallet answered from peers (histories, unspent outputs,
+    balances, the RPA prefix, the fully spent transaction by txid alone), and
+    the first lookup of all of them, a rescan from genesis, is timed."""
+    client = "kth's own wallet support (answers from the node's chain, node.wallet_electrum)"
+    if not WALLET_BIN or not peer_answers or not targets:
+        return
+    seen: dict = {}
+    ok = False
+    try:
+        electrum = ElectrumLine(NODE_WALLET_PORT)
+        tip = int(cli("getblockcount"))
+        deadline = time.monotonic() + 300
+        while electrum.ask("blockchain.headers.get_tip")["height"] < tip and time.monotonic() < deadline:
+            time.sleep(1)
+        started = time.monotonic()
+        differences = {}
+        for name, script in targets.items():
+            hashed = hashlib.sha256(bytes.fromhex(script)).digest()[::-1].hex()
+            history = sorted((item["tx_hash"], item["height"]) for item in
+                             electrum.ask("blockchain.scripthash.get_history", hashed) if item["height"] > 0)
+            unspent = sorted(((item["tx_hash"], item["tx_pos"]), item["value"]) for item in
+                             electrum.ask("blockchain.scripthash.listunspent", hashed) if item["height"] > 0)
+            balance = electrum.ask("blockchain.scripthash.get_balance", hashed)["confirmed"]
+            mine = {"history": [list(x) for x in history], "unspent": [[list(o), v] for o, v in unspent], "balance": balance}
+            theirs = peer_answers[name]
+            theirs = {"history": [list(x) for x in theirs["history"]],
+                      "unspent": [[list(o), v] for o, v in theirs["unspent"]], "balance": theirs["balance"]}
+            if mine != theirs:
+                differences[name] = {"node": mine, "peers": theirs}
+        seen["rescan seconds (all targets, from genesis)"] = round(time.monotonic() - started, 3)
+        repeat = time.monotonic()
+        for name, script in targets.items():
+            electrum.ask("blockchain.scripthash.get_history", hashlib.sha256(bytes.fromhex(script)).digest()[::-1].hex())
+        seen["repeated lookup seconds (all targets)"] = round(time.monotonic() - repeat, 3)
+        seen["differences"] = differences
+        seen["txid alone"] = electrum.ask("blockchain.transaction.get", t1) == call(BCHN, "getrawtransaction", t1)[0]
+        prefix, peer_rpa = rpa
+        node_rpa = sorted((item["tx_hash"], item["height"]) for item in
+                          electrum.ask("blockchain.rpa.get_history", prefix, 0) if item["height"] > 0)
+        seen["rpa equal"] = [list(x) for x in node_rpa] == [list(x) for x in peer_rpa]
+        electrum.close()
+        ok = not differences and seen["txid alone"] and seen["rpa equal"]
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        seen["error"] = f"{type(error).__name__}: {error}"
+    row(1012, client, "the node answers its own wallet from its own chain exactly as kth-wallet answers from peers: "
+        "histories, unspent outputs, balances, the RPA prefix and a fully spent transaction by txid alone; the "
+        "first lookup (a rescan from genesis) is timed", ok, seen)
 
 
 def main() -> None:
