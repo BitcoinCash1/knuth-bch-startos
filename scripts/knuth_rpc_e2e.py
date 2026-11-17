@@ -4421,7 +4421,7 @@ def wallet_from_peers(s: dict) -> None:
         reference = {(txid, h) for h, txs in rpa_blocks for i, (txid, inputs) in enumerate(txs) if i > 0
                      and any(rpa_value(item) >> 8 == prefix for item in inputs[:RPA_INPUTS])}
         got_rpa = {(item["tx_hash"], item["height"]) for item in
-                   electrum.ask("blockchain.rpa.get_history", f"{prefix:02x}", 0) if item["height"] > 0}
+                   rpa_history(electrum, f"{prefix:02x}", tip) if item["height"] > 0}
         seen["rpa"] = {"prefix": f"{prefix:02x}", "transactions": len(reference), "equal": got_rpa == reference,
                        "t2 found": any(txid == t2 for txid, _ in got_rpa)}
         seen["rpa_prefix"] = (f"{prefix:02x}", sorted(got_rpa))
@@ -4448,7 +4448,7 @@ def wallet_from_peers(s: dict) -> None:
         seen["sent"] = commands
         seen["leaks"] = leaks[:10]
         seen["output"] = "".join(output)[-1500:]
-        fulcrum_parity(electrum, data, output, targets, t1, t2, seen["synced"]["seconds"], tip)
+        fulcrum_parity(ElectrumLine(port), data, output, targets, t1, t2, seen["synced"]["seconds"], tip)
         ok = (seen["fully spent"] and seen["txid alone"] and seen["merkle height"]
               and all(all(v for k, v in c.items() if k != "transactions") for c in checks.values())
               and seen["rpa"]["equal"] and seen["rpa"]["t2 found"] and not leaks and len(sent) > 0)
@@ -4469,6 +4469,16 @@ def wallet_from_peers(s: dict) -> None:
     row(1011, client, "kth-wallet syncs headers and filters over P2P and answers through its Electrum listener: "
         "histories, balances and unspent outputs equal BCHN's blocks; a fully spent transaction is found by its "
         "txid alone; an RPA prefix finds BCHN's transactions; no message names a watched script or txid", ok, seen)
+
+
+def rpa_history(electrum, prefix: str, tip: int) -> list:
+    """Every confirmed match of an RPA prefix, as an RPA wallet pages through
+    the chain: Fulcrum answers at most 60 blocks a call (rpa_history_blocks),
+    and so does kth's listener."""
+    items = []
+    for start in range(0, tip + 1, 60):
+        items += electrum.ask("blockchain.rpa.get_history", prefix, start, start + 60)
+    return items
 
 
 def du(path: str) -> int:
@@ -4530,6 +4540,7 @@ def fulcrum_parity(wallet, data: Path, output: list, targets: dict, t1: str, t2:
                    ("blockchain.transaction.get_height", t1), ("blockchain.transaction.get_confirmed_blockhash", t1),
                    ("blockchain.transaction.id_from_pos", height, 0), ("blockchain.transaction.id_from_pos", height, 0, True),
                    ("blockchain.utxo.get_info", t1, 0), ("blockchain.utxo.get_info", t2, 0),
+                   ("blockchain.rpa.get_history", prefix, max(0, height - 59), height + 1),
                    ("blockchain.rpa.get_history", prefix, 0), ("blockchain.rpa.get_mempool", prefix),
                    ("blockchain.transaction.dsproof.list",)]
         for name, hashed in hashes.items():
@@ -4609,6 +4620,7 @@ def fulcrum_parity(wallet, data: Path, output: list, targets: dict, t1: str, t2:
         subprocess.run(["docker", "stop", "-t", "10", "kth-wallet-birthday"], capture_output=True)
         seen["sync seconds"] = {"from genesis": sync_seconds, f"from birthday {birthday}": synced_late}
         other.close()
+        wallet.close()
         ok = not differences and synced_late is not None
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         seen["error"] = f"{type(error).__name__}: {error}"
@@ -4673,7 +4685,7 @@ def node_wallet_equal(peer_answers, targets, t1, rpa) -> None:
         seen["txid alone"] = electrum.ask("blockchain.transaction.get", t1) == call(BCHN, "getrawtransaction", t1)[0]
         prefix, peer_rpa = rpa
         node_rpa = sorted((item["tx_hash"], item["height"]) for item in
-                          electrum.ask("blockchain.rpa.get_history", prefix, 0) if item["height"] > 0)
+                          rpa_history(electrum, prefix, tip) if item["height"] > 0)
         seen["rpa equal"] = [list(x) for x in node_rpa] == [list(x) for x in peer_rpa]
         electrum.close()
         ok = not differences and seen["txid alone"] and seen["rpa equal"]
