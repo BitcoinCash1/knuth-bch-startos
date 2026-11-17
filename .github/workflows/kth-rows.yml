@@ -203,6 +203,8 @@ jobs:
           tail -n 40 node-tests.log
           # The failed assertions themselves, so they read in the job log.
           grep -n "failed:" node-tests.log | head -40 || true
+          # The wallet support's birthday scan timings, both ways.
+          grep -n "wallet birthday scan" node-tests.log || true
           echo "kth_node_test exit $rc" | tee -a test-status.txt
         shell: bash
       - name: Run kth's domain test suite
