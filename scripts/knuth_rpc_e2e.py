@@ -71,6 +71,14 @@ NEUTRINO_BIN = os.environ.get("KTH_NEUTRINO_BIN") or ""
 # scripts/explorer-p2p-e2e.js).
 EXPLORER_BACKEND = os.environ.get("KTH_EXPLORER_BACKEND") or ""
 KTH_P2P_PORT = 18555
+# KTH_ELECTRUM_BRIDGE and KTH_FULCRUM, with KTH_SCRIPT_FILTERS=1 and
+# KTH_RPA_FILTERS=1 (row 1011): a built bch-electrum-bridge, which answers
+# Electrum wallets as a P2P light client of kth, and a Fulcrum release, which
+# indexes BCHN over its RPC, get the same Electrum calls.
+ELECTRUM_BRIDGE = os.environ.get("KTH_ELECTRUM_BRIDGE") or ""
+FULCRUM = os.environ.get("KTH_FULCRUM") or ""
+FULCRUM_PORT = 50011
+BRIDGE_PORTS = (50012, 50013)
 # KTH_STALL=1 (#773 row 27): kth reaches BCHN only through a relay that never
 # delivers kth's first request for blocks, so that request times out while the
 # peer stays connected.
@@ -2730,7 +2738,8 @@ def rows(s: dict) -> None:
                   shv_light_client, compact_filter_light_client, neutrino_wallet_client,
                   script_filter_light_client, explorer_p2p_client, vault_wallet_filters, rpa_wallet_filters,
                   bloom_filter_light_client, i2p_second_node, serve_second_node, announce_second_node,
-                  compact_blocks_both_ways, row24_mining_protocol, pr874_long_polling):
+                  compact_blocks_both_ways, row24_mining_protocol, electrum_bridge_parity,
+                  pr874_long_polling):
         try:
             check(s)
         except Exception as error:  # one broken check must not hide the others
@@ -4204,6 +4213,435 @@ def bloom_filter_light_client(s: dict) -> None:
 
 # ---- report -------------------------------------------------------------------
 
+# ---- Electrum wallets: bch-electrum-bridge on kth against Fulcrum on BCHN ----
+
+class ElectrumClient:
+    """An Electrum protocol connection as a wallet makes it: newline-delimited
+    JSON-RPC over TCP. It counts the bytes it receives and keeps the
+    notifications that arrive between answers."""
+
+    def __init__(self, port: int, timeout: float = 300):
+        self.sock = socket.create_connection(("127.0.0.1", port), timeout=timeout)
+        self.buffer = b""
+        self.received = 0
+        self.next_id = 0
+        self.notifications: list = []
+
+    def call(self, method: str, *params) -> tuple:
+        """(result, error, milliseconds)."""
+        self.next_id += 1
+        wanted = self.next_id
+        started = time.monotonic()
+        self.sock.sendall(json.dumps({"jsonrpc": "2.0", "id": wanted, "method": method,
+                                      "params": list(params)}).encode() + b"\n")
+        while True:
+            while b"\n" not in self.buffer:
+                chunk = self.sock.recv(1 << 16)
+                if not chunk:
+                    raise OSError(f"{method}: the server closed the connection")
+                self.received += len(chunk)
+                self.buffer += chunk
+            line, self.buffer = self.buffer.split(b"\n", 1)
+            if not line.strip():
+                continue
+            message = json.loads(line)
+            if message.get("id") == wanted:
+                return (message.get("result"), message.get("error"),
+                        round((time.monotonic() - started) * 1000, 1))
+            if "method" in message:
+                self.notifications.append(message)
+
+    def close(self) -> None:
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
+def electrum_connect(port: int, seconds: float) -> ElectrumClient:
+    """A connection that has sent server.version, once the server listens."""
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            client = ElectrumClient(port)
+            client.call("server.version", "knuth-rpc-e2e", "1.5")
+            return client
+        except OSError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.5)
+
+
+def electrum_at_tip(client: ElectrumClient, tip: int, seconds: float, bridge: bool) -> float | None:
+    """Seconds until the server is at `tip`: Fulcrum's header tip, or the
+    bridge's script filters and input prefix filters both."""
+    started = time.monotonic()
+    while time.monotonic() - started < seconds:
+        if bridge:
+            stats = client.call("light_client.stats")[0]
+            if isinstance(stats, dict) and stats.get("filter_height") == tip and stats.get("rpa_height") == tip:
+                return round(time.monotonic() - started, 2)
+        else:
+            header = client.call("blockchain.headers.subscribe")[0]
+            if isinstance(header, dict) and header.get("height") == tip:
+                return round(time.monotonic() - started, 2)
+        time.sleep(0.2)
+    return None
+
+
+def tree_bytes(path: Path) -> int:
+    return sum(p.stat().st_size for p in path.rglob("*") if p.is_file()) if path.exists() else 0
+
+
+def json_diff(a, b, path: str = "", out: list | None = None, limit: int = 40) -> list:
+    """Where two answers differ: a path and both values (Fulcrum's first)."""
+    out = [] if out is None else out
+    if len(out) >= limit:
+        return out
+    if isinstance(a, dict) and isinstance(b, dict):
+        for key in sorted(set(a) | set(b)):
+            if key not in b:
+                out.append(f"{path}.{key}: Fulcrum only ({json.dumps(a[key])[:80]})")
+            elif key not in a:
+                out.append(f"{path}.{key}: bridge only ({json.dumps(b[key])[:80]})")
+            else:
+                json_diff(a[key], b[key], f"{path}.{key}", out, limit)
+    elif isinstance(a, list) and isinstance(b, list):
+        if len(a) != len(b):
+            out.append(f"{path}: {len(a)} items vs {len(b)}")
+        for i, (x, y) in enumerate(zip(a, b)):
+            json_diff(x, y, f"{path}[{i}]", out, limit)
+    elif a != b or type(a) is not type(b) and not (isinstance(a, (int, float)) and isinstance(b, (int, float))):
+        out.append(f"{path or 'answer'}: {json.dumps(a)[:100]} vs {json.dumps(b)[:100]}")
+    return out
+
+
+def by_outpoint(rows):
+    if not isinstance(rows, list):
+        return rows
+    return sorted(rows, key=lambda r: (r.get("height", 0), r.get("tx_hash", ""), r.get("tx_pos", 0))
+                  if isinstance(r, dict) else (0, "", 0))
+
+
+def parity(f: ElectrumClient, b: ElectrumClient, group: str, data: bool, method: str, *params,
+           repeat: bool = True, normal=None) -> tuple:
+    """Fulcrum and the bridge get the same call, twice each when `repeat`
+    (the first answer and the one from what the first left behind). A `data`
+    call must give the same answer; the others' differences are reported."""
+    fr, fe, f_first = f.call(method, *params)
+    br, be, b_first = b.call(method, *params)
+    f_again = f.call(method, *params)[2] if repeat else None
+    b_again = b.call(method, *params)[2] if repeat else None
+
+    def code(error):
+        return error.get("code") if isinstance(error, dict) else error
+
+    if fe is not None or be is not None:
+        same = fe is not None and be is not None and code(fe) == code(be)
+        differences = [] if same else [f"error: Fulcrum {json.dumps(fe)[:160]}, bridge {json.dumps(be)[:160]}"]
+    else:
+        norm = normal or (lambda x: x)
+        differences = json_diff(norm(fr), norm(br))
+    RESULTS["parity"].append({
+        "group": group, "method": method, "params": [p if not isinstance(p, str) or len(p) < 80 else p[:16] + "..."
+                                                     for p in params],
+        "data": data, "same": not differences, "differences": differences,
+        "fulcrum": json.dumps(fe if fe is not None else fr)[:600],
+        "bridge": json.dumps(be if be is not None else br)[:600],
+        "ms": {"fulcrum": [f_first, f_again], "bridge": [b_first, b_again]}})
+    return (fr, fe), (br, be)
+
+
+def electrum_bridge_parity(s: dict) -> None:
+    """Row 1011. Electrum wallets get the same answers from bch-electrum-bridge,
+    a P2P light client of kth (script filters with transaction keys, input
+    prefix filters, whole blocks and relay), as from Fulcrum on BCHN, for the
+    same chain and scripts: headers, every scripthash call, transactions by
+    ID alone (a fully spent one too), Merkle proofs, IDs by position, unspent
+    outputs, reusable payment address searches, double-spend proofs and
+    broadcasts. Each call goes twice to each server, for the time of the first
+    answer and of a repeated one. The row also measures what each side stores
+    and downloads, and how long the bridge's filters take from genesis and
+    from a wallet birthday."""
+    client = "Electrum wallets (bch-electrum-bridge on kth over P2P, against Fulcrum 2.1.4 on BCHN)"
+    if not (ELECTRUM_BRIDGE and FULCRUM and SCRIPT_FILTERS and RPA_FILTERS):
+        return
+    RESULTS["parity"] = []
+    seen: dict = {}
+    measure: dict = {}
+    processes: list = []
+    clients: list = []
+    ok = False
+    try:
+        wallet = s["addr"]
+
+        def new_coin() -> dict:
+            utxo = next(u for u in json.loads(cli("listunspent", "1"))
+                        if u["scriptPubKey"].startswith("76a914") and u["amount"] >= 1 and u["spendable"])
+            cli("lockunspent", "false", json.dumps([{"txid": utxo["txid"], "vout": utxo["vout"]}]))
+            return utxo
+
+        def spend(utxo: dict, to: str, fee: float = 0.001) -> str:
+            raw = cli("createrawtransaction", json.dumps([{"txid": utxo["txid"], "vout": utxo["vout"]}]),
+                      json.dumps({to: round(utxo["amount"] - fee, 8)}))
+            return json.loads(cli("signrawtransactionwithwallet", raw))["hex"]
+
+        # A transaction whose outputs are all spent, for a lookup by ID alone.
+        spent_payee = cli("getnewaddress")
+        fully_spent = cli("sendtoaddress", spent_payee, "1.0")
+        cli("generatetoaddress", "1", wallet)
+        outs = [u for u in json.loads(cli("listunspent", "1")) if u["txid"] == fully_spent]
+        raw = cli("createrawtransaction", json.dumps([{"txid": u["txid"], "vout": u["vout"]} for u in outs]),
+                  json.dumps({cli("getnewaddress"): round(sum(u["amount"] for u in outs) - 0.001, 8)}))
+        cli("sendrawtransaction", json.loads(cli("signrawtransactionwithwallet", raw))["hex"])
+        cli("generatetoaddress", "1", wallet)
+        seen["fully spent"] = all(cli("gettxout", fully_spent, str(n)) in ("", "null")
+                                  for n in range(len(call(BCHN, "getrawtransaction", fully_spent, True)[0]["vout"])))
+        # One payment in the mempool before either server starts.
+        early = cli("sendtoaddress", s["others"][2], "0.15")
+        tip = int(cli("getblockcount"))
+        seen["tip"] = tip
+        seen["kth at the tip"] = wait_kth_height(tip, 300)
+
+        # Fulcrum on BCHN's RPC, and the bridge on kth's P2P from genesis.
+        home = Path("/tmp/fulcrum-regtest")
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "fulcrum.conf").write_text("\n".join([
+            f"datadir = {home / 'db'}", "bitcoind = 127.0.0.1:18443", "rpcuser = e2e", "rpcpassword = e2e",
+            f"tcp = 127.0.0.1:{FULCRUM_PORT}", "peering = false", "announce = false", "polltime = 0.5", ""]))
+        started = time.monotonic()
+        processes.append(subprocess.Popen([FULCRUM, str(home / "fulcrum.conf")],
+                                          stdout=open(OUT / "fulcrum.log", "w"), stderr=subprocess.STDOUT))
+        f = electrum_connect(FULCRUM_PORT, 600)
+        clients.append(f)
+        at_tip = electrum_at_tip(f, tip, 600, bridge=False)
+        measure_sync = {"Fulcrum, whole chain over BCHN's RPC":
+                        None if at_tip is None else round(time.monotonic() - started, 2)}
+
+        def start_bridge(name: str, port: int, *extra: str) -> tuple[ElectrumClient, float | None]:
+            started = time.monotonic()
+            processes.append(subprocess.Popen(
+                [ELECTRUM_BRIDGE, "--network", "regtest", "--datadir", f"/tmp/bridge-{name}",
+                 "--peer", f"127.0.0.1:{KTH_P2P_PORT}", "--listen", f"127.0.0.1:{port}", *extra],
+                stdout=open(OUT / f"bridge-{name}.log", "w"), stderr=subprocess.STDOUT))
+            connection = electrum_connect(port, 120)
+            clients.append(connection)
+            synced = electrum_at_tip(connection, tip, 900, bridge=True)
+            return connection, None if synced is None else round(time.monotonic() - started, 2)
+
+        b, measure_sync["bridge filters from genesis"] = start_bridge("genesis", BRIDGE_PORTS[0])
+        birthday = tip - 150
+        late, measure_sync[f"bridge filters from birthday {birthday}"] = start_bridge(
+            "birthday", BRIDGE_PORTS[1], "--birthday", str(birthday))
+        measure["filter sync seconds"] = measure_sync
+        seen["synced"] = {k: v is not None for k, v in measure_sync.items()}
+
+        # Payments relayed while both servers watch.
+        m1 = cli("sendtoaddress", s["others"][0], "0.3")
+        m2 = cli("sendtoaddress", s["others"][1], "0.2")
+        payees = {"mining": wallet, "payee 0": s["others"][0], "payee 1": s["others"][1],
+                  "payee 2 (paid before the servers started)": s["others"][2], "unused": cli("getnewaddress")}
+        hashes = {name: hashlib.sha256(bytes.fromhex(call(BCHN, "validateaddress", a)[0]["scriptPubKey"]))
+                  .digest()[::-1].hex() for name, a in payees.items()}
+
+        def in_mempool(server: ElectrumClient, sh: str, txid: str) -> bool:
+            rows = server.call("blockchain.scripthash.get_mempool", sh)[0]
+            return isinstance(rows, list) and any(r.get("tx_hash") == txid for r in rows)
+
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and not all(
+                in_mempool(server, hashes[name], txid) for server in (f, b)
+                for name, txid in (("payee 0", m1), ("payee 1", m2))):
+            time.sleep(0.5)
+        seen["relayed payments in both mempools"] = all(
+            in_mempool(server, hashes[name], txid) for server in (f, b) for name, txid in (("payee 0", m1),
+                                                                                           ("payee 1", m2)))
+        seen["payment from before the start, in the bridge's mempool"] = in_mempool(
+            b, hashes["payee 2 (paid before the servers started)"], early)
+
+        # Server and headers.
+        parity(f, b, "server", False, "server.features", repeat=False,
+               normal=lambda x: {k: x.get(k) for k in ("genesis_hash", "hash_function", "protocol_min",
+                                                        "protocol_max", "dsproof", "rpa")}
+               if isinstance(x, dict) else x)
+        parity(f, b, "headers", True, "blockchain.headers.subscribe")
+        parity(f, b, "headers", False, "blockchain.headers.get_tip")
+        for height in (0, 1, s["tx_block_height"], tip):
+            parity(f, b, "headers", True, "blockchain.block.header", height)
+        parity(f, b, "headers", True, "blockchain.block.header", s["tx_block_height"], tip)
+        parity(f, b, "headers", True, "blockchain.block.headers", 0, 2016)
+        parity(f, b, "headers", True, "blockchain.block.headers", tip - 9, 20, tip)
+        parity(f, b, "headers", False, "blockchain.header.get", tip)
+        parity(f, b, "fees", False, "blockchain.estimatefee", 2)
+        parity(f, b, "fees", False, "blockchain.relayfee")
+        parity(f, b, "fees", False, "mempool.get_fee_histogram")
+
+        # Every scripthash call for each script.
+        for name, sh in hashes.items():
+            for method in ("get_history", "get_balance", "get_mempool", "get_status", "get_first_use"):
+                parity(f, b, f"scripthash: {name}", True, f"blockchain.scripthash.{method}", sh)
+            parity(f, b, f"scripthash: {name}", True, "blockchain.scripthash.listunspent", sh, normal=by_outpoint)
+            parity(f, b, f"scripthash: {name}", True, "blockchain.scripthash.subscribe", sh, repeat=False)
+        parity(f, b, "address", True, "blockchain.address.get_balance", s["others"][0])
+        parity(f, b, "address", True, "blockchain.address.get_history", s["others"][0])
+
+        # Transactions: confirmed, coinbase, in the mempool, and fully spent.
+        tx_block = call(BCHN, "getblock", s["tx_block"], 1)[0]
+        position = tx_block["tx"].index(s["confirmed_txid"])
+        spent_height = call(BCHN, "getrawtransaction", fully_spent, True)[0]
+        spent_height = call(BCHN, "getblockheader", spent_height["blockhash"], True)[0]["height"]
+        for label, txid in (("confirmed", s["confirmed_txid"]), ("coinbase", s["coinbase_txid"]),
+                            ("mempool", m1), ("fully spent", fully_spent)):
+            parity(f, b, f"transaction: {label}", True, "blockchain.transaction.get", txid)
+            parity(f, b, f"transaction: {label}", False, "blockchain.transaction.get", txid, True)
+            parity(f, b, f"transaction: {label}", True, "blockchain.transaction.get_height", txid)
+        for label, txid, height in (("confirmed", s["confirmed_txid"], s["tx_block_height"]),
+                                    ("coinbase", s["coinbase_txid"], s["tx_block_height"]),
+                                    ("fully spent", fully_spent, spent_height)):
+            parity(f, b, f"transaction: {label}", True, "blockchain.transaction.get_merkle", txid, height)
+            parity(f, b, f"transaction: {label}", True, "blockchain.transaction.get_confirmed_blockhash", txid)
+        parity(f, b, "transaction: by position", True, "blockchain.transaction.id_from_pos",
+               s["tx_block_height"], position)
+        parity(f, b, "transaction: by position", True, "blockchain.transaction.id_from_pos",
+               s["tx_block_height"], position, True)
+        parity(f, b, "unspent output", True, "blockchain.utxo.get_info", s["confirmed_txid"], s["unspent_n"])
+        parity(f, b, "unspent output", True, "blockchain.utxo.get_info", fully_spent, 0)
+        parity(f, b, "unspent output", True, "blockchain.utxo.get_info", m1, 0)
+
+        # Reusable payment addresses: the payments row 1010 ground to 5250
+        # and 41, every 60-block window of the chain; the input of a payment
+        # in the mempool; a prefix nothing has.
+        for prefix in ("5250", "41"):
+            for start in range(0, tip + 1, 60):
+                parity(f, b, f"rpa: {prefix}", True, "blockchain.rpa.get_history", prefix, start, start + 60,
+                       repeat=start + 60 > tip)
+        parity(f, b, "rpa: 5250", True, "blockchain.reusable.get_history", tip - 59, 60, "5250")
+        parity(f, b, "rpa: 5250", True, "blockchain.rpa.get_history", "5250", tip - 59)
+        data = bytes.fromhex(call(BCHN, "getrawtransaction", m1, False)[0])
+        size, o = read_compact(data, 41)
+        mempool_prefix = f"{rpa_value(data[5:o + size + 4]):04x}"
+        seen["mempool payment prefix"] = mempool_prefix
+        for prefix in (mempool_prefix, mempool_prefix[:2]):
+            parity(f, b, "rpa: mempool", True, "blockchain.rpa.get_mempool", prefix)
+            parity(f, b, "rpa: mempool", True, "blockchain.reusable.get_mempool", prefix)
+        parity(f, b, "rpa: absent", True, "blockchain.rpa.get_history", "0000", tip - 59)
+        parity(f, b, "rpa: limits", True, "blockchain.rpa.get_history", "5", tip - 59)
+
+        # A double spend of a P2PKH coin: the first spend through BCHN's RPC,
+        # the second to BCHN over P2P, where BCHN makes a proof of it.
+        coin = new_coin()
+        first_hex, second_hex = spend(coin, cli("getnewaddress")), spend(coin, cli("getnewaddress"), 0.002)
+        first = cli("sendrawtransaction", first_hex)
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and not all(
+                server.call("blockchain.transaction.get", first)[1] is None for server in (f, b)):
+            time.sleep(0.5)
+        bchn_peer = LightPeer(18444)
+        bchn_peer.send(b"tx", bytes.fromhex(second_hex))
+        time.sleep(2)
+        bchn_peer.close()
+        proof_seconds = {}
+        started = time.monotonic()
+        while time.monotonic() - started < 60 and len(proof_seconds) < 2:
+            for name, server in (("Fulcrum", f), ("bridge", b)):
+                if name not in proof_seconds and server.call("blockchain.transaction.dsproof.get", first)[0]:
+                    proof_seconds[name] = round(time.monotonic() - started, 1)
+            time.sleep(0.5)
+        seen["double-spend proof seen after seconds"] = proof_seconds
+        seen["BCHN's proof"] = (call(BCHN, "getdsproof", first)[0] or {}).get("dspid")
+        parity(f, b, "double-spend proof", True, "blockchain.transaction.dsproof.get", first)
+        parity(f, b, "double-spend proof", True, "blockchain.transaction.dsproof.list")
+        stats = b.call("light_client.stats")[0]
+        seen["bridge peers"] = stats.get("peers") if isinstance(stats, dict) else None
+
+        # Broadcasts: one through each server, each seen by the other.
+        one, two = spend(new_coin(), cli("getnewaddress")), spend(new_coin(), cli("getnewaddress"))
+        one_id, two_id = (sha256d(bytes.fromhex(x))[::-1].hex() for x in (one, two))
+        through_bridge = b.call("blockchain.transaction.broadcast", one)
+        through_fulcrum = f.call("blockchain.transaction.broadcast", two)
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and not (f.call("blockchain.transaction.get", one_id)[1] is None
+                                                  and b.call("blockchain.transaction.get", two_id)[1] is None):
+            time.sleep(0.5)
+        crossed = (f.call("blockchain.transaction.get", one_id)[1] is None
+                   and b.call("blockchain.transaction.get", two_id)[1] is None)
+        RESULTS["parity"].append({
+            "group": "broadcast", "method": "blockchain.transaction.broadcast", "params": ["a new transaction"],
+            "data": True, "same": through_bridge[0] == one_id and through_fulcrum[0] == two_id and crossed,
+            "differences": [] if crossed else ["the transaction one server took did not reach the other"],
+            "fulcrum": json.dumps(through_fulcrum[0] if through_fulcrum[1] is None else through_fulcrum[1])[:600],
+            "bridge": json.dumps(through_bridge[0] if through_bridge[1] is None else through_bridge[1])[:600],
+            "ms": {"fulcrum": [through_fulcrum[2], None], "bridge": [through_bridge[2], None]}})
+        parity(f, b, "broadcast", False, "blockchain.transaction.broadcast", one, repeat=False)
+        parity(f, b, "broadcast", True, "blockchain.transaction.broadcast", "00", repeat=False)
+        parity(f, b, "server", False, "daemon.passthrough", "getblockcount", [], repeat=False)
+
+        # What it cost each side.
+        latency: dict = {}
+        for r in RESULTS["parity"]:
+            for server in ("fulcrum", "bridge"):
+                first_ms, again_ms = r["ms"][server]
+                bucket = latency.setdefault(r["group"].split(":")[0], {}).setdefault(server, [[], []])
+                if first_ms is not None:
+                    bucket[0].append(first_ms)
+                if again_ms is not None:
+                    bucket[1].append(again_ms)
+        measure["latency ms, median first / repeated / slowest first"] = {
+            group: {server: [sorted(v[0])[len(v[0]) // 2] if v[0] else None,
+                             sorted(v[1])[len(v[1]) // 2] if v[1] else None,
+                             max(v[0]) if v[0] else None] for server, v in servers.items()}
+            for group, servers in latency.items()}
+
+        def kth_bytes(command: str) -> str:
+            return subprocess.run(["docker", "exec", "kth", "sh", "-c", command],
+                                  capture_output=True, text=True).stdout.strip()
+
+        measure["stored bytes"] = {
+            "Fulcrum database": tree_bytes(home / "db"),
+            "bridge from genesis": tree_bytes(Path("/tmp/bridge-genesis")),
+            f"bridge from birthday {birthday}": tree_bytes(Path("/tmp/bridge-birthday")),
+            "kth basic filter checkpoints": kth_bytes("wc -c < /data/e2e/compact_filter_checkpoints"),
+            "kth script filter checkpoints": kth_bytes("wc -c < /data/e2e/script_filter_checkpoints"),
+            "kth input prefix filter checkpoints": kth_bytes("wc -c < /data/e2e/input_prefix_filter_checkpoints"),
+            "kth whole database": kth_bytes("du -sb /data/e2e | cut -f1"),
+        }
+        late_stats = late.call("light_client.stats")[0]
+        stats = b.call("light_client.stats")[0]
+        measure["downloaded bytes"] = {
+            "bridge from genesis, over P2P": stats,
+            f"bridge from birthday {birthday}, over P2P (no wallet calls)": late_stats,
+            "the wallet, from Fulcrum": f.received,
+            "the wallet, from the bridge": b.received,
+        }
+        RESULTS["parity_measure"] = measure
+        data_differences = [r for r in RESULTS["parity"] if r["data"] and not r["same"]]
+        seen["calls"] = len(RESULTS["parity"])
+        seen["data calls that differ"] = len(data_differences)
+        seen["other calls that differ"] = sum(1 for r in RESULTS["parity"] if not r["data"] and not r["same"])
+        ok = bool(seen["kth at the tip"] and all(seen["synced"].values())
+                  and seen["relayed payments in both mempools"] and not data_differences)
+    except subprocess.CalledProcessError as error:
+        seen["error"] = f"{error.cmd[6] if len(error.cmd) > 6 else error.cmd}: {(error.stderr or '').strip()[:200]}"
+    except (OSError, ValueError, KeyError, IndexError, TypeError, StopIteration, struct.error) as error:
+        seen["error"] = f"{type(error).__name__}: {error}"
+    finally:
+        for connection in clients:
+            connection.close()
+        for process in processes:
+            process.terminate()
+            try:
+                process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        (OUT / "bridge-parity.json").write_text(json.dumps({"seen": seen, "measure": measure,
+                                                            "calls": RESULTS.get("parity", [])}, indent=1))
+    row(1011, client, "Fulcrum on BCHN and the bridge on kth, both synced to the same chain, give the same "
+        "answer to every data call (headers, each scripthash call for five scripts, raw transactions by ID "
+        "alone with a fully spent one, Merkle proofs, IDs by position, unspent outputs, RPA searches over "
+        "every 60-block window, RPA mempool, double-spend proofs, broadcasts); shapes, times, storage and "
+        "downloads are reported", ok, seen)
+
+
 def report() -> str:
     lines = ["# Knuth RPC end-to-end (kth, no proxy) vs BCHN 29.2.0 on regtest", ""]
     for k, v in RESULTS["setup"].items():
@@ -4227,6 +4665,19 @@ def report() -> str:
     for r in RESULTS["rows"]:
         lines.append(f"| {r['row']} | {r['client']} | {r['check']} | **{r['verdict']}** | "
                      f"{r['detail'][:400].replace('|', '/')} |")
+    if RESULTS.get("parity"):
+        lines += ["", "## Row 1011: Electrum calls, Fulcrum on BCHN and bch-electrum-bridge on kth", "",
+                  "| Group | Call | Params | Must match | Verdict | ms Fulcrum first/again | ms bridge first/again "
+                  "| Differences |", "|---|---|---|---|---|---|---|---|"]
+        for r in RESULTS["parity"]:
+            params = json.dumps(r["params"])[:60].replace("|", "/")
+            times = lambda v: "/".join("-" if t is None else str(t) for t in v)
+            lines.append(f"| {r['group']} | `{r['method']}` | {params} | {'yes' if r['data'] else 'no'} | "
+                         f"**{'same' if r['same'] else 'differs'}** | {times(r['ms']['fulcrum'])} | "
+                         f"{times(r['ms']['bridge'])} | "
+                         f"{'; '.join(r['differences'])[:600].replace('|', '/')} |")
+        lines += ["", "### Row 1011 measurements", "", "```",
+                  json.dumps(RESULTS.get("parity_measure"), indent=1), "```"]
     gaps = [r["call"] for r in RESULTS["methods"] if r["verdict"].startswith("GAP")]
     gaps += [r["case"] for r in RESULTS["transport"] if r["verdict"] == "GAP"]
     lines += ["", f"## {len(gaps)} gaps", ""] + [f"- {g}" for g in gaps]
