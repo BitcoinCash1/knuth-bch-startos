@@ -4750,8 +4750,55 @@ def token_identity_wallet(s: dict) -> None:
         mine()
         other_step = cli("sendrawtransaction", raw_tx([(other_base, 0, push(r[11][0]))], [(15_000, r[12][1])]))
         mine()
-        burn = cli("sendrawtransaction", raw_tx([(other_step, 0, push(r[12][0]))], [(0, b"\x6a"), (10_000, r[13][1])]))
         tip = int(cli("getblockcount"))
+
+        # The peer path: kth-wallet, from a fresh store.
+        subprocess.run(["sudo", "rm", "-rf", str(data)], capture_output=True)
+        data.mkdir(parents=True, exist_ok=True)
+        source = Path("kth-src").resolve()
+        binary = "/src/" + str(Path(WALLET_BIN).resolve().relative_to(source))
+        process = subprocess.Popen(
+            ["docker", "run", "--rm", "--name", "kth-wallet-tokens", "--network", "host", "--platform", "linux/amd64",
+             "-v", f"{source}:/src:ro", "-v", f"{data}:/data", WALLET_IMAGE, binary,
+             "--network", "regtest", "--directory", "/data", "--peer", f"127.0.0.1:{KTH_P2P_PORT}",
+             "--peer", "127.0.0.1:18444", "--electrum", "127.0.0.1:0", "--sent-log", "/data/sent.log"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        port = None
+        deadline = time.monotonic() + 180
+        while port is None and time.monotonic() < deadline:
+            line = process.stdout.readline()
+            if not line:
+                break
+            if line.startswith("electrum "):
+                port = int(line.split()[1])
+        if port is None:
+            raise ValueError("kth-wallet did not report its Electrum port")
+        threading.Thread(target=lambda: [None for _ in process.stdout], daemon=True).start()
+        peers = ElectrumLine(port)
+
+        def synced(line, height: int, seconds: int) -> bool:
+            until = time.monotonic() + seconds
+            while line.ask("blockchain.headers.get_tip")["height"] < height and time.monotonic() < until:
+                time.sleep(1)
+            return line.ask("blockchain.headers.get_tip")["height"] >= height
+
+        def last_step(line) -> dict:
+            return line.ask("kth.identity.resolve", other_base)["chain"][-1]
+
+        seen["peers synced"] = synced(peers, tip, 600)
+        node = ElectrumLine(NODE_WALLET_PORT)
+        seen["node synced"] = synced(node, tip, 300)
+        # The second identity burned once both follow the chain: relay brings
+        # the burning transaction to the node's mempool and to kth-wallet's copy.
+        burn = cli("sendrawtransaction", raw_tx([(other_step, 0, push(r[12][0]))], [(0, b"\x6a"), (10_000, r[13][1])]))
+        burn_hex = call(BCHN, "getrawtransaction", burn)[0]
+        until = time.monotonic() + 60
+        while burn not in call(KTH, "getrawmempool")[0] and time.monotonic() < until:
+            time.sleep(1)
+        in_node = burn in call(KTH, "getrawmempool")[0]
+        seen["kth node took the burn by relay"] = in_node
+        if not in_node:
+            seen["kth node answers the burn"] = call(KTH, "sendrawtransaction", burn_hex)
 
         # What BCHN's own blocks and mempool show.
         def outputs_of(tx: dict) -> list:
@@ -4848,48 +4895,12 @@ def token_identity_wallet(s: dict) -> None:
                 "diverged refused": "error" in got["diverged"],
             }
 
-        # The peer path: kth-wallet, from a fresh store.
-        subprocess.run(["sudo", "rm", "-rf", str(data)], capture_output=True)
-        data.mkdir(parents=True, exist_ok=True)
-        source = Path("kth-src").resolve()
-        binary = "/src/" + str(Path(WALLET_BIN).resolve().relative_to(source))
-        process = subprocess.Popen(
-            ["docker", "run", "--rm", "--name", "kth-wallet-tokens", "--network", "host", "--platform", "linux/amd64",
-             "-v", f"{source}:/src:ro", "-v", f"{data}:/data", WALLET_IMAGE, binary,
-             "--network", "regtest", "--directory", "/data", "--peer", f"127.0.0.1:{KTH_P2P_PORT}",
-             "--peer", "127.0.0.1:18444", "--electrum", "127.0.0.1:0", "--sent-log", "/data/sent.log"],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        port = None
-        deadline = time.monotonic() + 180
-        while port is None and time.monotonic() < deadline:
-            line = process.stdout.readline()
-            if not line:
-                break
-            if line.startswith("electrum "):
-                port = int(line.split()[1])
-        if port is None:
-            raise ValueError("kth-wallet did not report its Electrum port")
-        threading.Thread(target=lambda: [None for _ in process.stdout], daemon=True).start()
-        peers = ElectrumLine(port)
-        started = time.monotonic()
-        while peers.ask("blockchain.headers.get_tip")["height"] < tip and time.monotonic() < started + 600:
-            time.sleep(1)
-        # The burning transaction reaches kth-wallet's mempool copy by relay.
-        while time.monotonic() < started + 600:
-            if peers.ask("kth.identity.resolve", other_base)["chain"][-1]["tx_hash"] == burn:
-                break
-            time.sleep(1)
+        for line in (peers, node):
+            until = time.monotonic() + 120
+            while last_step(line)["tx_hash"] != burn and time.monotonic() < until:
+                time.sleep(1)
         from_peers = answers(peers)
         seen["peers"] = matches(from_peers)
-
-        # The node's own chain, through its own listener.
-        node = ElectrumLine(NODE_WALLET_PORT)
-        while node.ask("blockchain.headers.get_tip")["height"] < tip and time.monotonic() < started + 600:
-            time.sleep(1)
-        while time.monotonic() < started + 600:
-            if node.ask("kth.identity.resolve", other_base)["chain"][-1]["tx_hash"] == burn:
-                break
-            time.sleep(1)
         from_node = answers(node)
         seen["node"] = matches(from_node)
         seen["node equals peers"] = from_node == from_peers
@@ -4898,11 +4909,12 @@ def token_identity_wallet(s: dict) -> None:
         mine()
         tip = int(cli("getblockcount"))
         mined_ok = True
-        for name, line in (("peers", peers), ("node", node)):
-            while line.ask("blockchain.headers.get_tip")["height"] < tip and time.monotonic() < started + 600:
+        for line in (peers, node):
+            mined_ok = synced(line, tip, 300) and mined_ok
+            until = time.monotonic() + 60
+            while last_step(line) != {"tx_hash": burn, "height": tip, "source": "chain"} and time.monotonic() < until:
                 time.sleep(1)
-            last = line.ask("kth.identity.resolve", other_base)["chain"][-1]
-            mined_ok = mined_ok and last == {"tx_hash": burn, "height": tip, "source": "chain"}
+            mined_ok = mined_ok and last_step(line) == {"tx_hash": burn, "height": tip, "source": "chain"}
         seen["burn mined"] = mined_ok
         peers.close()
         node.close()
