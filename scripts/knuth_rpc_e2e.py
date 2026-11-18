@@ -4585,7 +4585,7 @@ def fulcrum_parity(wallet, data: Path, output: list, targets: dict, t1: str, t2:
             "kth node filter checkpoints": sum(int(x) for x in subprocess.run(
                 ["docker", "exec", "kth", "sh", "-c", "cat /data/e2e/*filter_checkpoints | wc -c"],
                 capture_output=True, text=True).stdout.split() or ["-1"]),
-            "kth-wallet store (headers and filters)": du(str(data / "regtest")),
+            "kth-wallet store (headers and filters)": du(str(data / "Regtest")),
         }
         seen["bytes"] = {"kth-wallet received from peers (filters, blocks, headers, relay)": status.get("bytes_received"),
                          "kth-wallet sent to peers": status.get("bytes_sent"),
