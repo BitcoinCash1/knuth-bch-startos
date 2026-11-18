@@ -4571,7 +4571,7 @@ def fulcrum_parity(wallet, data: Path, output: list, targets: dict, t1: str, t2:
             latency.setdefault(name, []).append({"kth first ms": timings[0][0], "kth repeated ms": timings[0][1],
                                                  "fulcrum first ms": timings[1][0], "fulcrum repeated ms": timings[1][1]})
             if mine != theirs:
-                differences.append({"call": [name, *args], "kth": json.dumps(mine)[:400], "fulcrum": json.dumps(theirs)[:400]})
+                differences.append({"call": [name, *args], "kth": mine, "fulcrum": theirs})
         seen["compared calls"] = len(methods)
         seen["differences"] = differences
         seen["latency"] = latency
@@ -4631,8 +4631,11 @@ def fulcrum_parity(wallet, data: Path, output: list, targets: dict, t1: str, t2:
                 fulcrum.wait(timeout=30)
             except subprocess.TimeoutExpired:
                 fulcrum.kill()
+    # The row keeps a summary; every difference, whole, is in its own file.
+    (OUT / "row-1013.json").write_text(json.dumps(seen, indent=1))
     row(1013, client, "every compared Electrum call answers as Fulcrum answers on the same chain; latency, storage, "
-        "bytes and birthday sync are reported side by side", ok, seen)
+        "bytes and birthday sync are reported side by side", ok,
+        {**seen, "differences": [d["call"] for d in seen.get("differences", [])]})
 
 
 def rpa_read_tx_input0(data: bytes) -> bytes:
