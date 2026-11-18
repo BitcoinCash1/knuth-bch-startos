@@ -4392,7 +4392,7 @@ def deliberate(method: str, differences: list) -> tuple[list, list]:
 
 
 def parity(f: ElectrumClient, b: ElectrumClient, group: str, data: bool, method: str, *params,
-           repeat: bool = True, normal=None) -> tuple:
+           repeat: bool = True, normal=None, on_purpose: str | None = None) -> tuple:
     """Fulcrum and the bridge get the same call, twice each when `repeat`
     (the first answer and the one from what the first left behind). A `data`
     call must give the same answer, apart from the differences made on
@@ -4411,7 +4411,10 @@ def parity(f: ElectrumClient, b: ElectrumClient, group: str, data: bool, method:
     else:
         norm = normal or (lambda x: x)
         differences = json_diff(norm(fr), norm(br))
-    differences, on_purpose = deliberate(method, differences)
+    if on_purpose is not None:
+        differences, on_purpose = [], [f"{d} (on purpose: {on_purpose})" for d in differences]
+    else:
+        differences, on_purpose = deliberate(method, differences)
     RESULTS["parity"].append({
         "group": group, "method": method, "params": [p if not isinstance(p, str) or len(p) < 80 else p[:16] + "..."
                                                      for p in params],
@@ -4643,9 +4646,27 @@ def electrum_bridge_parity(s: dict) -> None:
                 "ms": {"fulcrum": [None if f_at is None else round((f_at - since) * 1000, 1), None],
                        "bridge": [None if b_at is None else round((b_at - since) * 1000, 1), None]}})
 
+        def bridge_height() -> int | None:
+            stats = b.call("light_client.stats")[0]
+            return stats.get("filter_height") if isinstance(stats, dict) else None
+
         # A double spend of a P2PKH coin: the first spend through BCHN's RPC,
-        # the second to BCHN over P2P, where BCHN makes a proof of it.
-        coin = new_coin()
+        # the second to BCHN over P2P, where BCHN makes a proof of it. The
+        # bridge checks a proof only against a coin it holds (a mempool
+        # transaction, a block it read as it came, a watched script) and
+        # fetches nothing for it, so this coin is from a new block; one from
+        # an older block follows below.
+        recent = cli("sendtoaddress", cli("getnewaddress"), "1.0")
+        cli("generatetoaddress", "1", wallet)
+        recent_height = int(cli("getblockcount"))
+        wait_kth_height(recent_height, 120)
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline and not (f.call("blockchain.block.header", recent_height)[1] is None
+                                                  and bridge_height() == recent_height):
+            time.sleep(0.2)
+        coin = next(u for u in json.loads(cli("listunspent", "1"))
+                    if u["txid"] == recent and abs(u["amount"] - 1.0) < 1e-9)
+        cli("lockunspent", "false", json.dumps([{"txid": coin["txid"], "vout": coin["vout"]}]))
         first_hex, second_hex = spend(coin, cli("getnewaddress")), spend(coin, cli("getnewaddress"), 0.002)
         first_id = sha256d(bytes.fromhex(first_hex))[::-1].hex()
         for server in (sf, sb):
@@ -4676,6 +4697,34 @@ def electrum_bridge_parity(s: dict) -> None:
         parity(f, b, "double-spend proof", True, "blockchain.transaction.dsproof.get", first)
         parity(f, b, "double-spend proof", True, "blockchain.transaction.dsproof.list")
         subscription_parity("the proof arrives", "blockchain.transaction.dsproof.subscribe", first_id, started, 30)
+
+        # The same with a coin from an older block, which the bridge does not
+        # hold: Fulcrum shows BCHN's proof, the bridge none.
+        old = next(u for u in json.loads(cli("listunspent", "30"))
+                   if u["scriptPubKey"].startswith("76a914") and u["amount"] >= 1 and u["spendable"]
+                   and "tokenData" not in u)
+        cli("lockunspent", "false", json.dumps([{"txid": old["txid"], "vout": old["vout"]}]))
+        old_first_hex, old_second_hex = spend(old, cli("getnewaddress")), spend(old, cli("getnewaddress"), 0.002)
+        old_first = cli("sendrawtransaction", old_first_hex)
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and not all(
+                server.call("blockchain.transaction.get", old_first)[1] is None for server in (f, b)):
+            time.sleep(0.5)
+        bchn_peer = LightPeer(18444)
+        bchn_peer.send(b"tx", bytes.fromhex(old_second_hex))
+        time.sleep(2)
+        bchn_peer.close()
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and not f.call("blockchain.transaction.dsproof.get", old_first)[0]:
+            time.sleep(0.5)
+        time.sleep(5)
+        seen["double-spend proof of an older coin"] = {
+            "confirmations": old["confirmations"],
+            "Fulcrum": bool(f.call("blockchain.transaction.dsproof.get", old_first)[0]),
+            "bridge": bool(b.call("blockchain.transaction.dsproof.get", old_first)[0])}
+        parity(f, b, "double-spend proof: an older coin", True, "blockchain.transaction.dsproof.get", old_first,
+               on_purpose="the bridge checks a proof only against a coin it holds, and fetching the coin "
+                          "would tell a peer which payment the wallet watches")
         stats = b.call("light_client.stats")[0]
         seen["bridge peers"] = stats.get("peers") if isinstance(stats, dict) else None
 
