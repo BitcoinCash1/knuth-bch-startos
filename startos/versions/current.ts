@@ -8,10 +8,11 @@ import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 const ALLOW_DOWNGRADE = false
 
 export const current = VersionInfo.of({
-  version: '1.7.0:1',
+  version: '1.7.0:1.1',
   releaseNotes:
-    'Upstream v1.7.0. Tempnet is removed: it ended on 15 November 2026, when ' +
-    'its tests moved to chipnet.',
+    'TEST ONLY: package 1.7.0:1 with kth-jd built from CyberAshven/kth 8582780e ' +
+    '(kth 1.7.0 with the Job Declaration, coinbase tag and the open PRs), ' +
+    'reported as 1.7.0, and Node Settings -> Coinbase Tag.',
   migrations: {
     up: async () => {},
     down: ALLOW_DOWNGRADE ? async () => {} : IMPOSSIBLE,

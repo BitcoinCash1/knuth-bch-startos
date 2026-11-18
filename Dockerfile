@@ -14,6 +14,8 @@
 # profile published on packages.kth.cash.
 # kth refuses GCC older than 16.2 (k-nuth/kth#865): the GCC 16.2.0 toolchain image.
 ARG TOOLCHAIN=kthnode/gcc16-ubuntu24.04@sha256:cde0d8a8b911ba290e4019fa4fac81723c7cae93cd864e509fd93a7c05d25dfe
+# TEST ONLY: the Job Declaration build uses the same GCC 16.2 image.
+ARG TOOLCHAIN_JD=kthnode/gcc16-ubuntu24.04@sha256:cde0d8a8b911ba290e4019fa4fac81723c7cae93cd864e509fd93a7c05d25dfe
 
 # The official toolchain images are linux/amd64 only. Packing aarch64 and
 # riscv64 s9pks reuses this image; StartOS runs it under qemu (emulateMissing).
@@ -49,6 +51,35 @@ RUN conan profile detect --force \
       -o "boost/*:without_stacktrace_backtrace=True" \
       -s compiler.cppstd=23
 
+# ── Job Declaration build (TEST ONLY) ───────────────────────────────
+# TEST ONLY, Job Declaration client with failover (k-nuth/kth#832, #833, #834, #881) on chipnet against the BCH P2Pool pool.
+FROM --platform=linux/amd64 ${TOOLCHAIN_JD} AS kth-jd-build
+
+ARG JD_COMMIT=8582780e
+ARG CURRENCY=BCH
+
+RUN pip install --no-cache-dir --upgrade "conan>=2.25,<3" "kthbuild>=4,<5"
+
+WORKDIR /src/kth
+RUN git clone --branch test/coinbase-tag --single-branch https://github.com/CyberAshven/kth.git . \
+ && git checkout --detach ${JD_COMMIT}
+
+RUN conan profile detect --force \
+ && conan remote add kth https://packages.kth.cash/api/ --force \
+ && conan install conanfile.py --version 1.7.0 -of build --build=missing \
+      -o "kth/*:currency=${CURRENCY}" \
+      -o "kth/*:rpc=jsonrpc" \
+      -o "kth/*:tests=False" \
+      -o "utxoz/*:with_tests=False" \
+      -o "utxoz/*:with_benchmarks=False" \
+      -o "utxoz/*:with_large_benchmarks=False" \
+      -s compiler.cppstd=23 \
+ && cmake --preset conan-release -DGLOBAL_BUILD=ON -DCMAKE_BUILD_TYPE=Release \
+ && cmake --build --preset conan-release --target node-exe \
+ && find build -type f -path '*/node-exe/*' -name kth -executable \
+      -exec install -Dm755 {} /out/kth-jd \; \
+ && test -x /out/kth-jd
+
 # ── Runtime ─────────────────────────────────────────────────────────
 FROM --platform=linux/amd64 ubuntu:24.04
 
@@ -61,11 +92,14 @@ RUN apt-get update && \
 
 # The node is compiled with GCC 16.2; ship its C++ runtime so the image does not
 # depend on the base distro's older libstdc++ / libgcc ABI.
-COPY --from=kth-build /usr/local/lib64/libstdc++.so.6* /opt/kth/lib/
-COPY --from=kth-build /usr/local/lib64/libgcc_s.so.1*  /opt/kth/lib/
+# TEST ONLY: this package runs kth-jd, so it compiles kth once; the kth-build
+# stage is unused and skipped.
+COPY --from=kth-jd-build /usr/local/lib64/libstdc++.so.6* /opt/kth/lib/
+COPY --from=kth-jd-build /usr/local/lib64/libgcc_s.so.1*  /opt/kth/lib/
 RUN echo /opt/kth/lib > /etc/ld.so.conf.d/kth.conf && ldconfig
 
-COPY --from=kth-build /deploy/direct_deploy/kth/bin/kth /usr/local/bin/kth
+COPY --from=kth-jd-build /out/kth-jd /usr/local/bin/kth
+COPY --from=kth-jd-build /out/kth-jd /usr/local/bin/kth-jd
 
 WORKDIR /data
 VOLUME /data

@@ -63,5 +63,32 @@ export const setInterfaces = sdk.setupInterfaces(async ({ effects }) => {
     receipts.push(await rpcOrigin.export([rpc]))
   }
 
+  // TEST ONLY, Job Declaration client (k-nuth/kth#832, #834) on chipnet
+  // against the BCH P2Pool pool. Same raw TCP shape as the peer interface.
+  if (network === 'chipnet') {
+    const sv2Port = 3335
+    const sv2Multi = sdk.MultiHost.of(effects, 'sv2')
+    const sv2Origin = await sv2Multi.bindPort(sv2Port, {
+      protocol: null,
+      preferredExternalPort: sv2Port,
+      addSsl: null,
+      secure: { ssl: false },
+    })
+    const sv2 = sdk.createInterface(effects, {
+      name: i18n('Stratum V2 (test)'),
+      id: 'sv2',
+      description: i18n(
+        'Stratum V2 listener for the chipnet Job Declaration test',
+      ),
+      type: 'p2p',
+      masked: false,
+      schemeOverride: { ssl: null, noSsl: null },
+      username: null,
+      path: '',
+      query: {},
+    })
+    receipts.push(await sv2Origin.export([sv2]))
+  }
+
   return receipts
 })

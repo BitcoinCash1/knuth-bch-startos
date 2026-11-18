@@ -236,4 +236,19 @@ export const fullConfigSpec = sdk.InputSpec.of({
     ),
     default: false,
   }),
+  coinbaseTag: sdk.Value.text({
+    name: i18n('Coinbase Tag'),
+    description: i18n(
+      'Text written into the coinbase of every block this node mines, right after the block height, where pools name their blocks (for example /YourName/). At most 40 characters; empty writes nothing. Applies when the node mines through its Stratum V2 port.',
+    ),
+    required: false,
+    default: null,
+    maxLength: 40,
+    patterns: [
+      {
+        regex: '^[ -~]*$',
+        description: i18n('Printable ASCII only: letters, digits, spaces and symbols.'),
+      },
+    ],
+  }),
 })

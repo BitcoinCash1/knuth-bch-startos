@@ -197,6 +197,13 @@ const dict = {
   'Unable to verify synchronization — enable JSON-RPC (${netLabel})': 181,
   'Waiting for current peer status (${netLabel})': 182,
   'Waiting for a readable validated block tip (${netLabel})': 183,
+  // interfaces.ts — TEST ONLY chipnet Stratum V2
+  'Stratum V2 (test)': 186,
+  'Stratum V2 listener for the chipnet Job Declaration test': 187,
+  // actions/configure.ts (coinbase tag)
+  'Coinbase Tag': 188,
+  'Text written into the coinbase of every block this node mines, right after the block height, where pools name their blocks (for example /YourName/). At most 40 characters; empty writes nothing. Applies when the node mines through its Stratum V2 port.': 189,
+  'Printable ASCII only: letters, digits, spaces and symbols.': 190,
 } as const
 
 /**

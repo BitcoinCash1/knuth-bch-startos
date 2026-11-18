@@ -11,6 +11,8 @@ export const shape = z.object({
   ipcEnabled: z.boolean().catch(true),
   utxozEnabled: z.boolean().catch(true),
   torEnabled: z.boolean().catch(false),
+  // TEST ONLY default: the chipnet JD node's own tag.
+  coinbaseTag: z.string().catch('/CyberAshven Knuth/'),
   rpcEnabled: z.boolean().catch(false),
   rpcUser: z.string().catch(''),
   rpcPassword: z.string().catch(''),

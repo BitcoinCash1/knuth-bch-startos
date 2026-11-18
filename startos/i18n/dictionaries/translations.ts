@@ -182,6 +182,12 @@ export default {
     181: 'No se puede verificar la sincronización: activa JSON-RPC (${netLabel})',
     182: 'Esperando el estado actual de los pares (${netLabel})',
     183: 'Esperando una punta de cadena validada que se pueda consultar (${netLabel})',
+    // TEST ONLY chipnet Stratum V2; kept in English.
+    186: 'Stratum V2 (test)',
+    187: 'Stratum V2 listener for the chipnet Job Declaration test',
+    188: 'Etiqueta de coinbase',
+    189: 'Texto que se escribe en la coinbase de cada bloque que mina este nodo, justo después de la altura del bloque, donde los pools firman sus bloques (por ejemplo /TuNombre/). Como máximo 40 caracteres; vacío no escribe nada. Se aplica cuando el nodo mina por su puerto Stratum V2.',
+    190: 'Solo ASCII imprimible: letras, dígitos, espacios y símbolos.',
   },
   de_DE: {
     0: 'Knuth wird gestartet!',
@@ -364,6 +370,12 @@ export default {
     181: 'Synchronisierung nicht prüfbar – JSON-RPC aktivieren (${netLabel})',
     182: 'Warte auf den aktuellen Peer-Status (${netLabel})',
     183: 'Warte auf eine lesbare validierte Kettenspitze (${netLabel})',
+    // TEST ONLY chipnet Stratum V2; kept in English.
+    186: 'Stratum V2 (test)',
+    187: 'Stratum V2 listener for the chipnet Job Declaration test',
+    188: 'Coinbase-Tag',
+    189: 'Text, der in die Coinbase jedes Blocks geschrieben wird, den dieser Node mint, direkt nach der Blockhöhe, wo Pools ihre Blöcke kennzeichnen (zum Beispiel /DeinName/). Höchstens 40 Zeichen; leer schreibt nichts. Gilt, wenn der Node über seinen Stratum-V2-Port mint.',
+    190: 'Nur druckbares ASCII: Buchstaben, Ziffern, Leerzeichen und Symbole.',
   },
   pl_PL: {
     0: 'Uruchamianie Knuth!',
@@ -546,6 +558,12 @@ export default {
     181: 'Nie można sprawdzić synchronizacji — włącz JSON-RPC (${netLabel})',
     182: 'Oczekiwanie na aktualny stan węzłów (${netLabel})',
     183: 'Oczekiwanie na dostępny zweryfikowany szczyt łańcucha (${netLabel})',
+    // TEST ONLY chipnet Stratum V2; kept in English.
+    186: 'Stratum V2 (test)',
+    187: 'Stratum V2 listener for the chipnet Job Declaration test',
+    188: 'Znacznik coinbase',
+    189: 'Tekst zapisywany w coinbase każdego bloku wydobytego przez ten węzeł, zaraz po wysokości bloku, gdzie pule podpisują swoje bloki (na przykład /TwojaNazwa/). Najwyżej 40 znaków; puste nie zapisuje nic. Działa, gdy węzeł kopie przez swój port Stratum V2.',
+    190: 'Tylko drukowalne ASCII: litery, cyfry, spacje i symbole.',
   },
   fr_FR: {
     0: 'Démarrage de Knuth !',
@@ -728,5 +746,11 @@ export default {
     181: 'Synchronisation invérifiable — activez JSON-RPC (${netLabel})',
     182: 'En attente de l’état actuel des pairs (${netLabel})',
     183: 'En attente d’un sommet de chaîne validé et consultable (${netLabel})',
+    // TEST ONLY chipnet Stratum V2; kept in English.
+    186: 'Stratum V2 (test)',
+    187: 'Stratum V2 listener for the chipnet Job Declaration test',
+    188: 'Étiquette coinbase',
+    189: "Texte écrit dans la coinbase de chaque bloc miné par ce nœud, juste après la hauteur du bloc, là où les pools signent leurs blocs (par exemple /VotreNom/). 40 caractères au maximum ; vide n'écrit rien. S'applique quand le nœud mine par son port Stratum V2.",
+    190: 'ASCII imprimable uniquement : lettres, chiffres, espaces et symboles.',
   },
 } satisfies Record<string, LangDict>
