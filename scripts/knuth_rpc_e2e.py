@@ -2742,7 +2742,7 @@ def rows(s: dict) -> None:
                   row21_template_provider, row23_template_flow, row22_noise, pr803_outbound_proxy,
                   shv_light_client, compact_filter_light_client, neutrino_wallet_client,
                   script_filter_light_client, explorer_p2p_client, vault_wallet_filters, rpa_wallet_filters,
-                  wallet_from_peers,
+                  wallet_from_peers, token_identity_wallet,
                   bloom_filter_light_client, i2p_second_node, serve_second_node, announce_second_node,
                   compact_blocks_both_ways, row24_mining_protocol, pr874_long_polling):
         try:
@@ -4636,6 +4636,310 @@ def fulcrum_parity(wallet, data: Path, output: list, targets: dict, t1: str, t2:
     row(1013, client, "every compared Electrum call answers as Fulcrum answers on the same chain; latency, storage, "
         "bytes and birthday sync are reported side by side", ok,
         {**seen, "differences": [d["call"] for d in seen.get("differences", [])]})
+
+
+def token_identity_wallet(s: dict) -> None:
+    """CashTokens and BCMR in kth's wallet support, with no index (row 1014).
+    BCHN makes a token category whose identity output carries a minting NFT
+    with a reserved amount, fungible tokens, a mutable and an immutable NFT;
+    moves some fungible tokens and burns the rest of them and the mutable
+    NFT; mints another NFT while it publishes BCMR on the authchain; updates
+    the publication (the second update with a second, ignored publication
+    output); and burns a second identity, first in the mempool, then mined.
+    The category's genesis, unspent outputs, supply, holders and NFTs, a
+    holder's tokens, and each identity's authchain, burned flag and
+    publication must equal what BCHN's own blocks and mempool show, answered
+    by kth-wallet from peers and by the node from its own chain (both through
+    kth's own Electrum methods); a registry's authchain extension must give
+    the same chain and a diverged one be refused; and no message kth-wallet
+    sent may name the category or a locking script involved."""
+    client = "CashTokens and BCMR in kth's wallet support (category leaves, identity outputs followed spend by spend)"
+    if not WALLET_BIN or not WALLET_IMAGE or not SCRIPT_FILTERS:
+        return
+    seen: dict = {}
+    ok = False
+    process = None
+    data = Path("/tmp/kth-wallet-tokens")
+    fee = 5_000
+
+    def lock(n: int) -> tuple[bytes, bytes]:
+        # P2SH32 of OP_n: anyone spends it by pushing the redeem script.
+        redeem = bytes([0x50 + n])
+        return redeem, b"\xaa\x20" + sha256d(redeem) + b"\x87"
+
+    def token(category: bytes, amount: int = 0, nft: tuple | None = None) -> bytes:
+        bits, body = 0, b""
+        if nft is not None:
+            capability, commitment = nft
+            bits |= 0x20 | capability
+            if commitment:
+                bits |= 0x40
+                body += compact_size(len(commitment)) + commitment
+        if amount:
+            bits |= 0x10
+            body += compact_size(amount)
+        return b"\xef" + category + bytes([bits]) + body
+
+    def raw_tx(inputs: list, outputs: list) -> str:
+        out = struct.pack("<I", 2) + compact_size(len(inputs))
+        for txid, n, script_sig in inputs:
+            out += (bytes.fromhex(txid)[::-1] + struct.pack("<I", n) + compact_size(len(script_sig)) + script_sig
+                    + b"\xff\xff\xff\xff")
+        out += compact_size(len(outputs))
+        for value, body in outputs:
+            out += struct.pack("<Q", value) + compact_size(len(body)) + body
+        return (out + struct.pack("<I", 0)).hex()
+
+    def signed(hex_tx: str) -> str:
+        result = json.loads(cli("signrawtransactionwithwallet", hex_tx))
+        if not result.get("complete"):
+            raise ValueError(f"the wallet did not sign: {json.dumps(result.get('errors'))[:200]}")
+        return result["hex"]
+
+    def mine() -> None:
+        cli("generatetoaddress", "1", s["addr"])
+
+    def bcmr(digest: bytes, uris: list) -> bytes:
+        out = b"\x6a\x04BCMR" + push(digest)
+        for uri in uris:
+            out += push(uri.encode())
+        return out
+
+    def wallet_script() -> bytes:
+        return bytes.fromhex(call(BCHN, "validateaddress", cli("getnewaddress"))[0]["scriptPubKey"])
+
+    try:
+        # The authbase: a wallet payment whose output 0 the genesis spends.
+        coin = max(json.loads(cli("listunspent", "1")), key=lambda u: u["amount"])
+        coin_sats = round(coin["amount"] * 100_000_000)
+        base_value = coin_sats - fee
+        base = cli("sendrawtransaction", signed(cli(
+            "createrawtransaction", json.dumps([{"txid": coin["txid"], "vout": coin["vout"]}]),
+            json.dumps({cli("getnewaddress"): round(base_value / 100_000_000, 8)}))))
+        mine()
+        category = bytes.fromhex(base)[::-1]
+        r = {n: lock(n) for n in range(2, 14)}
+        genesis = cli("sendrawtransaction", signed(raw_tx([(base, 0, b"")], [
+            (10_000, token(category, 50, (2, b"")) + r[2][1]),
+            (10_000, token(category, 1000) + r[3][1]),
+            (10_000, token(category, 0, (1, b"\x01")) + r[4][1]),
+            (10_000, token(category, 0, (0, b"\x02")) + r[5][1]),
+            (base_value - 40_000 - fee, wallet_script())])))
+        mine()
+        moved = cli("sendrawtransaction", raw_tx([(genesis, 1, push(r[3][0])), (genesis, 2, push(r[4][0]))], [
+            (7_000, token(category, 600) + r[6][1]),
+            (7_000, token(category, 300) + r[7][1])]))
+        mine()
+        first_registry = b'{"name":"first"}'
+        second_registry = b'{"name":"second"}'
+        first = cli("sendrawtransaction", raw_tx([(genesis, 0, push(r[2][0]))], [
+            (4_000, token(category, 50, (2, b"")) + r[8][1]),
+            (0, bcmr(hashlib.sha256(first_registry).digest(), ["example.test/first.json"])),
+            (4_000, token(category, 0, (0, b"\x03")) + r[9][1])]))
+        mine()
+        second = cli("sendrawtransaction", raw_tx([(first, 0, push(r[8][0]))], [
+            (2_500, token(category, 50, (2, b"")) + r[10][1]),
+            (0, bcmr(hashlib.sha256(second_registry).digest(), ["example.test/second.json", "ipfs://bafysecond"])),
+            (0, bcmr(hashlib.sha256(b"ignored").digest(), ["example.test/ignored.json"]))]))
+        mine()
+        # A second identity, burned in the mempool.
+        coin = max(json.loads(cli("listunspent", "1")), key=lambda u: u["amount"])
+        coin_sats = round(coin["amount"] * 100_000_000)
+        other_base = cli("sendrawtransaction", signed(raw_tx([(coin["txid"], coin["vout"], b"")], [
+            (20_000, r[11][1]), (coin_sats - 20_000 - fee, wallet_script())])))
+        mine()
+        other_step = cli("sendrawtransaction", raw_tx([(other_base, 0, push(r[11][0]))], [(15_000, r[12][1])]))
+        mine()
+        burn = cli("sendrawtransaction", raw_tx([(other_step, 0, push(r[12][0]))], [(0, b"\x6a"), (10_000, r[13][1])]))
+        tip = int(cli("getblockcount"))
+
+        # What BCHN's own blocks and mempool show.
+        def outputs_of(tx: dict) -> list:
+            return tx["vout"]
+
+        spender: dict = {}
+        txs: dict = {}
+        heights: dict = {}
+        for h in range(tip + 1):
+            block = call(BCHN, "getblock", call(BCHN, "getblockhash", h)[0], 2)[0]
+            for tx in block["tx"]:
+                txs[tx["txid"]] = tx
+                heights[tx["txid"]] = h
+                for vin in tx["vin"]:
+                    if "txid" in vin:
+                        spender[(vin["txid"], vin["vout"])] = tx["txid"]
+        for txid in json.loads(cli("getrawmempool")):
+            tx = call(BCHN, "getrawtransaction", txid, 1)[0]
+            txs[txid] = tx
+            for vin in tx["vin"]:
+                spender[(vin["txid"], vin["vout"])] = txid
+        category_hex = base
+        unspent = []
+        for txid, tx in txs.items():
+            for out in outputs_of(tx):
+                token_data = out.get("tokenData")
+                if token_data and token_data["category"] == category_hex and (txid, out["n"]) not in spender:
+                    unspent.append((txid, out["n"], int(token_data.get("amount", "0")), token_data.get("nft"),
+                                    out["scriptPubKey"]["hex"], txid in heights))
+        confirmed = [u for u in unspent if u[5]]
+        total = sum(u[2] for u in confirmed)
+        reserved = sum(u[2] for u in confirmed if u[3] and u[3].get("capability") in ("minting", "mutable"))
+        reference_category = {
+            "genesis": spender[(base, 0)],
+            "supply": {"total": str(total), "reserved": str(reserved), "circulating": str(total - reserved)},
+            "holders": len({u[4] for u in unspent}),
+            "nfts": sum(1 for u in unspent if u[3]),
+            "unspent": sorted([u[0], u[1]] for u in unspent),
+        }
+
+        def authchain(start: str) -> dict:
+            chain = [start]
+            while (chain[-1], 0) in spender:
+                chain.append(spender[(chain[-1], 0)])
+            head = txs[chain[-1]]
+            publications = [out for out in outputs_of(head) if out["scriptPubKey"]["hex"].startswith("6a0442434d52")]
+            first_out = publications[0]["scriptPubKey"]["hex"] if publications else None
+            return {"chain": chain, "burned": outputs_of(head)[0]["scriptPubKey"]["hex"].startswith("6a"),
+                    "hash": first_out[14:78] if first_out else None, "ignored": max(0, len(publications) - 1)}
+
+        reference_identity = authchain(base)
+        reference_burned = authchain(other_base)
+        seen["reference"] = {"category": {k: v for k, v in reference_category.items() if k != "unspent"},
+                             "identity": reference_identity["chain"], "burned": reference_burned["chain"]}
+
+        def answers(line) -> dict:
+            got = line.ask("kth.token.category", category_hex)
+            identity = line.ask("kth.identity.resolve", base)
+            burned = line.ask("kth.identity.resolve", other_base)
+            holder = hashlib.sha256(r[6][1]).digest()[::-1].hex()
+            return {
+                "category": {"genesis": (got.get("genesis") or {}).get("tx_hash"), "supply": got["supply"],
+                             "holders": got["holders"], "nfts": got["nfts"],
+                             "unspent": sorted([u["tx_hash"], u["tx_pos"]] for u in got["unspent"])},
+                "identity": {"chain": [x["tx_hash"] for x in identity["chain"]], "burned": identity["burned"],
+                             "hash": (identity.get("publication") or {}).get("hash"),
+                             "uris": (identity.get("publication") or {}).get("uris"),
+                             "ignored": len(identity["ignored"])},
+                "burned": {"chain": [x["tx_hash"] for x in burned["chain"]], "burned": burned["burned"],
+                           "last source": burned["chain"][-1]["source"]},
+                "holdings": line.ask("kth.token.holdings", holder),
+                "listunspent": line.ask("blockchain.scripthash.listunspent", holder, "tokens_only"),
+                "extension": [x["tx_hash"] for x in line.ask(
+                    "kth.identity.resolve", base, call(BCHN, "getrawtransaction", base)[0],
+                    call(BCHN, "getrawtransaction", genesis)[0])["chain"]],
+                "diverged": line.answer("kth.identity.resolve", base, call(BCHN, "getrawtransaction", base)[0],
+                                        call(BCHN, "getrawtransaction", moved)[0]),
+            }
+
+        expected_identity = {"chain": reference_identity["chain"], "burned": False,
+                             "hash": hashlib.sha256(second_registry).hexdigest(),
+                             "uris": ["example.test/second.json", "ipfs://bafysecond"], "ignored": 1}
+
+        def matches(got: dict) -> dict:
+            return {
+                "category": got["category"] == reference_category,
+                "identity": got["identity"] == expected_identity and reference_identity["hash"] == expected_identity["hash"],
+                "burned in the mempool": got["burned"] == {"chain": reference_burned["chain"], "burned": True,
+                                                           "last source": "mempool"},
+                "holdings": got["holdings"] == [{"category": category_hex, "amount": "600", "nfts": 0}],
+                "listunspent": [(u["tx_hash"], u["tx_pos"], u["token_data"]) for u in got["listunspent"]]
+                == [(moved, 0, {"category": category_hex, "amount": "600"})],
+                "extension": got["extension"] == reference_identity["chain"],
+                "diverged refused": "error" in got["diverged"],
+            }
+
+        # The peer path: kth-wallet, from a fresh store.
+        subprocess.run(["sudo", "rm", "-rf", str(data)], capture_output=True)
+        data.mkdir(parents=True, exist_ok=True)
+        source = Path("kth-src").resolve()
+        binary = "/src/" + str(Path(WALLET_BIN).resolve().relative_to(source))
+        process = subprocess.Popen(
+            ["docker", "run", "--rm", "--name", "kth-wallet-tokens", "--network", "host", "--platform", "linux/amd64",
+             "-v", f"{source}:/src:ro", "-v", f"{data}:/data", WALLET_IMAGE, binary,
+             "--network", "regtest", "--directory", "/data", "--peer", f"127.0.0.1:{KTH_P2P_PORT}",
+             "--peer", "127.0.0.1:18444", "--electrum", "127.0.0.1:0", "--sent-log", "/data/sent.log"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        port = None
+        deadline = time.monotonic() + 180
+        while port is None and time.monotonic() < deadline:
+            line = process.stdout.readline()
+            if not line:
+                break
+            if line.startswith("electrum "):
+                port = int(line.split()[1])
+        if port is None:
+            raise ValueError("kth-wallet did not report its Electrum port")
+        threading.Thread(target=lambda: [None for _ in process.stdout], daemon=True).start()
+        peers = ElectrumLine(port)
+        started = time.monotonic()
+        while peers.ask("blockchain.headers.get_tip")["height"] < tip and time.monotonic() < started + 600:
+            time.sleep(1)
+        # The burning transaction reaches kth-wallet's mempool copy by relay.
+        while time.monotonic() < started + 600:
+            if peers.ask("kth.identity.resolve", other_base)["chain"][-1]["tx_hash"] == burn:
+                break
+            time.sleep(1)
+        from_peers = answers(peers)
+        seen["peers"] = matches(from_peers)
+
+        # The node's own chain, through its own listener.
+        node = ElectrumLine(NODE_WALLET_PORT)
+        while node.ask("blockchain.headers.get_tip")["height"] < tip and time.monotonic() < started + 600:
+            time.sleep(1)
+        while time.monotonic() < started + 600:
+            if node.ask("kth.identity.resolve", other_base)["chain"][-1]["tx_hash"] == burn:
+                break
+            time.sleep(1)
+        from_node = answers(node)
+        seen["node"] = matches(from_node)
+        seen["node equals peers"] = from_node == from_peers
+
+        # Mined: the burn is confirmed, on both paths.
+        mine()
+        tip = int(cli("getblockcount"))
+        mined_ok = True
+        for name, line in (("peers", peers), ("node", node)):
+            while line.ask("blockchain.headers.get_tip")["height"] < tip and time.monotonic() < started + 600:
+                time.sleep(1)
+            last = line.ask("kth.identity.resolve", other_base)["chain"][-1]
+            mined_ok = mined_ok and last == {"tx_hash": burn, "height": tip, "source": "chain"}
+        seen["burn mined"] = mined_ok
+        peers.close()
+        node.close()
+
+        # Nothing sent names the category or a locking script involved.
+        secrets = {category.hex(), base, hashlib.sha256(b"\x01" + category).hexdigest()}
+        for n in range(2, 14):
+            secrets.add(r[n][1].hex())
+            secrets.add(hashlib.sha256(r[n][1]).hexdigest())
+        leaks = []
+        for line in (data / "sent.log").read_text().splitlines():
+            command, _, payload = line.partition(" ")
+            leaks += [f"{command} names {secret[:16]}" for secret in secrets if secret in payload]
+        seen["leaks"] = leaks[:10]
+        ok = (all(seen["peers"].values()) and all(seen["node"].values()) and seen["node equals peers"]
+              and mined_ok and not leaks)
+        if not ok:
+            seen["answers"] = {"peers": from_peers, "node": from_node, "expected category": reference_category}
+    except subprocess.CalledProcessError as error:
+        method = error.cmd[6] if len(error.cmd) > 6 else error.cmd
+        seen["error"] = f"{method}: {(error.stderr or '').strip()[:300]}"
+    except (OSError, ValueError, KeyError, IndexError, TypeError, StopIteration, subprocess.SubprocessError) as error:
+        seen["error"] = f"{type(error).__name__}: {error}"
+    finally:
+        subprocess.run(["docker", "stop", "-t", "15", "kth-wallet-tokens"], capture_output=True)
+        if process is not None:
+            try:
+                process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                process.kill()
+    (OUT / "row-1014.json").write_text(json.dumps(seen, indent=1))
+    row(1014, client, "BCHN makes a category (minting NFT with a reserved amount at the identity output, fungible "
+        "tokens, a mutable and an immutable NFT), moves and burns some, mints another NFT, publishes BCMR and updates "
+        "it twice, and burns a second identity: genesis, unspent outputs, supply, holders, a holder's tokens, the "
+        "authchains, burned flags and publications equal BCHN's blocks and mempool, from peers and from the node's "
+        "own chain; a registry's authchain extension gives the same chain, a diverged one is refused; nothing sent "
+        "names the category or a locking script", ok, seen)
 
 
 def rpa_read_tx_input0(data: bytes) -> bytes:
