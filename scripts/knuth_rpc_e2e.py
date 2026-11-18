@@ -4363,11 +4363,40 @@ def by_outpoint(rows):
                   if isinstance(r, dict) else (0, "", 0))
 
 
+# Where the bridge answers otherwise on purpose, and why. These are reported
+# with the call, apart from the differences that fail the row.
+DELIBERATE_DIFFERENCES = [
+    (re.compile(r"^\[\d+\]\.fee: Fulcrum only \(\d+\)$"),
+     "the fee of an unconfirmed transaction is left out unless the bridge already holds the coins it "
+     "spends: getting them would mean downloading for it, which tells a peer what the wallet watches"),
+]
+DELIBERATE_CALLS = {
+    "daemon.passthrough": "the bridge has no node RPC behind it",
+    "server.donation_address": "Fulcrum's default is its author's address; the bridge has none",
+    "server.banner": "the bridge's banner says it exists only for wallets that do not speak P2P",
+}
+
+
+def deliberate(method: str, differences: list) -> tuple[list, list]:
+    """The differences that fail a row, and those made on purpose (with why)."""
+    if differences and method in DELIBERATE_CALLS:
+        return [], [f"{d} (on purpose: {DELIBERATE_CALLS[method]})" for d in differences]
+    real, chosen = [], []
+    for d in differences:
+        reason = next((why for pattern, why in DELIBERATE_DIFFERENCES if pattern.match(d)), None)
+        if reason is None:
+            real.append(d)
+        else:
+            chosen.append(f"{d} (on purpose: {reason})")
+    return real, chosen
+
+
 def parity(f: ElectrumClient, b: ElectrumClient, group: str, data: bool, method: str, *params,
            repeat: bool = True, normal=None) -> tuple:
     """Fulcrum and the bridge get the same call, twice each when `repeat`
     (the first answer and the one from what the first left behind). A `data`
-    call must give the same answer; the others' differences are reported."""
+    call must give the same answer, apart from the differences made on
+    purpose (DELIBERATE_DIFFERENCES); the others' differences are reported."""
     fr, fe, f_first = f.call(method, *params)
     br, be, b_first = b.call(method, *params)
     f_again = f.call(method, *params)[2] if repeat else None
@@ -4382,10 +4411,11 @@ def parity(f: ElectrumClient, b: ElectrumClient, group: str, data: bool, method:
     else:
         norm = normal or (lambda x: x)
         differences = json_diff(norm(fr), norm(br))
+    differences, on_purpose = deliberate(method, differences)
     RESULTS["parity"].append({
         "group": group, "method": method, "params": [p if not isinstance(p, str) or len(p) < 80 else p[:16] + "..."
                                                      for p in params],
-        "data": data, "same": not differences, "differences": differences,
+        "data": data, "same": not differences, "differences": differences, "on_purpose": on_purpose,
         "fulcrum": json.dumps(fe if fe is not None else fr)[:600],
         "bridge": json.dumps(be if be is not None else br)[:600],
         "ms": {"fulcrum": [f_first, f_again], "bridge": [b_first, b_again]}})
@@ -4922,6 +4952,12 @@ def electrum_bridge_parity(s: dict) -> None:
         seen["calls"] = len(RESULTS["parity"])
         seen["data calls that differ"] = len(data_differences)
         seen["other calls that differ"] = sum(1 for r in RESULTS["parity"] if not r["data"] and not r["same"])
+        reasons: dict = {}
+        for r in RESULTS["parity"]:
+            for d in r.get("on_purpose") or []:
+                why = d[d.index("(on purpose: ") + 13:-1]
+                reasons[why] = reasons.get(why, 0) + 1
+        seen["differences on purpose (calls, why)"] = reasons
         ok = bool(seen["kth at the tip"] and all(seen["synced"].values())
                   and seen["relayed payments in both mempools"] and not data_differences)
     except subprocess.CalledProcessError as error:
@@ -4950,8 +4986,9 @@ def electrum_bridge_parity(s: dict) -> None:
         "chain, give the same answer to every data call (headers, each scripthash call for five scripts, raw "
         "transactions by ID alone with a fully spent one, Merkle proofs, IDs by position, unspent outputs, RPA "
         "searches over every 60-block window, RPA mempool, double-spend proofs, broadcasts) and the same "
-        "notifications (script, transaction, tip, double-spend proof); shapes, times, storage and downloads "
-        "are reported, and what a bridge on kth alone misses", ok, seen)
+        "notifications (script, transaction, tip, double-spend proof), apart from what the bridge leaves out "
+        "on purpose (an unconfirmed fee whose coins it does not hold, which would mean a download); shapes, "
+        "times, storage and downloads are reported, and what a bridge on kth alone misses", ok, seen)
 
 
 def report() -> str:
@@ -4985,9 +5022,9 @@ def report() -> str:
             params = json.dumps(r["params"])[:60].replace("|", "/")
             times = lambda v: "/".join("-" if t is None else str(t) for t in v)
             lines.append(f"| {r['group']} | `{r['method']}` | {params} | {'yes' if r['data'] else 'no'} | "
-                         f"**{'same' if r['same'] else 'differs'}** | {times(r['ms']['fulcrum'])} | "
-                         f"{times(r['ms']['bridge'])} | "
-                         f"{'; '.join(r['differences'])[:600].replace('|', '/')} |")
+                         f"**{'differs' if not r['same'] else 'on purpose' if r.get('on_purpose') else 'same'}** "
+                         f"| {times(r['ms']['fulcrum'])} | {times(r['ms']['bridge'])} | "
+                         f"{'; '.join(r['differences'] + (r.get('on_purpose') or []))[:600].replace('|', '/')} |")
         lines += ["", "### Row 1011 measurements", "", "```",
                   json.dumps(RESULTS.get("parity_measure"), indent=1), "```"]
     gaps = [r["call"] for r in RESULTS["methods"] if r["verdict"].startswith("GAP")]
