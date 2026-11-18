@@ -4421,7 +4421,8 @@ def electrum_bridge_parity(s: dict) -> None:
 
         def new_coin() -> dict:
             utxo = next(u for u in json.loads(cli("listunspent", "1"))
-                        if u["scriptPubKey"].startswith("76a914") and u["amount"] >= 1 and u["spendable"])
+                        if u["scriptPubKey"].startswith("76a914") and u["amount"] >= 1 and u["spendable"]
+                        and "tokenData" not in u)
             cli("lockunspent", "false", json.dumps([{"txid": utxo["txid"], "vout": utxo["vout"]}]))
             return utxo
 
@@ -4687,6 +4688,185 @@ def electrum_bridge_parity(s: dict) -> None:
         subscription_parity("a block", "blockchain.scripthash.subscribe", hashes["payee 0"], mined_at, 30)
         subscription_parity("a block", "blockchain.transaction.dsproof.subscribe", first_id, mined_at, 30)
 
+        # Row 1012: CashTokens and an identity (CHIP-BCMR), made with BCHN's
+        # wallet and mined by BCHN, read through the bridge on kth: Fulcrum's
+        # token answers must match, and the bridge's own light_client.*
+        # methods must give what BCHN's chain holds.
+        token_checks: list = []
+
+        def token_check(name: str, ok: bool, detail) -> None:
+            token_checks.append({"check": name, "ok": bool(ok), "detail": json.dumps(detail)[:400]})
+
+        def send_raw(inputs: list, outputs: list) -> str:
+            raw = cli("createrawtransaction", json.dumps(inputs), json.dumps(outputs))
+            signed = json.loads(cli("signrawtransactionwithwallet", raw))
+            return cli("sendrawtransaction", signed["hex"])
+
+        def token(category: str, amount: int = 0, capability: str | None = None, commitment: str = "") -> dict:
+            data: dict = {"category": category, "amount": str(amount)}
+            if capability is not None:
+                data["nft"] = {"capability": capability, "commitment": commitment}
+            return data
+
+        def to(address: str, data: dict | None = None, sats: int = 1000) -> dict:
+            value: dict = {"amount": round(sats / 1e8, 8)}
+            if data is not None:
+                value["tokenData"] = data
+            return {address: value}
+
+        def bcmr(registry: bytes, uri: str) -> dict:
+            return {"data": ["42434d52", hashlib.sha256(registry).hexdigest(), uri.encode().hex()]}
+
+        def mine_and_wait() -> int:
+            cli("generatetoaddress", "1", wallet)
+            height = int(cli("getblockcount"))
+            wait_kth_height(height, 120)
+            deadline = time.monotonic() + 120
+            while time.monotonic() < deadline:
+                stats = b.call("light_client.stats")[0]
+                if isinstance(stats, dict) and stats.get("filter_height") == height:
+                    break
+                time.sleep(0.2)
+            return height
+
+        def height_of(txid: str) -> int:
+            info = call(BCHN, "getrawtransaction", txid, True)[0]
+            return call(BCHN, "getblockheader", info["blockhash"], True)[0]["height"]
+
+        try:
+            # The authbase: a transaction with one output; its ID is the category.
+            coin = new_coin()
+            first = cli("getnewaddress")
+            authbase = send_raw([{"txid": coin["txid"], "vout": coin["vout"]}],
+                                [{first: round(coin["amount"] - 0.001, 8)}])
+            category = authbase
+            mine_and_wait()
+            base_value = int(round((coin["amount"] - 0.001) * 1e8))
+            minter, holder_a, holder_b, change = (cli("getnewaddress") for _ in range(4))
+            # Genesis: spends output 0 of the authbase: a minting NFT with all
+            # the fungible tokens, part sent on, and an immutable NFT.
+            genesis = send_raw([{"txid": authbase, "vout": 0}], [
+                to(minter, token(category, 1_000_000, "minting")),
+                to(holder_a, token(category, 250)),
+                to(holder_b, token(category, 0, "none", "c0ffee")),
+                {change: round((base_value - 3000 - 100_000) / 1e8, 8)},
+            ])
+            mine_and_wait()
+            # Update 1: the minting NFT (the identity output) mints a mutable
+            # NFT, keeps the identity at output 0, and publishes a registry.
+            registry_1 = b'{"name":"one"}'
+            minter_2, holder_c = cli("getnewaddress"), cli("getnewaddress")
+            fee_coin = new_coin()
+            update_1 = send_raw([{"txid": genesis, "vout": 0}, {"txid": fee_coin["txid"], "vout": fee_coin["vout"]}], [
+                to(minter_2, token(category, 999_000, "minting")),
+                bcmr(registry_1, "example.com"),
+                to(holder_c, token(category, 1000, "mutable", "01")),
+                {cli("getnewaddress"): round(fee_coin["amount"] - 0.001, 8)},
+            ])
+            mine_and_wait()
+            # Fungible tokens move, and 50 are burned (left out of the outputs).
+            holder_d = cli("getnewaddress")
+            fee_coin = new_coin()
+            move = send_raw([{"txid": genesis, "vout": 1}, {"txid": fee_coin["txid"], "vout": fee_coin["vout"]}], [
+                to(holder_d, token(category, 120)),
+                to(holder_a, token(category, 80)),
+                {cli("getnewaddress"): round(fee_coin["amount"] - 0.001, 8)},
+            ])
+            # Update 2, in the same block: another registry.
+            registry_2 = b'{"name":"two"}'
+            minter_3 = cli("getnewaddress")
+            fee_coin = new_coin()
+            update_2 = send_raw([{"txid": update_1, "vout": 0}, {"txid": fee_coin["txid"], "vout": fee_coin["vout"]}], [
+                to(minter_3, token(category, 999_000, "minting")),
+                bcmr(registry_2, "ipfs://two"),
+                {cli("getnewaddress"): round(fee_coin["amount"] - 0.001, 8)},
+            ])
+            tip_2 = mine_and_wait()
+
+            # BCHN's view: the category's unspent outputs.
+            outputs = {(genesis, 1): None, (genesis, 2): None, (update_1, 2): None, (move, 0): None,
+                       (move, 1): None, (update_2, 0): None}
+            unspent = {}
+            for (txid, n) in outputs:
+                out = cli("gettxout", txid, str(n))
+                if out not in ("", "null"):
+                    unspent[(txid, n)] = json.loads(out)
+            def amount(o) -> int:
+                return int(o.get("tokenData", {}).get("amount", "0"))
+            def capability(o):
+                return o.get("tokenData", {}).get("nft", {}).get("capability")
+            total = sum(amount(o) for o in unspent.values())
+            reserved = sum(amount(o) for o in unspent.values() if capability(o) in ("minting", "mutable"))
+            truth = {"total": str(total), "reserved": str(reserved), "circulating": str(total - reserved),
+                     "nfts": {"minting": sum(capability(o) == "minting" for o in unspent.values()),
+                              "mutable": sum(capability(o) == "mutable" for o in unspent.values()),
+                              "immutable": sum(capability(o) == "none" for o in unspent.values())}}
+            supply = b.call("light_client.token.supply", category)
+            got = supply[0] if supply[1] is None else supply[1]
+            token_check("light_client.token.supply: total, reserved, circulating and NFTs as BCHN's unspent outputs",
+                        isinstance(got, dict) and {k: got.get(k) for k in truth} == truth,
+                        {"bridge": {k: (got or {}).get(k) for k in truth} if isinstance(got, dict) else got,
+                         "BCHN": truth, "ms": supply[2]})
+            holders = len({o["scriptPubKey"]["hex"] for o in unspent.values()})
+            token_check("light_client.token.supply: one holder per locking script",
+                        isinstance(got, dict) and len(got.get("holders", [])) == holders,
+                        {"bridge": len(got.get("holders", [])) if isinstance(got, dict) else got, "BCHN": holders})
+            found = b.call("light_client.token.genesis", category)
+            token_check("light_client.token.genesis: the spender of the authbase's output 0",
+                        isinstance(found[0], dict) and found[0].get("tx_hash") == genesis
+                        and found[0].get("height") == height_of(genesis),
+                        {"bridge": found[0] if found[1] is None else found[1], "BCHN": [genesis, height_of(genesis)]})
+            # Fulcrum's token answers, for each holder: same as Fulcrum's.
+            for name, address in (("minter", minter_3), ("holder a", holder_a), ("holder b", holder_b),
+                                  ("holder d", holder_d)):
+                sh = hashlib.sha256(bytes.fromhex(call(BCHN, "validateaddress", address)[0]["scriptPubKey"])).digest()[::-1].hex()
+                parity(f, b, f"tokens: {name}", True, "blockchain.scripthash.listunspent", sh, "tokens_only",
+                       normal=by_outpoint)
+                parity(f, b, f"tokens: {name}", True, "blockchain.scripthash.get_balance", sh, "include_tokens")
+                balances = b.call("light_client.token.balances", sh)[0]
+                mine = [o for o in unspent.values() if o["scriptPubKey"]["hex"] ==
+                        call(BCHN, "validateaddress", address)[0]["scriptPubKey"]]
+                token_check(f"light_client.token.balances of {name}",
+                            isinstance(balances, list) and sum(int(x["amount"]) for x in balances) == sum(amount(o) for o in mine)
+                            and sum(len(x["nfts"]) for x in balances) == sum(1 for o in mine if capability(o)),
+                            {"bridge": balances, "BCHN": [o.get("tokenData") for o in mine]})
+
+            # The identity: authbase, genesis, update 1, update 2.
+            resolved = b.call("light_client.bcmr.resolve", authbase, height_of(authbase), True)
+            chain = resolved[0] if resolved[1] is None else resolved[1]
+            token_check("light_client.bcmr.resolve: the authhead and its registry after two updates",
+                        isinstance(chain, dict) and chain.get("authhead") == update_2 and chain.get("height") == tip_2
+                        and chain.get("burned") is False
+                        and chain.get("publication", {}).get("hash") == hashlib.sha256(registry_2).hexdigest()
+                        and chain.get("publication", {}).get("uris") == ["ipfs://two"]
+                        and [s_["tx_hash"] for s_ in chain.get("steps", [])][-3:] == [genesis, update_1, update_2],
+                        {"bridge": chain, "BCHN": [genesis, update_1, update_2]})
+            verified = b.call("light_client.bcmr.verify_registry", registry_2.hex(), hashlib.sha256(registry_2).hexdigest())[0]
+            refused = b.call("light_client.bcmr.verify_registry", registry_1.hex(), hashlib.sha256(registry_2).hexdigest())[0]
+            token_check("light_client.bcmr.verify_registry: the published hash, and not another registry's",
+                        verified is True and refused is False, [verified, refused])
+            extension = [call(BCHN, "getrawtransaction", t, False)[0] for t in (authbase, genesis)]
+            extended = b.call("light_client.bcmr.resolve_extension", authbase, extension)
+            token_check("light_client.bcmr.resolve_extension: from a registry's authchain to the same authhead",
+                        isinstance(extended[0], dict) and extended[0].get("authhead") == update_2,
+                        extended[0] if extended[1] is None else extended[1])
+            # The identity burned: output 0 is a data output.
+            fee_coin = new_coin()
+            burn = send_raw([{"txid": update_2, "vout": 0}, {"txid": fee_coin["txid"], "vout": fee_coin["vout"]}], [
+                {"data": ["6275726e"]},
+                to(cli("getnewaddress"), token(category, 999_000, "minting")),
+                {cli("getnewaddress"): round(fee_coin["amount"] - 0.001, 8)},
+            ])
+            mine_and_wait()
+            burned = b.call("light_client.bcmr.resolve", authbase, height_of(authbase))
+            chain = burned[0] if burned[1] is None else burned[1]
+            token_check("light_client.bcmr.resolve: a burned identity",
+                        isinstance(chain, dict) and chain.get("authhead") == burn and chain.get("burned") is True
+                        and chain.get("publication") is None, chain)
+        except (subprocess.CalledProcessError, OSError, ValueError, KeyError, TypeError, StopIteration) as error:
+            token_check("tokens and identity made and read", False, f"{type(error).__name__}: {error}")
+        RESULTS["tokens"] = token_checks
+
         # What it cost each side.
         latency: dict = {}
         for r in RESULTS["parity"]:
@@ -4759,6 +4939,13 @@ def electrum_bridge_parity(s: dict) -> None:
                 process.kill()
         (OUT / "bridge-parity.json").write_text(json.dumps({"seen": seen, "measure": measure,
                                                             "calls": RESULTS.get("parity", [])}, indent=1))
+    tokens = RESULTS.get("tokens") or []
+    row(1012, "Exchanges and wallets with tokens (bch-electrum-bridge on kth, BCHN a relay peer)",
+        "a category made, minted, moved, burned and published (BCMR) twice, then the identity burned, all by "
+        "BCHN: Fulcrum's token answers match, and the bridge's light_client.token.* and light_client.bcmr.* "
+        "give BCHN's supply, holders, genesis, authhead, registry and burn, with no index",
+        bool(tokens) and all(t["ok"] for t in tokens),
+        {t["check"]: t["ok"] if t["ok"] else t["detail"] for t in tokens})
     row(1011, client, "Fulcrum on BCHN and the bridge on kth (BCHN a relay peer), both synced to the same "
         "chain, give the same answer to every data call (headers, each scripthash call for five scripts, raw "
         "transactions by ID alone with a fully spent one, Merkle proofs, IDs by position, unspent outputs, RPA "
