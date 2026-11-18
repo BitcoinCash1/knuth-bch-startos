@@ -23,16 +23,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # A restart after returning to a branch, in UTXO-Z reference mode: the
+        # A restart after returning to a branch. In UTXO-Z reference mode the
         # undo scan refused the replayed records (status 7, duplicate_record)
         # and kth_node_test's deep reorganization cycle failed at its second
-        # restart. The fix in reference mode, upstream master in reference mode
-        # (the failure), and the fix in the default mode (nothing else moves).
-          - name: ref-undo-restart-reference
-            branch: test/ref-undo-restart
+        # restart; in both modes a block replayed into a later blk file kept an
+        # undo record the index reads from the wrong rev file. The fix (v2) in
+        # both modes; upstream master in reference mode; the new tests without
+        # the fix in both modes, which must fail; and a reproduction of undo
+        # entries written in another order on a replay, in the default mode.
+          - name: ref-undo-v2-reference
+            branch: test/ref-undo-restart-v2
             gcc: '16'
             blockchain: true
             reference: true
+            no_e2e: true
+          - name: ref-undo-v2-default
+            branch: test/ref-undo-restart-v2
+            gcc: '16'
+            blockchain: true
             no_e2e: true
           - name: ref-undo-master-reference
             branch: test/ref-undo-master
@@ -40,8 +48,19 @@ jobs:
             blockchain: true
             reference: true
             no_e2e: true
-          - name: ref-undo-restart-default
-            branch: test/ref-undo-restart
+          - name: ref-undo-tests-only-reference
+            branch: test/ref-undo-tests-only
+            gcc: '16'
+            blockchain: true
+            reference: true
+            no_e2e: true
+          - name: ref-undo-tests-only-default
+            branch: test/ref-undo-tests-only
+            gcc: '16'
+            blockchain: true
+            no_e2e: true
+          - name: undo-order-repro-default
+            branch: test/undo-order-repro
             gcc: '16'
             blockchain: true
             no_e2e: true
