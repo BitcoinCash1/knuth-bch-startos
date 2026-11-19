@@ -4651,9 +4651,8 @@ def electrum_bridge_parity(s: dict) -> None:
         # bridge checks a proof only against a coin it holds (a mempool
         # transaction, a block it read as it came, a watched script) and
         # fetches nothing for it, so this coin is an output of a mempool
-        # transaction; one from an older block follows the block for the
-        # subscriptions. No block is
-        # mined here: the block for the subscriptions comes later.
+        # transaction. No block is mined here: the block for the
+        # subscriptions comes later, and a coin from an older block after it.
         parent = cli("sendtoaddress", cli("getnewaddress"), "1.0")
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline and not all(
