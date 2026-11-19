@@ -4314,12 +4314,14 @@ def electrum_connect(port: int, seconds: float) -> ElectrumClient:
 
 def electrum_at_tip(client: ElectrumClient, tip: int, seconds: float, bridge: bool) -> float | None:
     """Seconds until the server is at `tip`: Fulcrum's header tip, or the
-    bridge's script filters and input prefix filters both."""
+    bridge's script filters, and its input prefix filters when it keeps
+    them (by default it does not: an RPA search reads its whole range)."""
     started = time.monotonic()
     while time.monotonic() - started < seconds:
         if bridge:
             stats = client.call("light_client.stats")[0]
-            if isinstance(stats, dict) and stats.get("filter_height") == tip and stats.get("rpa_height") == tip:
+            if (isinstance(stats, dict) and stats.get("filter_height") == tip
+                    and stats.get("rpa_height") in (None, tip)):
                 return round(time.monotonic() - started, 2)
         else:
             header = client.call("blockchain.headers.subscribe")[0]
