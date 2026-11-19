@@ -40,7 +40,7 @@ jobs:
             neutrino: true
             long: 2100
             parity: true
-            bridge_branch: rpa-and-dsproof
+            bridge_branch: privacy/defaults
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
