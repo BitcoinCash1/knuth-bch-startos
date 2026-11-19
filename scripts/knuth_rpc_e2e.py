@@ -4651,7 +4651,8 @@ def electrum_bridge_parity(s: dict) -> None:
         # bridge checks a proof only against a coin it holds (a mempool
         # transaction, a block it read as it came, a watched script) and
         # fetches nothing for it, so this coin is an output of a mempool
-        # transaction; one from an older block follows below. No block is
+        # transaction; one from an older block follows the block for the
+        # subscriptions. No block is
         # mined here: the block for the subscriptions comes later.
         parent = cli("sendtoaddress", cli("getnewaddress"), "1.0")
         deadline = time.monotonic() + 60
@@ -4692,41 +4693,6 @@ def electrum_bridge_parity(s: dict) -> None:
         parity(f, b, "double-spend proof", True, "blockchain.transaction.dsproof.list")
         subscription_parity("the proof arrives", "blockchain.transaction.dsproof.subscribe", first_id, started, 30)
 
-        # The same with a coin from an older block, of a script no wallet
-        # asked about, which the bridge does not hold: Fulcrum shows BCHN's
-        # proof, the bridge none.
-        watched = set(hashes.values())
-        old = next((u for u in json.loads(cli("listunspent", "30"))
-                    if u["scriptPubKey"].startswith("76a914") and u["amount"] >= 0.01 and u["spendable"]
-                    and "tokenData" not in u
-                    and hashlib.sha256(bytes.fromhex(u["scriptPubKey"])).digest()[::-1].hex() not in watched),
-                   None)
-        if old is None:
-            seen["double-spend proof of an older coin"] = "no older coin of an unwatched script in BCHN's wallet"
-        else:
-            cli("lockunspent", "false", json.dumps([{"txid": old["txid"], "vout": old["vout"]}]))
-            old_first_hex = spend(old, cli("getnewaddress"))
-            old_second_hex = spend(old, cli("getnewaddress"), 0.002)
-            old_first = cli("sendrawtransaction", old_first_hex)
-            deadline = time.monotonic() + 60
-            while time.monotonic() < deadline and not all(
-                    server.call("blockchain.transaction.get", old_first)[1] is None for server in (f, b)):
-                time.sleep(0.5)
-            bchn_peer = LightPeer(18444)
-            bchn_peer.send(b"tx", bytes.fromhex(old_second_hex))
-            time.sleep(2)
-            bchn_peer.close()
-            deadline = time.monotonic() + 60
-            while time.monotonic() < deadline and not f.call("blockchain.transaction.dsproof.get", old_first)[0]:
-                time.sleep(0.5)
-            time.sleep(5)
-            seen["double-spend proof of an older coin"] = {
-                "confirmations": old["confirmations"],
-                "Fulcrum": bool(f.call("blockchain.transaction.dsproof.get", old_first)[0]),
-                "bridge": bool(b.call("blockchain.transaction.dsproof.get", old_first)[0])}
-            parity(f, b, "double-spend proof: an older coin", True, "blockchain.transaction.dsproof.get",
-                   old_first, on_purpose="the bridge checks a proof only against a coin it holds, and "
-                                         "fetching the coin would tell a peer which payment the wallet watches")
         stats = b.call("light_client.stats")[0]
         seen["bridge peers"] = stats.get("peers") if isinstance(stats, dict) else None
 
@@ -4768,6 +4734,48 @@ def electrum_bridge_parity(s: dict) -> None:
         subscription_parity("a block", "blockchain.transaction.subscribe", m1, mined_at, 30)
         subscription_parity("a block", "blockchain.scripthash.subscribe", hashes["payee 0"], mined_at, 30)
         subscription_parity("a block", "blockchain.transaction.dsproof.subscribe", first_id, mined_at, 30)
+
+        # A double spend of a coin from an older block, of a script no wallet
+        # asked about: the bridge holds neither, and fetches nothing to check
+        # the proof, so Fulcrum shows BCHN's proof and the bridge none. The
+        # coin is made here, then buried under more blocks than the bridge
+        # keeps the outputs of (24).
+        old_txid = cli("sendtoaddress", cli("getnewaddress"), "1.0")
+        cli("generatetoaddress", "26", wallet)
+        old_height = int(cli("getblockcount"))
+        wait_kth_height(old_height, 180)
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            stats = b.call("light_client.stats")[0]
+            if (isinstance(stats, dict) and stats.get("filter_height") == old_height
+                    and f.call("blockchain.block.header", old_height)[1] is None):
+                break
+            time.sleep(0.5)
+        old = next(u for u in json.loads(cli("listunspent", "26"))
+                   if u["txid"] == old_txid and abs(u["amount"] - 1.0) < 1e-9)
+        cli("lockunspent", "false", json.dumps([{"txid": old["txid"], "vout": old["vout"]}]))
+        old_first_hex = spend(old, cli("getnewaddress"))
+        old_second_hex = spend(old, cli("getnewaddress"), 0.002)
+        old_first = cli("sendrawtransaction", old_first_hex)
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and not all(
+                server.call("blockchain.transaction.get", old_first)[1] is None for server in (f, b)):
+            time.sleep(0.5)
+        bchn_peer = LightPeer(18444)
+        bchn_peer.send(b"tx", bytes.fromhex(old_second_hex))
+        time.sleep(2)
+        bchn_peer.close()
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and not f.call("blockchain.transaction.dsproof.get", old_first)[0]:
+            time.sleep(0.5)
+        time.sleep(5)
+        seen["double-spend proof of an older coin"] = {
+            "confirmations": old["confirmations"],
+            "Fulcrum": bool(f.call("blockchain.transaction.dsproof.get", old_first)[0]),
+            "bridge": bool(b.call("blockchain.transaction.dsproof.get", old_first)[0])}
+        parity(f, b, "double-spend proof: an older coin", True, "blockchain.transaction.dsproof.get", old_first,
+               on_purpose="the bridge checks a proof only against a coin it holds, and fetching the coin "
+                          "would tell a peer which payment the wallet watches")
 
         # Row 1012: CashTokens and an identity (CHIP-BCMR), made with BCHN's
         # wallet and mined by BCHN, read through the bridge on kth: Fulcrum's
