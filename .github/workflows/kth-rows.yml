@@ -6,11 +6,15 @@ name: kth rows from #773, build, tests and client checks
 # node test suite (and the domain suite where the branch changes the domain
 # library), then put that kth into the package image and run
 # scripts/knuth_rpc_e2e.py, whose "#773 rows" section is each client's own
-# check of its row. It runs when this file changes, or by hand.
+# check of its row. Rows with `rostrum` also run scripts/rostrum_e2e.py: Rostrum,
+# the Electrum server, indexes the chain through kth and through BCHN, and its
+# answers on kth must equal its answers on BCHN. It runs when this file
+# changes, or by hand.
 on:
   push:
-    # k-nuth/kth#867 (testmempoolaccept) with Fernando's 543fad14 and the CI path fix: every push of this branch.
-    branches: [e2e/867-ci]
+    # Rostrum on kth: k-nuth/kth master as it is, each fix on its own, and the
+    # fixes together: every push of this branch.
+    branches: [e2e/rostrum]
   workflow_dispatch:
 
 permissions:
@@ -23,20 +27,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # k-nuth/kth#867 at 657f8a56: Fernando's 543fad14 (the mempool fee
-        # awaited without blocking RPC) never got past CI's script check, so
-        # its build and tests never ran there. Built as shipped (JSON-RPC)
-        # with the end-to-end rows, and without the JSON-RPC server.
-          - name: testmempoolaccept
-            branch: rpc/testmempoolaccept
+        # k-nuth/kth master as it is: where Rostrum stops.
+          - name: master
+            repo: k-nuth/kth
+            branch: master
             gcc: '16'
-            blockchain: true
-          - name: testmempoolaccept-no-rpc
-            branch: rpc/testmempoolaccept
-            gcc: '16'
-            blockchain: true
-            rpc: none
             no_e2e: true
+            rostrum: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -50,6 +47,10 @@ jobs:
       CCACHE_PREFIX: kth-ccache-${{ matrix.gcc == '16' && 'gcc16-' || '' }}
       # Copies of BCHN, the toolchains and kth's Conan packages (ci-deps.yml).
       CI_DEPS: ghcr.io/bitcoincash1/knuth-ci-deps
+      # Rostrum, gitlab.com/nexa/rostrum (formerly bitcoinunlimited/rostrum):
+      # master at the commit its node calls were read from. Its releases ship
+      # no Linux binary, so it is built here, for BCH.
+      ROSTRUM_COMMIT: c1490d1cee9b9ab428dd593a4e95a84785219d4f
     steps:
       - uses: actions/checkout@v7
         with:
@@ -79,9 +80,9 @@ jobs:
           echo "toolchain image: $IMAGE"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
         shell: bash
-      - name: Fetch kth ${{ matrix.branch }}
+      - name: Fetch kth ${{ matrix.repo || 'CyberAshven/kth' }} ${{ matrix.branch }}
         run: |
-          git clone --depth 1 --branch "${{ matrix.branch }}" https://github.com/CyberAshven/kth.git kth-src
+          git clone --depth 1 --branch "${{ matrix.branch }}" "https://github.com/${{ matrix.repo || 'CyberAshven/kth' }}.git" kth-src
           git -C kth-src log -1 --format='%H %s' | tee kth-commit.txt
         shell: bash
       # The packages ci-deps.yml keeps for this lock file and compiler: the
@@ -263,14 +264,14 @@ jobs:
           echo "kth_network_test exit $rc" | tee -a test-status.txt
         shell: bash
       - name: Restore the package image
-        if: ${{ ! matrix.no_e2e }}
+        if: ${{ ! matrix.no_e2e || matrix.rostrum }}
         id: image
         uses: actions/cache/restore@v6
         with:
           path: /tmp/knuth-e2e.tar
           key: knuth-e2e-${{ hashFiles('Dockerfile') }}
       - name: Put this kth into the package image
-        if: ${{ ! matrix.no_e2e }}
+        if: ${{ ! matrix.no_e2e || matrix.rostrum }}
         run: |
           KTH=$(find kth-src/build -name kth -type f -perm -u+x -path '*node-exe*' | head -1)
           echo "node binary: $KTH"
@@ -294,7 +295,7 @@ jobs:
           docker build --platform linux/amd64 -f Dockerfile.built -t knuth-e2e .
         shell: bash
       - name: Fetch BCHN 29.2.0
-        if: ${{ ! matrix.no_e2e }}
+        if: ${{ ! matrix.no_e2e || matrix.rostrum }}
         run: |
           TARBALL=bitcoin-cash-node-29.2.0-x86_64-linux-gnu.tar.gz
           SHA256=23bbe9ff749136a9b832a2a59023ce76a5391322c1ea2f4f24b5b91f035081bc
@@ -355,6 +356,47 @@ jobs:
           npx tsc --outDir dist --rootDir src --module commonjs --target es2022 --moduleResolution node \
             --esModuleInterop --skipLibCheck --types node src/api/bitcoin/p2p/*.ts
           ls dist/api/bitcoin/p2p
+        shell: bash
+      - name: Restore Rostrum
+        if: matrix.rostrum
+        id: rostrum-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: rostrum-bin
+          key: rostrum-bch-${{ env.ROSTRUM_COMMIT }}
+      - name: Build Rostrum for BCH (gitlab.com/nexa/rostrum, pinned)
+        if: matrix.rostrum && steps.rostrum-cache.outputs.cache-hit != 'true'
+        run: |
+          # rocksdb's build needs clang and libclang (Rostrum's doc/build.md).
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang cmake build-essential llvm libclang-dev >/dev/null
+          rustup update stable --no-self-update >/dev/null
+          git clone --quiet https://gitlab.com/nexa/rostrum.git rostrum
+          git -C rostrum checkout --quiet "$ROSTRUM_COMMIT"
+          git -C rostrum log -1 --format='%H %s'
+          cargo +stable build --release --locked --features bch --manifest-path rostrum/Cargo.toml
+          mkdir -p rostrum-bin
+          cp rostrum/target/release/rostrum rostrum-bin/
+          rm -rf rostrum/target
+          rostrum-bin/rostrum --version
+        shell: bash
+      - name: Save Rostrum
+        if: matrix.rostrum && steps.rostrum-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: rostrum-bin
+          key: rostrum-bch-${{ env.ROSTRUM_COMMIT }}
+      - name: Run Rostrum on this kth, and on BCHN as the reference
+        if: matrix.rostrum
+        run: |
+          python3 scripts/rostrum_e2e.py e2e-out || true
+          if [ -f e2e-out/rostrum-status.txt ]; then
+            tee -a test-status.txt < e2e-out/rostrum-status.txt
+          else
+            echo "rostrum_e2e exit 2" | tee -a test-status.txt
+          fi
+        env:
+          ROSTRUM_BIN: ${{ github.workspace }}/rostrum-bin/rostrum
         shell: bash
       - name: Run the end-to-end checks against this kth
         if: ${{ ! matrix.no_e2e }}
