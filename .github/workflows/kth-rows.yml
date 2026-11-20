@@ -34,41 +34,10 @@ jobs:
             gcc: '16'
             no_e2e: true
             rostrum: true
-        # Each fix on its own, from master 04ec4856: kth's node and blockchain
-        # suites (and the network suite for ping, which changes peer_session).
-          - name: rpc-batch
-            branch: fix/rpc-batch
-            gcc: '16'
-            blockchain: true
-            no_e2e: true
-          - name: getblockheader-height
-            branch: fix/getblockheader-height
-            gcc: '16'
-            blockchain: true
-            no_e2e: true
-          - name: rpc-ping
-            branch: fix/rpc-ping
-            gcc: '16'
-            blockchain: true
-            network: true
-            no_e2e: true
-          - name: getblockchaininfo-pruned
-            branch: fix/getblockchaininfo-pruned
-            gcc: '16'
-            blockchain: true
-            no_e2e: true
-          - name: getmempoolinfo-minfee
-            branch: fix/getmempoolinfo-minfee
-            gcc: '16'
-            blockchain: true
-            no_e2e: true
-        # Null params as no arguments for methods without arguments: the
-        # candidate for the gap the five fixes leave (Rostrum's getnetworkinfo).
-          - name: rpc-null-params
-            branch: fix/rpc-null-params
-            gcc: '16'
-            blockchain: true
-            no_e2e: true
+        # Each fix on its own (fix/rpc-batch, fix/getblockheader-height,
+        # fix/rpc-ping, fix/getblockchaininfo-pruned, fix/getmempoolinfo-minfee,
+        # fix/rpc-null-params) ran its suites in run 44723202486; these rows are
+        # the ones with Rostrum.
         # The five fixes together: suites, the existing client rows, and Rostrum.
           - name: rostrum-all
             branch: test/rostrum-all
@@ -433,7 +402,8 @@ jobs:
           mkdir -p rostrum-bin
           cp rostrum/target/release/rostrum rostrum-bin/
           rm -rf rostrum/target
-          rostrum-bin/rostrum --version
+          # It prints its version and exits 1.
+          rostrum-bin/rostrum --version || true
         shell: bash
       - name: Save Rostrum
         if: matrix.rostrum && steps.rostrum-cache.outputs.cache-hit != 'true'
