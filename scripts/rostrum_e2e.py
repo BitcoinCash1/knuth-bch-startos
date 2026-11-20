@@ -475,6 +475,22 @@ def wait_synced(name: str, height: int, seconds: int) -> bool:
     return False
 
 
+def wait_mempool_seen(clients: dict, s: dict, seconds: int) -> None:
+    """Rostrum reads the mempool after its first sync: the checks start once
+    each one lists W's mempool payment, so they compare a non-empty mempool."""
+    watched = scripthash(s["watched"])
+    started = time.monotonic()
+    seen: dict = {name: False for name in clients}
+    while time.monotonic() - started < seconds and not all(seen.values()):
+        for name, client in clients.items():
+            if seen[name] is False:
+                result, error = client.call("blockchain.scripthash.get_mempool", watched)
+                if error is None and any(e.get("tx_hash") == s["mempool_txid"] for e in result or []):
+                    seen[name] = round(time.monotonic() - started)
+        time.sleep(1)
+    RESULTS["setup"]["mempool_payment_seen_after_seconds"] = seen
+
+
 def electrum_row(label: str, k, b, ok: bool, note: str = "") -> None:
     RESULTS["electrum"].append({"method": label, "kth": k, "bchn": b,
                                 "verdict": "OK" if ok else "DIFFERS", "note": note})
@@ -647,6 +663,7 @@ def main() -> None:
         if "bchn" not in clients:
             RESULTS["setup"]["reference_failed"] = "Rostrum on BCHN did not sync; nothing to compare with"
         if clients:
+            wait_mempool_seen(clients, s, 90)
             electrum_checks(clients, s)
             follow_checks(clients, s)
     except Exception as error:
