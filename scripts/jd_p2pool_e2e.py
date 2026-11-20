@@ -32,6 +32,13 @@ Template Distribution paging answers RequestTransactionData with
 template-too-large, and the row fails when no large block comes within the
 budget. The row records each block's PPLNS verdict but does not require one.
 
+Restart rows (KTH_JD_RESTART_GAPS set, rows 25b or 25w) restart the pool
+under a running kth. Once P2Pool has accepted kth's declaration and counted a
+share kth forwarded, P2Pool is killed and started again on the same store and
+keys after each gap. kth must be on the pool again within RECONNECT_BOUND of
+P2Pool listening: a declaration accepted and its entry active, both logged
+after the kill. Then the new P2Pool process must count a share from kth.
+
 How a PPLNS block is proven (P2Pool BCH v2, read before changing a row):
 - P2Pool BCH takes the donation and fee per share ("cuts-per-share" in its
   protocol string). Each share in the PPLNS window gives its own cut off its
@@ -148,6 +155,28 @@ JD_MODE = os.environ.get("KTH_JD_MODE") or "full-template"
 # give BCHN a new tip every 30 s for this long and count what kth's JD client
 # does with each one through the slow route. No mining device.
 WATCH_SECONDS = int(os.environ.get("KTH_JD_WATCH_SECONDS") or "0")
+# KTH_JD_RESTART_GAPS: seconds, comma-separated. Once P2Pool has accepted
+# kth's declaration and counted a share from it, P2Pool is killed with SIGKILL
+# and started again on the same store and keys after each gap; kth is not
+# restarted. The live pool's restart script stops its Windows processes the
+# same way (Stop-Process -Force), and with them the SV2 translator that mines
+# on kth, so the mining device is stopped and started with P2Pool unless
+# KTH_JD_RESTART_DEVICE=0.
+RESTART_GAPS = [int(item) for item in (os.environ.get("KTH_JD_RESTART_GAPS") or "").split(",")
+                if item.strip()]
+RESTART_DEVICE = os.environ.get("KTH_JD_RESTART_DEVICE", "1") != "0"
+# How long after P2Pool listens again kth may take to be on the pool again,
+# from k-nuth/kth#833's defaults: a failed entry is tried again after
+# sv2.jd.retry_initial_seconds (5), doubling up to sv2.jd.retry_max_seconds
+# (300); a probe starts at most every sv2.jd.probe_interval_seconds (10); the
+# setup and the first declaration are each answered within
+# sv2.jd.response_timeout_seconds (10 here); an accepted probe takes over from
+# solo after sv2.jd.recovery_hold_seconds (60). 300 + 10 + 10 + 10 + 60 = 390,
+# and 30 s of slack.
+RECONNECT_BOUND = 420
+# kth's own lines for an entry that mines on the pool again: a probe that
+# took over from solo, or a pair that connected as the active one.
+ACTIVE_AGAIN = re.compile(r"\[sv2 jd\] Entry \d+ (?:recovered; active|both upstreams ready; active)")
 
 
 def watch_declarations(seconds: int) -> None:
@@ -465,9 +494,12 @@ def kth_log_text() -> str:
 def p2pool_log_text() -> str:
     # logging.rs uses a daily RollingFileAppender, so the file log is
     # p2pool-file.log.<date>, not the configured prefix alone. Console
-    # output is the process stderr captured in p2pool-console.log.
+    # output is the process stderr captured in p2pool-console.log, and in
+    # p2pool-console-restart<N>.log for each P2Pool started again.
     parts = [read_text(OUT / "p2pool-console.log")]
     if OUT.is_dir():
+        for path in sorted(OUT.glob("p2pool-console-restart*.log")):
+            parts.append(read_text(path))
         for path in sorted(OUT.glob("p2pool-file.log*")):
             parts.append(read_text(path))
     return "\n".join(parts)
@@ -703,11 +735,11 @@ def share_address(cli_bin: str, cashaddr: str) -> str:
     return printed
 
 
-def start_p2pool(binary: str, config: Path) -> None:
+def start_p2pool(binary: str, config: Path, console: str = "p2pool-console.log") -> None:
     global P2POOL
     env = os.environ.copy()
     env.pop("RUST_LOG", None)
-    P2POOL = spawn([binary, "--config", str(config)], OUT / "p2pool-console.log", env)
+    P2POOL = spawn([binary, "--config", str(config)], OUT / console, env)
     deadline = time.monotonic() + 120
     last = ""
     sv2_open = False
@@ -1391,6 +1423,174 @@ def require_worker_name() -> dict:
          + json.dumps(body, indent=2)[:3000])
 
 
+def utc_now() -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+
+
+def kth_debug_lines() -> list[str]:
+    return read_text(DATA / "kth-debug.log").splitlines()
+
+
+def kth_lines_since(mark: int) -> list[str]:
+    lines = kth_debug_lines()
+    # A log that shrank was rotated; then all of it is newer than the mark.
+    return lines[mark:] if len(lines) >= mark else lines
+
+
+def pool_shares() -> int:
+    """SV2 shares the running P2Pool counted. The counter starts at zero in
+    each P2Pool process, so after a restart it counts only shares the new
+    process took."""
+    status, body = http_get("/metrics")
+    if status != 200:
+        return 0
+    try:
+        return int(float(parse_metrics(body).get("shares_accepted_total", "0")))
+    except ValueError:
+        return 0
+
+
+def wait_pool_share(cursor: int, seconds: int, what: str) -> int:
+    """Mine until the running P2Pool counts a share kth forwarded. kth's
+    blocks land on BCHN meanwhile, so P2Pool's templates follow kth's tip."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        ensure_kth()
+        ensure_p2pool()
+        if DEVICE is not None and DEVICE.poll() is not None:
+            fail(f"row {EVIDENCE['row']}: mining_device exited {what}")
+        cursor, _ = pull_blocks(cursor, cursor + EASY_BLOCK_LIMIT)
+        if pool_shares() > 0:
+            return cursor
+        time.sleep(2)
+    fail(f"row {EVIDENCE['row']}: P2Pool counted no share from kth {what} within {seconds}s. "
+         "kth's JD lines:\n" + "\n".join(redact(line) for line in kth_debug_lines()
+                                        if "[sv2 jd]" in line)[-4000:])
+
+
+def restart_lines(mark: int) -> list[str]:
+    """kth's lines since the kill that say what its JD client and SV2 did."""
+    keep = ("sv2", "[error]", "[warning]", "exception")
+    return [redact(line)[:400] for line in kth_lines_since(mark)
+            if any(word in line.lower() for word in keep)]
+
+
+def restart_pool(number: int, gap: int, p2pool_bin: str, device: list[str], cursor: int,
+                 share_wait: int) -> int:
+    """Kill P2Pool, wait `gap` seconds, start it again, and require kth on
+    the pool again within RECONNECT_BOUND and a share counted after it."""
+    global P2POOL
+    row = EVIDENCE["row"]
+    record: dict = {"number": number, "gap_s": gap, "device_restarted": RESTART_DEVICE,
+                    "pool_shares_before": pool_shares()}
+    EVIDENCE["restarts"].append(record)
+    if RESTART_DEVICE:
+        stop_device()
+    mark = len(kth_debug_lines())
+    P2POOL.kill()
+    try:
+        P2POOL.wait(30)
+    except subprocess.TimeoutExpired:
+        fail(f"row {row}: restart {number}: P2Pool did not exit within 30s of SIGKILL")
+    P2POOL = None
+    record["killed_at"] = utc_now()
+    progress(f"row {row}: restart {number}: P2Pool killed at {record['killed_at']}; "
+             f"starting it again in {gap}s")
+    deadline = time.monotonic() + gap
+    while time.monotonic() < deadline:
+        ensure_kth()
+        cursor, _ = pull_blocks(cursor, cursor + EASY_BLOCK_LIMIT)
+        time.sleep(1)
+    record["lines_while_down"] = restart_lines(mark)[:60]
+    start_p2pool(p2pool_bin, OUT / "p2pool.toml", f"p2pool-console-restart{number}.log")
+    back = time.monotonic()
+    record["listening_at"] = utc_now()
+    if RESTART_DEVICE:
+        start_device(device, OUT / f"mining-device-restart{number}.log")
+    declared = None
+    while time.monotonic() - back < RECONNECT_BOUND:
+        ensure_kth()
+        ensure_p2pool()
+        cursor, _ = pull_blocks(cursor, cursor + EASY_BLOCK_LIMIT)
+        lines = kth_lines_since(mark)
+        accepted = [line for line in lines if ACCEPTED.search(line)]
+        active = [line for line in lines if ACTIVE_AGAIN.search(line)]
+        if accepted and active:
+            declared = round(time.monotonic() - back, 1)
+            record["first_accepted_line"] = redact(accepted[0])
+            record["active_line"] = redact(active[0])
+            break
+        time.sleep(1)
+    record["declared_again_after_s"] = declared
+    if declared is None:
+        record["kth_lines"] = restart_lines(mark)[-300:]
+        jd = [line for line in record["kth_lines"] if "[sv2 jd]" in line]
+        fail(f"row {row}: restart {number} ({gap}s gap): kth was not on the pool again within "
+             f"{RECONNECT_BOUND}s of P2Pool listening (no accepted declaration and active entry "
+             "since the kill). kth's JD lines since the kill:\n" + "\n".join(jd[-40:]))
+    progress(f"row {row}: restart {number}: kth declared to the pool again {declared}s after "
+             f"P2Pool listened; waiting for a share")
+    start = time.monotonic()
+    cursor = wait_pool_share(cursor, share_wait, f"after restart {number}")
+    record["pool_share_after_s"] = round(time.monotonic() - back, 1)
+    record["pool_share_after_declared_s"] = round(time.monotonic() - start, 1)
+    record["pool_shares_after"] = pool_shares()
+    record["kth_lines"] = restart_lines(mark)[-300:]
+    progress(f"row {row}: restart {number}: P2Pool counted a share from kth "
+             f"{record['pool_share_after_s']}s after it listened again")
+    return cursor
+
+
+def row_restart(binary: str, pubkey: str, p2pool_bin: str) -> None:
+    """Pool restarts with kth running: before each, kth's declaration is
+    accepted and P2Pool counts a share from it; after each, the same again."""
+    row = EVIDENCE["row"]
+    progress(f"row {row}: waiting for P2Pool to accept the custom job")
+    deadline = time.monotonic() + 120
+    while not ACCEPTED.search(kth_log_text()):
+        ensure_kth()
+        ensure_p2pool()
+        if time.monotonic() > deadline:
+            line = fallback_line(kth_log_text())
+            fail(f"row {row}: kth did not log the pool accepting its local template within 120s. "
+                 + (f"fallback: {line}" if line else ""))
+        time.sleep(1)
+    before_probe = int(cli("getblockcount"))
+    printed = probe_hashrate(binary, pubkey, before_probe)
+    multiplier, expected, margin = plan_multiplier(printed)
+    # A share at difficulty 1 is also a regtest block. CREDIT_TAIL average
+    # waits miss one about e^-CREDIT_TAIL of the time.
+    share_wait = max(600, int(CREDIT_TAIL * expected))
+    EVIDENCE["hashrate"] = {
+        "printed_mh_s": printed,
+        "margin": round(margin, 4),
+        "nominal_hashrate_multiplier": multiplier,
+        "expected_seconds": round(expected, 1),
+        "share_wait_s": share_wait,
+    }
+    caught = kth_height()
+    if caught is None:
+        fail("kth RPC stopped answering after the hashrate probe")
+    cursor, _ = pull_blocks(before_probe, caught, "probe")
+    command = device_command(binary, pubkey, None, multiplier,
+                             user=WORKER_NAME if row == "25w" else "kth-jd-e2e")
+    start_device(command, OUT / "mining-device.log")
+    EVIDENCE["restarts"] = []
+    started = time.monotonic()
+    cursor = wait_pool_share(cursor, share_wait, "before the first restart")
+    EVIDENCE["first_pool_share_after_s"] = round(time.monotonic() - started, 1)
+    progress(f"row {row}: P2Pool counted a share from kth; restarting P2Pool after "
+             f"{', '.join(str(gap) + 's' for gap in RESTART_GAPS)}")
+    for number, gap in enumerate(RESTART_GAPS, 1):
+        cursor = restart_pool(number, gap, p2pool_bin, command, cursor, share_wait)
+    EVIDENCE["assertions"] = {
+        "reconnect_bound_s": RECONNECT_BOUND,
+        "restarts": [{key: item.get(key) for key in (
+            "gap_s", "device_restarted", "declared_again_after_s", "pool_share_after_s",
+            "pool_shares_after")} for item in EVIDENCE["restarts"]],
+    }
+
+
 # TEST ONLY: the mempool of rows 25c and tdp. Every output is P2SH(OP_TRUE),
 # which regtest relays as nonstandard and anyone can spend with the scriptSig
 # 01 51 (a push of the redeem script OP_1), so the harness signs nothing.
@@ -2071,6 +2271,8 @@ def run() -> None:
         else:
             if WATCH_SECONDS > 0:
                 watch_declarations(WATCH_SECONDS)
+            elif RESTART_GAPS:
+                row_restart(device_bin, pubkey, p2pool_bin)
             else:
                 row25b(device_bin, pubkey, solo)
             if SOAK_SECONDS > 0 and WATCH_SECONDS == 0:

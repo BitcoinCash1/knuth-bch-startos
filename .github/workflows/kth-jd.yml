@@ -22,43 +22,31 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # k-nuth/kth#1005 before and after in coinbase-only, kth's default
-          # sv2.jd.mode, through a SOCKS5 relay (net.proxy) with a 2 s and a 6 s
-          # round trip to P2Pool: a new BCHN tip every 30 s for 10 minutes, and
-          # kth's JD health counted; no mining device. Same two kth branches as run 43701597157 (full-template,
-          # 2 s: 2 demotions before, 0 after).
-          - name: jdr-before-coinbase-proxy-rt2000
-            branch: test/jdr-before
+          # The pool restarted under a running kth: once P2Pool has accepted
+          # kth's declaration and counted a share from it, P2Pool is killed
+          # (SIGKILL) and started again on the same store after restart_gaps
+          # seconds, with the mining device stopped and started with it as the
+          # live pool's restart does with the translator (restart_device "0"
+          # keeps it mining). kth must be on the pool again within 420 s of
+          # P2Pool listening and have a share counted after that. kth is the
+          # build on the Start9 (test/coinbase-tag 8582780e); P2Pool is the
+          # deployed node's alpha e3cf4c88.
+          - name: restart-8582780e-quick
+            branch: test/coinbase-tag
             row: "25w"
-            p2pool: alpha
-            mode: coinbase-only
-            delay_ms: 1000
-            proxy: true
-            watch: 600
-          - name: jdr-before-coinbase-proxy-rt6000
-            branch: test/jdr-before
+            p2pool: e3cf4c8872cbbc2940f44b91d8824da3a0cb0c94
+            restart_gaps: "5"
+          - name: restart-8582780e-long
+            branch: test/coinbase-tag
             row: "25w"
-            p2pool: alpha
-            mode: coinbase-only
-            delay_ms: 3000
-            proxy: true
-            watch: 600
-          - name: jdr-after-coinbase-proxy-rt2000
-            branch: test/jdr-after
+            p2pool: e3cf4c8872cbbc2940f44b91d8824da3a0cb0c94
+            restart_gaps: "420"
+          - name: restart-8582780e-quick-pool-only
+            branch: test/coinbase-tag
             row: "25w"
-            p2pool: alpha
-            mode: coinbase-only
-            delay_ms: 1000
-            proxy: true
-            watch: 600
-          - name: jdr-after-coinbase-proxy-rt6000
-            branch: test/jdr-after
-            row: "25w"
-            p2pool: alpha
-            mode: coinbase-only
-            delay_ms: 3000
-            proxy: true
-            watch: 600
+            p2pool: e3cf4c8872cbbc2940f44b91d8824da3a0cb0c94
+            restart_gaps: "5"
+            restart_device: "0"
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -186,6 +174,22 @@ jobs:
               chmod -R a+rwX /ccache /root/.conan2
             '
         shell: bash
+      # kth's node test suite on the built tree, as kth-rows.yml runs it. A
+      # failure lets the row run, and fails the job at the end.
+      - name: Run kth's node tests
+        id: node_tests
+        if: matrix.node_tests
+        continue-on-error: true
+        run: |
+          TEST=$(find kth-src/build -name kth_node_test -type f -perm -u+x | head -1)
+          if [ -z "$TEST" ]; then echo "missing kth_node_test under kth-src/build"; exit 1; fi
+          rc=0
+          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w "/src/$(dirname "${TEST#kth-src/}")" "$IMAGE" \
+            bash -c "timeout --kill-after=30 1200 ./kth_node_test --reporter compact" > node-tests.log 2>&1 || rc=$?
+          tail -5 node-tests.log
+          echo "kth_node_test exit $rc"
+          exit $rc
+        shell: bash
       - name: Save the Conan packages
         if: success() && steps.restore-conan.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
@@ -234,9 +238,18 @@ jobs:
       - name: Build SRI's mining_device (sv2-apps, pinned)
         run: cargo build --release --locked --manifest-path sv2-apps/Cargo.toml -p integration_tests_sv2 --bin mining_device
         shell: bash
+      # A branch name, or a full commit id such as the one a live node runs.
       - name: Fetch BCH P2Pool ${{ matrix.p2pool }}
         run: |
-          git clone --depth 1 --branch "${{ matrix.p2pool }}" https://github.com/CyberAshven/BitcoinCash-p2poolv2.git p2pool
+          REF="${{ matrix.p2pool }}"
+          URL=https://github.com/CyberAshven/BitcoinCash-p2poolv2.git
+          if [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
+            git init --quiet p2pool
+            git -C p2pool fetch --quiet --depth 1 "$URL" "$REF"
+            git -C p2pool checkout --quiet FETCH_HEAD
+          else
+            git clone --depth 1 --branch "$REF" "$URL" p2pool
+          fi
           git -C p2pool log -1 --format='%H %s' | tee p2pool-commit.txt
         shell: bash
       - name: Build BCH P2Pool
@@ -304,6 +317,8 @@ jobs:
           export KTH_JD_SOAK_SECONDS="${{ matrix.soak || '0' }}"
           export KTH_JD_MODE="${{ matrix.mode || 'full-template' }}"
           export KTH_JD_WATCH_SECONDS="${{ matrix.watch || '0' }}"
+          export KTH_JD_RESTART_GAPS="${{ matrix.restart_gaps || '' }}"
+          export KTH_JD_RESTART_DEVICE="${{ matrix.restart_device || '1' }}"
           export KTH_SRC="$PWD/kth-src"
           export KTH_BIN
           export P2POOL_BIN="$PWD/p2pool/target/release/p2poolv2"
@@ -328,8 +343,15 @@ jobs:
             kth-commit.txt
             p2pool-commit.txt
             p2pool-tests.log
+            node-tests.log
             e2e-out
           if-no-files-found: error
+      - name: Fail on kth's node tests
+        if: always() && steps.node_tests.outcome == 'failure'
+        run: |
+          echo "kth_node_test failed; see node-tests.log in the artifact"
+          exit 1
+        shell: bash
       - name: Fail on BCH P2Pool's SV2 unit tests
         if: always() && steps.p2pool_tests.outcome == 'failure'
         run: |
