@@ -256,6 +256,9 @@ def node_calls(s: dict) -> None:
     r = both("ping")
     node_row("ping (params null)", "the RPC pool's connection check (manager.rs is_valid)",
              r["kth"], r["bchn"], answered(r["kth"]) and r["kth"][0] is None)
+    r = both("ping", [])
+    node_row("ping []", "the same call with an empty array, to tell the method from its params",
+             r["kth"], r["bchn"], answered(r["kth"]) and r["kth"][0] is None)
 
     r = both("getnetworkinfo")
     k = r["kth"][0] if answered(r["kth"]) else None
@@ -415,15 +418,19 @@ def log_tail(name: str, lines: int = 25) -> list:
 
 
 def first_problem(name: str) -> str | None:
-    """The first error, warning about the node or panic in a Rostrum's log."""
+    """Why a Rostrum stopped: its panic with the message after it, else the
+    line it stopped with, else its first error or warning."""
     path = OUT / f"rostrum-{name}.log"
     if not path.exists():
         return None
-    for line in path.read_text(errors="replace").splitlines():
-        lowered = line.lower()
-        if " error " in lowered or "panicked" in lowered or "error:" in lowered or \
-                ("warn" in lowered and ("full node" in lowered or "failed" in lowered)):
-            return line[:400]
+    lines = path.read_text(errors="replace").splitlines()
+    for at, line in enumerate(lines):
+        if "panicked" in line:
+            return " ".join(part.strip() for part in lines[at:at + 5] if part.strip())[:600]
+    for marker in ("Server stopped", "Error:", "ERROR", "WARN"):
+        for line in lines:
+            if marker in line:
+                return line[:600]
     return None
 
 
@@ -553,7 +560,7 @@ def follow_checks(clients: dict, s: dict) -> None:
         time.sleep(2)
     RESULTS["follow"].append({"check": f"both Rostrums reach the new tip {height} ({block[:16]}...)",
                               "kth": synced.get("kth"), "bchn": synced.get("bchn"),
-                              "verdict": "OK" if all(synced.values()) else "DIFFERS"})
+                              "verdict": "OK" if synced.get("kth") and synced.get("bchn") else "DIFFERS"})
     time.sleep(3)
     watched = scripthash(s["watched"])
     for method in ("blockchain.scripthash.get_history", "blockchain.scripthash.get_balance",

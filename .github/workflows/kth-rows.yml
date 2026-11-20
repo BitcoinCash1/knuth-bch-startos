@@ -38,18 +38,21 @@ jobs:
         # fix/rpc-ping, fix/getblockchaininfo-pruned, fix/getmempoolinfo-minfee,
         # fix/rpc-null-params) ran its suites in run 44723202486; these rows are
         # the ones with Rostrum.
-        # The five fixes together: suites, the existing client rows, and Rostrum.
+        # The five fixes together. Their suites and the existing client rows ran
+        # in run 44726841771, where Rostrum stopped at getnetworkinfo.
           - name: rostrum-all
             branch: test/rostrum-all
             gcc: '16'
-            blockchain: true
-            network: true
+            no_e2e: true
             rostrum: true
-        # The five fixes and the null params candidate, merged here: Rostrum.
-          - name: rostrum-all-null-params
+        # With the null params candidate (fix/rpc-null-params), Rostrum stopped
+        # at the genesis block in run 44726841771. Here with k-nuth/kth#1011
+        # (fix/genesis-block-body, the genesis block in the block files) too.
+          - name: rostrum-all-null-params-genesis
             branch: test/rostrum-all
-            merge: fix/rpc-null-params
+            merge: fix/rpc-null-params fix/genesis-block-body
             gcc: '16'
+            blockchain: true
             no_e2e: true
             rostrum: true
     name: kth ${{ matrix.name }}
@@ -102,12 +105,12 @@ jobs:
         run: |
           git clone --depth 50 --branch "${{ matrix.branch }}" "https://github.com/${{ matrix.repo || 'CyberAshven/kth' }}.git" kth-src
           git -C kth-src log -1 --format='%H %s' | tee kth-commit.txt
-          # A row may merge one more fork branch into it, here and nowhere else.
-          if [ -n "${{ matrix.merge }}" ]; then
-            git -C kth-src fetch --quiet --depth 50 origin "${{ matrix.merge }}"
+          # A row may merge more fork branches into it, here and nowhere else.
+          for extra in ${{ matrix.merge }}; do
+            git -C kth-src fetch --quiet --depth 50 origin "$extra"
             git -C kth-src log -1 --format='%H %s' FETCH_HEAD | sed 's/^/merged: /' | tee -a kth-commit.txt
             git -C kth-src -c user.name=e2e -c user.email=e2e@localhost merge --no-edit FETCH_HEAD
-          fi
+          done
         shell: bash
       # The packages ci-deps.yml keeps for this lock file and compiler: the
       # build restores them into the Conan cache, and conan install then finds
