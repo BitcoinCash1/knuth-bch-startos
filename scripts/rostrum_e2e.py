@@ -360,6 +360,20 @@ def node_calls(s: dict) -> None:
              sorted(r["kth"][0]) if answered(r["kth"]) else r["kth"], sorted(r["bchn"][0]),
              answered(r["kth"]) and sorted(r["kth"][0]) == sorted(r["bchn"][0]))
 
+    # Not Rostrum's own calls: the errors next to them, against BCHN's.
+    r = both("getblockheader", ["ab" * 32])
+    code = lambda x: (x[1] or {}).get("code") if isinstance(x[1], dict) else None
+    node_row("getblockheader [hash the node does not have]", "(error check) the code clients read as absent",
+             r["kth"], r["bchn"], code(r["kth"]) is not None and code(r["kth"]) == code(r["bchn"]))
+    member = {"id": 77, "params": []}
+    out = {n: post(NODES[n], [member, request_object("getblockcount", None)]) for n in NODES}
+    first = lambda x: x["json"][0] if isinstance(x["json"], list) and x["json"] else x["json"]
+    k, b = first(out["kth"]), first(out["bchn"])
+    ok = (isinstance(k, dict) and isinstance(b, dict) and k.get("id") == b.get("id") == 77
+          and (k.get("error") or {}).get("code") == (b.get("error") or {}).get("code"))
+    node_row("batch member with an id and no method", "(error check) its response keeps its id",
+             k, b, ok)
+
 
 # ---- Rostrum ------------------------------------------------------------------
 

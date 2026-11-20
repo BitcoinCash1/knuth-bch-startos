@@ -27,17 +27,35 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Earlier runs: 44726841771 and 44733715072 ran Rostrum on k-nuth/kth
-        # master and on the five fixes together (test/rostrum-all), where it
-        # stopped at getnetworkinfo; 44723202486 ran each fix's suites. This
-        # run: the five fixes with the null params candidate
-        # (fix/rpc-null-params) and k-nuth/kth#1011 (fix/genesis-block-body),
-        # with W's mempool payment seen before the comparison.
-          - name: rostrum-all-null-params-genesis
-            branch: test/rostrum-all
-            merge: fix/rpc-null-params fix/genesis-block-body
+        # Earlier runs: 44723202486 (each fix's suites), 44726841771,
+        # 44733715072 and 44740928312 (Rostrum on master, on test/rostrum-all,
+        # and with the null params candidate and k-nuth/kth#1011).
+        # This run, after review: the changed branches' suites, and
+        # test/rostrum-all-2 (master, fix/rpc-batch, fix/getblockheader-height,
+        # fix/rpc-null-params, fix/rpc-ping-null, fix/getblockchaininfo-pruned,
+        # fix/getmempoolinfo-minfee and k-nuth/kth#1011) with Rostrum and the
+        # existing client rows.
+          - name: rpc-batch
+            branch: fix/rpc-batch
             gcc: '16'
+            blockchain: true
             no_e2e: true
+          - name: getblockheader-height
+            branch: fix/getblockheader-height
+            gcc: '16'
+            blockchain: true
+            no_e2e: true
+          - name: rpc-ping-null
+            branch: fix/rpc-ping-null
+            gcc: '16'
+            blockchain: true
+            network: true
+            no_e2e: true
+          - name: rostrum-all-2
+            branch: test/rostrum-all-2
+            gcc: '16'
+            blockchain: true
+            network: true
             rostrum: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
