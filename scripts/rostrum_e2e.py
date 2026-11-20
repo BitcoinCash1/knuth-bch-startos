@@ -206,13 +206,13 @@ def make_chain() -> dict:
     cli("generatetoaddress", "110", miner)
     watched, other, sink = cli("getnewaddress"), cli("getnewaddress"), cli("getnewaddress")
     paid = cli("sendtoaddress", watched, "2.0")
-    spent = cli("sendtoaddress", other, "1.0")
-    block = json.loads(cli("generatetoaddress", "1", miner))[0]
     # Keep W's coin out of the wallet's coin selection, so it stays unspent.
     kept = next(o["n"] for o in outputs_of(paid)
                 if watched in o["scriptPubKey"].get("addresses", []) or
                 o["scriptPubKey"].get("address") == watched)
     cli("lockunspent", "false", json.dumps([{"txid": paid, "vout": kept}]))
+    spent = cli("sendtoaddress", other, "1.0")
+    block = json.loads(cli("generatetoaddress", "1", miner))[0]
     outs = outputs_of(spent)
     total = sum(o["value"] for o in outs)
     raw = cli("createrawtransaction", json.dumps([{"txid": spent, "vout": o["n"]} for o in outs]),
