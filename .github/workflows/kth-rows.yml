@@ -34,6 +34,55 @@ jobs:
             gcc: '16'
             no_e2e: true
             rostrum: true
+        # Each fix on its own, from master 04ec4856: kth's node and blockchain
+        # suites (and the network suite for ping, which changes peer_session).
+          - name: rpc-batch
+            branch: fix/rpc-batch
+            gcc: '16'
+            blockchain: true
+            no_e2e: true
+          - name: getblockheader-height
+            branch: fix/getblockheader-height
+            gcc: '16'
+            blockchain: true
+            no_e2e: true
+          - name: rpc-ping
+            branch: fix/rpc-ping
+            gcc: '16'
+            blockchain: true
+            network: true
+            no_e2e: true
+          - name: getblockchaininfo-pruned
+            branch: fix/getblockchaininfo-pruned
+            gcc: '16'
+            blockchain: true
+            no_e2e: true
+          - name: getmempoolinfo-minfee
+            branch: fix/getmempoolinfo-minfee
+            gcc: '16'
+            blockchain: true
+            no_e2e: true
+        # Null params as no arguments for methods without arguments: the
+        # candidate for the gap the five fixes leave (Rostrum's getnetworkinfo).
+          - name: rpc-null-params
+            branch: fix/rpc-null-params
+            gcc: '16'
+            blockchain: true
+            no_e2e: true
+        # The five fixes together: suites, the existing client rows, and Rostrum.
+          - name: rostrum-all
+            branch: test/rostrum-all
+            gcc: '16'
+            blockchain: true
+            network: true
+            rostrum: true
+        # The five fixes and the null params candidate, merged here: Rostrum.
+          - name: rostrum-all-null-params
+            branch: test/rostrum-all
+            merge: fix/rpc-null-params
+            gcc: '16'
+            no_e2e: true
+            rostrum: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -82,8 +131,14 @@ jobs:
         shell: bash
       - name: Fetch kth ${{ matrix.repo || 'CyberAshven/kth' }} ${{ matrix.branch }}
         run: |
-          git clone --depth 1 --branch "${{ matrix.branch }}" "https://github.com/${{ matrix.repo || 'CyberAshven/kth' }}.git" kth-src
+          git clone --depth 50 --branch "${{ matrix.branch }}" "https://github.com/${{ matrix.repo || 'CyberAshven/kth' }}.git" kth-src
           git -C kth-src log -1 --format='%H %s' | tee kth-commit.txt
+          # A row may merge one more fork branch into it, here and nowhere else.
+          if [ -n "${{ matrix.merge }}" ]; then
+            git -C kth-src fetch --quiet --depth 50 origin "${{ matrix.merge }}"
+            git -C kth-src log -1 --format='%H %s' FETCH_HEAD | sed 's/^/merged: /' | tee -a kth-commit.txt
+            git -C kth-src -c user.name=e2e -c user.email=e2e@localhost merge --no-edit FETCH_HEAD
+          fi
         shell: bash
       # The packages ci-deps.yml keeps for this lock file and compiler: the
       # build restores them into the Conan cache, and conan install then finds
