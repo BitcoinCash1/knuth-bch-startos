@@ -28,13 +28,18 @@ jobs:
       matrix:
         include:
         # Earlier runs: 44723202486 (each fix's suites), 44726841771,
-        # 44733715072 and 44740928312 (Rostrum on master, on test/rostrum-all,
-        # and with the null params candidate and k-nuth/kth#1011).
-        # This run, after review: the changed branches' suites, and
-        # test/rostrum-all-2 (master, fix/rpc-batch, fix/getblockheader-height,
-        # fix/rpc-null-params, fix/rpc-ping-null, fix/getblockchaininfo-pruned,
-        # fix/getmempoolinfo-minfee and k-nuth/kth#1011) with Rostrum and the
-        # existing client rows.
+        # 44733715072 and 44740928312 (Rostrum on master 04ec4856, on
+        # test/rostrum-all and with the candidates), 44744727224 (after review,
+        # on 04ec4856). This run: k-nuth/kth master 53ec7760 (with #1011, the
+        # genesis block) as it is, each branch with that master merged in, and
+        # test/rostrum-all-2 (that master and the six branches) with Rostrum and
+        # the existing client rows.
+          - name: master
+            repo: k-nuth/kth
+            branch: master
+            gcc: '16'
+            no_e2e: true
+            rostrum: true
           - name: rpc-batch
             branch: fix/rpc-batch
             gcc: '16'
@@ -45,11 +50,26 @@ jobs:
             gcc: '16'
             blockchain: true
             no_e2e: true
+          - name: rpc-null-params
+            branch: fix/rpc-null-params
+            gcc: '16'
+            blockchain: true
+            no_e2e: true
           - name: rpc-ping-null
             branch: fix/rpc-ping-null
             gcc: '16'
             blockchain: true
             network: true
+            no_e2e: true
+          - name: getblockchaininfo-pruned
+            branch: fix/getblockchaininfo-pruned
+            gcc: '16'
+            blockchain: true
+            no_e2e: true
+          - name: getmempoolinfo-minfee
+            branch: fix/getmempoolinfo-minfee
+            gcc: '16'
+            blockchain: true
             no_e2e: true
           - name: rostrum-all-2
             branch: test/rostrum-all-2
