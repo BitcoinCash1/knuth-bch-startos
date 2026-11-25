@@ -28,25 +28,49 @@ jobs:
           # seconds, with the mining device stopped and started with it as the
           # live pool's restart does with the translator (restart_device "0"
           # keeps it mining). kth must be on the pool again within 420 s of
-          # P2Pool listening and have a share counted after that. kth is the
-          # build on the Start9 (test/coinbase-tag 8582780e); P2Pool is the
-          # deployed node's alpha e3cf4c88.
-          - name: restart-8582780e-quick
-            branch: test/coinbase-tag
+          # P2Pool listening and have a share counted after that. P2Pool is the
+          # deployed node's alpha e3cf4c88. Run 44740639123 had the quick, long
+          # and pool-only rows on the Start9's build (test/coinbase-tag
+          # 8582780e); all three passed. This run: the package combination
+          # test/kth-jd-reconnect (8582780e merged with #1005, which brings
+          # #993) on the same rows, three restarts in one kth lifetime on both
+          # builds, a restart with kth's upstreams through a SOCKS5 relay
+          # (net.proxy, as through Tor), and row 25w through the relay at a 2 s
+          # round trip as in run 43701597157, with kth's node tests.
+          - name: restart-combo-quick
+            branch: test/kth-jd-reconnect
             row: "25w"
             p2pool: e3cf4c8872cbbc2940f44b91d8824da3a0cb0c94
             restart_gaps: "5"
-          - name: restart-8582780e-long
-            branch: test/coinbase-tag
+          - name: restart-combo-long
+            branch: test/kth-jd-reconnect
             row: "25w"
             p2pool: e3cf4c8872cbbc2940f44b91d8824da3a0cb0c94
             restart_gaps: "420"
-          - name: restart-8582780e-quick-pool-only
+          - name: restart-combo-repeat
+            branch: test/kth-jd-reconnect
+            row: "25w"
+            p2pool: e3cf4c8872cbbc2940f44b91d8824da3a0cb0c94
+            restart_gaps: "5,420,5"
+          - name: restart-combo-proxy
+            branch: test/kth-jd-reconnect
+            row: "25w"
+            p2pool: e3cf4c8872cbbc2940f44b91d8824da3a0cb0c94
+            restart_gaps: "5,420"
+            proxy: true
+          - name: combo-proxy-rt2000
+            branch: test/kth-jd-reconnect
+            row: "25w"
+            p2pool: e3cf4c8872cbbc2940f44b91d8824da3a0cb0c94
+            delay_ms: 1000
+            proxy: true
+            soak: 900
+            node_tests: true
+          - name: restart-8582780e-repeat
             branch: test/coinbase-tag
             row: "25w"
             p2pool: e3cf4c8872cbbc2940f44b91d8824da3a0cb0c94
-            restart_gaps: "5"
-            restart_device: "0"
+            restart_gaps: "5,420,5"
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
