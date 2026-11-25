@@ -52,16 +52,17 @@ RUN conan profile detect --force \
       -s compiler.cppstd=23
 
 # ── Job Declaration build (TEST ONLY) ───────────────────────────────
-# TEST ONLY, Job Declaration client with failover (k-nuth/kth#832, #833, #834, #881) on chipnet against the BCH P2Pool pool.
+# TEST ONLY, Job Declaration client with failover (k-nuth/kth#832, #833, #834, #881), upstreams through Tor
+# and I2P (#993) and the latency limit by route (#1005) on chipnet against the BCH P2Pool pool.
 FROM --platform=linux/amd64 ${TOOLCHAIN_JD} AS kth-jd-build
 
-ARG JD_COMMIT=8582780e
+ARG JD_COMMIT=7856e9b8
 ARG CURRENCY=BCH
 
 RUN pip install --no-cache-dir --upgrade "conan>=2.25,<3" "kthbuild>=4,<5"
 
 WORKDIR /src/kth
-RUN git clone --branch test/coinbase-tag --single-branch https://github.com/CyberAshven/kth.git . \
+RUN git clone --branch test/kth-jd-reconnect --single-branch https://github.com/CyberAshven/kth.git . \
  && git checkout --detach ${JD_COMMIT}
 
 RUN conan profile detect --force \

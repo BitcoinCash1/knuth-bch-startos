@@ -53,7 +53,7 @@ export const main = sdk.setupMain(async ({ effects }) => {
     netName,
   ]
 
-  // TEST ONLY, Job Declaration client (k-nuth/kth#832, #834) on chipnet
+  // TEST ONLY, Job Declaration client (k-nuth/kth#832, #833, #834, #993, #1005) on chipnet
   // against the BCH P2Pool pool. Selects kth-jd and appends the Stratum V2
   // listener, Mining Protocol server, and Job Declaration client. Key files
   // are under the chain data directory so they stay on the main volume.

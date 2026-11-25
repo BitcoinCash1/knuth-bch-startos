@@ -8,10 +8,11 @@ import { IMPOSSIBLE, VersionInfo } from '@start9labs/start-sdk'
 const ALLOW_DOWNGRADE = false
 
 export const current = VersionInfo.of({
-  version: '1.7.0:1.1',
+  version: '1.7.0:1.2',
   releaseNotes:
-    'TEST ONLY: package 1.7.0:1 with kth-jd built from CyberAshven/kth 8582780e ' +
-    '(kth 1.7.0 with the Job Declaration, coinbase tag and the open PRs), ' +
+    'TEST ONLY: package 1.7.0:1 with kth-jd built from CyberAshven/kth 7856e9b8 ' +
+    '(the 8582780e of 1.7.0:1.1 merged with k-nuth/kth#1005, which brings #993: ' +
+    'Job Declaration upstreams through Tor and I2P and a latency limit by route), ' +
     'reported as 1.7.0, and Node Settings -> Coinbase Tag.',
   migrations: {
     up: async () => {},
