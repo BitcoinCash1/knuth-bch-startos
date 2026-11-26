@@ -86,6 +86,13 @@ FOLLOWER = os.environ.get("TB_FOLLOWER", "kth")
 # (node_p2p_address) and fetches on its block announcements, as the chipnet
 # pool does. 0: P2Pool polls alone, and the follower's only peer is A.
 NODE_P2P = os.environ.get("TB_NODE_P2P", "1") == "1"
+# TB_RESTARTS=N: after the bursts, P2Pool is killed (SIGKILL) and started again
+# N times, each right after A mines five blocks, while A goes on mining a
+# block a second. P2Pool's startup asks getblockchaininfo for
+# initialblockdownload and, while it is true, waits 300 s before it asks again
+# (preflight.rs, wait_for_bitcoin_node_synced).
+RESTARTS = int(os.environ.get("TB_RESTARTS") or "0")
+RESTART_WAIT = 330
 QUIET_SECONDS = int(os.environ.get("TB_QUIET_SECONDS") or "60")
 BURST_SECONDS = int(os.environ.get("TB_BURST_SECONDS") or "300")
 SETTLE_SECONDS = int(os.environ.get("TB_SETTLE_SECONDS") or "30")
@@ -480,21 +487,21 @@ def start_p2pool(binary: str, config: Path) -> None:
 # The probe
 # -----------------------------------------------------------------------------
 
-def heights(node) -> tuple[int | None, int | None]:
+def heights(node) -> tuple[int | None, int | None, bool | None]:
     result, error = call(node, "getblockchaininfo", timeout=10)
     if error is not None or not isinstance(result, dict):
-        return None, None
-    return result.get("blocks"), result.get("headers")
+        return None, None, None
+    return result.get("blocks"), result.get("headers"), result.get("initialblockdownload")
 
 
 def probe_loop() -> None:
     node = follower()
     while not STOP_PROBE.is_set():
         started = time.time()
-        blocks_before, headers_before = heights(node)
+        blocks_before, headers_before, ibd_before = heights(node)
         result, error = call(node, "getblocktemplate", timeout=30)
         answered = time.time()
-        blocks_after, headers_after = heights(node)
+        blocks_after, headers_after, _ = heights(node)
         entry = {
             "t": round(started, 3),
             "answered": round(answered, 3),
@@ -502,6 +509,7 @@ def probe_loop() -> None:
             "headers_before": headers_before,
             "blocks_after": blocks_after,
             "headers_after": headers_after,
+            "ibd": ibd_before,
         }
         if error is None and isinstance(result, dict):
             entry["ok"] = True
@@ -544,6 +552,9 @@ def summarize_probe(window: tuple[float, float], a_hashes: dict[int, str]) -> di
         elif parent in a_hashes and a_hashes[parent] != p.get("previous"):
             unconnected.append(p)
     gaps = [p["headers_before"] - p["blocks_before"] for p in ahead]
+    new_tip = [p for previous, p in zip(inside, inside[1:])
+               if p["blocks_before"] is not None and previous["blocks_before"] is not None
+               and p["blocks_before"] > previous["blocks_before"]]
     streak = 0.0
     run_start = None
     for p in inside:
@@ -565,6 +576,12 @@ def summarize_probe(window: tuple[float, float], a_hashes: dict[int, str]) -> di
         "max_headers_ahead": max(gaps) if gaps else 0,
         "templates_on_unconnected_blocks": len(unconnected),
         "unconnected_examples": unconnected[:5],
+        # What a client reading getblockchaininfo saw: initialblockdownload
+        # true, at any sample and at the samples that see a new tip (P2Pool
+        # reads it on each new tip, payout_tree_executor.rs).
+        "ibd_true": sum(1 for p in inside if p.get("ibd")),
+        "new_tip_samples": len(new_tip),
+        "ibd_true_at_new_tip": sum(1 for p in new_tip if p.get("ibd")),
     }
 
 
@@ -656,6 +673,53 @@ def stream_loop(addresses: list[str]) -> None:
             STREAM_ERRORS.append(str(error)[:200])
         sent += 1
         STOP_STREAM.wait(max(0.0, STREAM_INTERVAL - (time.time() - started)))
+
+
+def restart_rounds(count: int, address: str, p2pool_bin: str, config: Path) -> None:
+    """Kill P2Pool and start it again, `count` times, each right after a
+    five-block burst, and record how long each start took to its first
+    template fetch and whether it waited for the node to sync."""
+    global P2POOL
+    rounds = []
+    for number in range(1, count + 1):
+        P2POOL.kill()
+        P2POOL.wait(15)
+        mine(5, address)
+        started = time.time()
+        env = os.environ.copy()
+        env.pop("RUST_LOG", None)
+        P2POOL = spawn([p2pool_bin, "--config", str(config)], OUT / f"p2pool-console-restart{number}.log", env)
+        fetched = None
+        waits = 0
+        deadline = started + RESTART_WAIT
+        while time.time() < deadline:
+            ensure_follower()
+            if P2POOL.poll() is not None:
+                break
+            mine(1, address)
+            text = "\n".join(read_text(path) for path in sorted(OUT.glob("p2pool-file.log*")))
+            waits = 0
+            for line in text.splitlines():
+                at = stamp_of(line)
+                if at is None or at < started:
+                    continue
+                if "Bitcoin node still syncing" in line:
+                    waits += 1
+                elif P2POOL_FETCH in line and fetched is None:
+                    fetched = at
+            if fetched is not None:
+                break
+            time.sleep(1)
+        record = {
+            "round": number,
+            "waited_for_sync": waits,
+            "first_template_after_s": None if fetched is None else round(fetched - started, 1),
+            "p2pool_exited": P2POOL.poll(),
+        }
+        rounds.append(record)
+        progress(f"restart {number}: first template after {record['first_template_after_s']} s, "
+                 f"waited for sync {waits} time(s)")
+    EVIDENCE["p2pool"]["restarts"] = rounds
 
 
 def compare_stream() -> dict:
@@ -873,6 +937,8 @@ def run() -> None:
     progress(f"P2Pool: {burst_pool['fetches']} fetches, {burst_pool['failed_fetches']} failed, "
              f"longest without a template {burst_pool['longest_without_template_s']}s, "
              f"work withdrawn {burst_pool['work_withdrawn']} times")
+    if RESTARTS > 0 and caught_up is not None:
+        restart_rounds(RESTARTS, address, p2pool_bin, OUT / "p2pool.toml")
     stop_process(P2POOL)
     if caught_up is None:
         fail("the follower stopped following A: " + EVIDENCE["heights"]["follower_not_caught_up"])

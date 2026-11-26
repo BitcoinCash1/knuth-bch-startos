@@ -22,7 +22,9 @@ name: kth templates while blocks come seconds apart
 # the body cursor below the range end, so no later range opened; with that
 # fixed, the rows compare the template rule alone (run 45858901992). This
 # run adds a stream of 1 sat/byte payments through the bursts and counts the
-# ones A holds and the follower misses, before and after the relay change.
+# ones A holds and the follower misses, before and after the relay change
+# (run 45870287666). This run: the retry on the next tip, and
+# initialblockdownload as BCHN with P2Pool restarted during bursts.
 # Runs when this file or the script changes, or by hand.
 on:
   push:
@@ -39,54 +41,83 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Before the relay change: the template branch with the chunk fold.
-          - name: kth-tmpl-fold-lan-poll
-            follower: kth
-            repo: CyberAshven/kth
-            ref: a4ee9fb89fdb12a1cbe0eaeed96fd296291722a7
-            delay_ms: ""
-            node_p2p: "0"
-          - name: kth-tmpl-fold-wan-poll
-            follower: kth
-            repo: CyberAshven/kth
-            ref: a4ee9fb89fdb12a1cbe0eaeed96fd296291722a7
-            delay_ms: "100"
-            node_p2p: "0"
-          # After: test/relay-while-blocks-arrive-with-chunk-fold, the same plus
-          # the relay change.
-          - name: kth-relay-fold-lan-poll
+          # (a) Before: the relay branch with the chunk fold; after: the same
+          # with the retry on the next tip (test/relay-retry-with-chunk-fold).
+          - name: kth-relay-fold-lan
             follower: kth
             repo: CyberAshven/kth
             ref: f1e682499461f6037e1c74f8a028cf1c7bb2b4ec
             delay_ms: ""
             node_p2p: "0"
-          - name: kth-relay-fold-wan-poll
+          - name: kth-relay-fold-wan
             follower: kth
             repo: CyberAshven/kth
             ref: f1e682499461f6037e1c74f8a028cf1c7bb2b4ec
             delay_ms: "100"
             node_p2p: "0"
+          - name: kth-retry-fold-lan
+            follower: kth
+            repo: CyberAshven/kth
+            ref: 19da39c86552e3d1aaf8e0c8039aed5d3a74407e
+            delay_ms: ""
+            node_p2p: "0"
+          - name: kth-retry-fold-wan
+            follower: kth
+            repo: CyberAshven/kth
+            ref: 19da39c86552e3d1aaf8e0c8039aed5d3a74407e
+            delay_ms: "100"
+            node_p2p: "0"
+          # (b) Before: master with the chunk fold; after: the same with
+          # initialblockdownload as BCHN (test/ibd-like-bchn-with-chunk-fold).
+          # Four P2Pool restarts each, right after a five-block burst.
+          - name: kth-master-fold-lan-restarts
+            follower: kth
+            repo: CyberAshven/kth
+            ref: ebbb6ded2e815fe3d04ab8c794c581da47fe40c2
+            delay_ms: ""
+            node_p2p: "0"
+            restarts: "4"
+          - name: kth-master-fold-wan-restarts
+            follower: kth
+            repo: CyberAshven/kth
+            ref: ebbb6ded2e815fe3d04ab8c794c581da47fe40c2
+            delay_ms: "100"
+            node_p2p: "0"
+            restarts: "4"
+          - name: kth-ibd-fold-lan-restarts
+            follower: kth
+            repo: CyberAshven/kth
+            ref: e57d70c169d055f612342ed93b0e966b3ec71eb9
+            delay_ms: ""
+            node_p2p: "0"
+            restarts: "4"
+          - name: kth-ibd-fold-wan-restarts
+            follower: kth
+            repo: CyberAshven/kth
+            ref: e57d70c169d055f612342ed93b0e966b3ec71eb9
+            delay_ms: "100"
+            node_p2p: "0"
+            restarts: "4"
           - name: bchn-lan-poll
             follower: bchn
             delay_ms: ""
             node_p2p: "0"
-          - name: bchn-wan-poll
+          - name: bchn-wan-restarts
             follower: bchn
             delay_ms: "100"
             node_p2p: "0"
-          # kth's node tests alone, on the PR branches as pushed (no fold, so
-          # no burst row): the template branch merged with master a0a5455d,
-          # and the relay branch on it.
-          - name: tests-template-7e25c7bd
+            restarts: "4"
+          # kth node tests alone on the PR branches as pushed (no fold).
+          - name: tests-retry-4aa55528
             follower: kth
             repo: CyberAshven/kth
-            ref: 7e25c7bd78b66d739f37be083d1a716042e19ed3
+            ref: 4aa5552818a00dc0da733ecbb4416002ec3c1329
             node_tests: true
             skip_e2e: "1"
-          - name: tests-relay-4d8f522c
+          - name: tests-ibd-44b7444d
             follower: kth
             repo: CyberAshven/kth
-            ref: 4d8f522cd0e6475d9adfa996534dcdebed577693
+            ref: 44b7444d215b9225f9df2fb2f5e69289b6fabe15
             node_tests: true
             skip_e2e: "1"
     name: ${{ matrix.name }}
@@ -227,13 +258,13 @@ jobs:
           if [ -z "$TEST" ]; then echo "missing kth_node_test under kth-src/build"; exit 1; fi
           rc=0
           docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w "/src/$(dirname "${TEST#kth-src/}")" "$IMAGE" \
-            bash -c 'timeout --kill-after=30 900 ./kth_node_test "[chain_view]" --reporter compact; echo "chain_view exit $?"; timeout --kill-after=30 600 ./kth_node_test "[sv2 template_provider]" --reporter compact; echo "template_provider exit $?"; timeout --kill-after=30 900 ./kth_node_test "[tx_relay]" --reporter compact; echo "tx_relay exit $?"' \
+            bash -c 'timeout --kill-after=30 900 ./kth_node_test "[chain_view]" --reporter compact; echo "chain_view exit $?"; timeout --kill-after=30 600 ./kth_node_test "[sv2 template_provider]" --reporter compact; echo "template_provider exit $?"; timeout --kill-after=30 900 ./kth_node_test "[tx_relay]" --reporter compact; echo "tx_relay exit $?"; timeout --kill-after=30 900 ./kth_node_test "[rpc dispatch]" --reporter compact; echo "rpc_dispatch exit $?"' \
             > node-tests-template.log 2>&1 || true
           grep -E "exit|passed|failed" node-tests-template.log | tail -8
           docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w "/src/$(dirname "${TEST#kth-src/}")" "$IMAGE" \
             bash -c "timeout --kill-after=30 1500 ./kth_node_test --reporter compact" > node-tests.log 2>&1 || rc=$?
           tail -5 node-tests.log
-          if grep -q "chain_view exit [^0]\|template_provider exit [^0]\|tx_relay exit [^0]" node-tests-template.log; then rc=1; fi
+          if grep -q "chain_view exit [^0]\|template_provider exit [^0]\|tx_relay exit [^0]\|rpc_dispatch exit [^0]" node-tests-template.log; then rc=1; fi
           echo "kth_node_test exit $rc"
           exit $rc
         shell: bash
@@ -290,6 +321,7 @@ jobs:
           export TB_FOLLOWER="${{ matrix.follower }}"
           export TB_DELAY_MS="${{ matrix.delay_ms }}"
           export TB_NODE_P2P="${{ matrix.node_p2p }}"
+          export TB_RESTARTS="${{ matrix.restarts || '0' }}"
           export P2POOL_BIN="$PWD/p2pool/target/release/p2poolv2"
           if [ "$TB_FOLLOWER" = "kth" ]; then
             export KTH_IMAGE="$IMAGE"
