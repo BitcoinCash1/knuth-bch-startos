@@ -4386,21 +4386,27 @@ def rpa_kth_bchd_neutrino(s: dict) -> None:
         # chain runs ahead of the clock after the long run of blocks, so a
         # block on the same parent gets the same time: another payment makes
         # the first block of the new branch other than the one left (BCHN
-        # refuses that one, which it was told is invalid). The funding and the
-        # 31 inputs, whose lock time is the height they were signed at, go
-        # one block later.
+        # refuses that one, which it was told is invalid). The funding of the
+        # 31 inputs has the lock time of the height it was signed at, so BCHN
+        # drops it and its child from the mempool when it leaves that height;
+        # both are sent again for the second block of the new branch.
         fork = heights["block8"]
         left = hashes[fork:]
+        funding = call(BCHN, "getrawtransaction", rpa["txid31"], True)[0]["vin"][0]["txid"]
+        raws = [call(BCHN, "getrawtransaction", txid)[0] for txid in (funding, rpa["txid31"])]
         cli("invalidateblock", left[0][::-1].hex())
         extra = cli("sendtoaddress", cli("getnewaddress"), "0.5")
-        mined = json.loads(cli("generatetoaddress", str(len(left) + 1), s["addr"]))
+        mined = json.loads(cli("generatetoaddress", "1", s["addr"]))
+        for raw in raws:
+            call(BCHN, "sendrawtransaction", raw)
+        mined += json.loads(cli("generatetoaddress", str(len(left)), s["addr"]))
         seen["bchd at the new tip"] = wait_best(bchd_call, mined[-1], 300)
         seen["kth at the new tip"] = wait_best(lambda m: call(KTH, m), mined[-1], 300)
         tip2, hashes2, reference2 = rpa_chain_now()
         moved = call(BCHN, "getblock", hashes2[fork][::-1].hex(), 1)[0]["tx"]
         moved_next = call(BCHN, "getblock", hashes2[fork + 1][::-1].hex(), 1)[0]["tx"]
         seen["the new block at the fork holds the payment and another, then the 31 inputs"] = (
-            rpa["txid8"] in moved and extra in moved and rpa["txid31"] in moved + moved_next)
+            rpa["txid8"] in moved and extra in moved and rpa["txid31"] in moved_next and funding in moved_next)
         views = {"kth": rpa_served(KTH_P2P_PORT, hashes2, tip2), "bchd": rpa_served(BCHD_P2P_PORT, hashes2, tip2)}
         after_ok, seen["after"], after_headers = rpa_views_agree(views, hashes2, reference2, tip2)
         seen["after"]["tip"] = tip2
