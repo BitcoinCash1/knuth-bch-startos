@@ -39,6 +39,13 @@ keys after each gap. kth must be on the pool again within RECONNECT_BOUND of
 P2Pool listening: a declaration accepted and its entry active, both logged
 after the kill. Then the new P2Pool process must count a share from kth.
 
+KTH_JD_POOL_NODE=kth makes the row's kth P2Pool's own node instead of BCHN
+A, so P2Pool checks each Full-Template job kth declares by sending the block
+to kth as a getblocktemplate proposal (BIP23). With KTH_JD_EXPECT=refused the
+row passes only if P2Pool refuses every declaration as invalid-template and
+accepts none for 300 s, which is what a kth that refuses proposals gets.
+Otherwise the row must also show no invalid-template refusal at all.
+
 How a PPLNS block is proven (P2Pool BCH v2, read before changing a row):
 - P2Pool BCH takes the donation and fee per share ("cuts-per-share" in its
   protocol string). Each share in the PPLNS window gives its own cut off its
@@ -177,6 +184,19 @@ RECONNECT_BOUND = 420
 # kth's own lines for an entry that mines on the pool again: a probe that
 # took over from solo, or a pair that connected as the active one.
 ACTIVE_AGAIN = re.compile(r"\[sv2 jd\] Entry \d+ (?:recovered; active|both upstreams ready; active)")
+# KTH_JD_POOL_NODE=kth: P2Pool's own node ([bitcoinrpc]) is the kth of the row
+# instead of BCHN A, so P2Pool checks every Full-Template job kth declares by
+# sending the block to kth as a getblocktemplate proposal (BIP23). kth starts
+# first then: P2Pool reads its node from the start.
+POOL_NODE = os.environ.get("KTH_JD_POOL_NODE") or "bchn"
+# KTH_JD_EXPECT=refused: the row passes only when P2Pool refuses every job kth
+# declares with invalid-template, as it does when its node refuses proposals.
+# The row before the fix shows that refusal; the row after it, mining.
+EXPECT = os.environ.get("KTH_JD_EXPECT") or "accepted"
+REFUSED_WINDOW = 300
+# kth's line for a job P2Pool refused, and P2Pool's for a template it refused.
+INVALID_TEMPLATE = "pool refused the local custom job: invalid-template"
+POOL_REJECTED = "Rejected declared BCH template"
 
 
 def watch_declarations(seconds: int) -> None:
@@ -631,6 +651,7 @@ def write_p2pool_config(payout: str, provider_key: str | None = None) -> dict:
     stats.mkdir(parents=True, exist_ok=True)
     config = OUT / "p2pool.toml"
     source = "rpc" if provider_key is None else "sv2"
+    node_port = KTH[1] if POOL_NODE == "kth" else BCHN[1]
     provider_address = f"127.0.0.1:{SV2_PORT}"
     provider = "" if provider_key is None else (
         f"template_provider_address = {toml_string(provider_address)}\n"
@@ -678,7 +699,7 @@ pool_signature = "P2Poolv2"
 wait_for_chain_sync = false
 
 [bitcoinrpc]
-url = "http://127.0.0.1:{BCHN[1]}"
+url = "http://127.0.0.1:{node_port}"
 username = {toml_string(AUTH)}
 password = {toml_string(AUTH)}
 
@@ -702,6 +723,8 @@ port = {API_PORT}
         "chain": "bitcoin-cash",
         "bitcoin_cash_network": "regtest",
         "template_source": source,
+        "pool_node": POOL_NODE,
+        "pool_node_rpc": f"127.0.0.1:{node_port}",
         "start_difficulty": 1,
         "minimum_difficulty": 1,
         "maximum_difficulty": 1,
@@ -1259,9 +1282,59 @@ def row25(binary: str, pubkey: str, solo: str) -> None:
          + json.dumps(EVIDENCE["blocks"], indent=2)[:2000])
 
 
+def row_refused() -> None:
+    """KTH_JD_EXPECT=refused: P2Pool refuses every job kth declares with
+    invalid-template, and accepts none, for REFUSED_WINDOW seconds."""
+    progress(f"row {EVIDENCE['row']}: waiting {REFUSED_WINDOW}s for P2Pool to refuse kth's declarations")
+    deadline = time.monotonic() + REFUSED_WINDOW
+    while time.monotonic() < deadline:
+        ensure_kth()
+        ensure_p2pool()
+        if ACCEPTED.search(kth_log_text()):
+            fail(f"row {EVIDENCE['row']}: P2Pool accepted a job kth declared: "
+                 + "; ".join(matching_lines(kth_log_text(), ("accepted local template",), 3)))
+        time.sleep(2)
+    kth_refusals = matching_lines(kth_log_text(), ("pool refused the local custom job",), 1000)
+    pool_rejections = matching_lines(p2pool_log_text(), (POOL_REJECTED,), 1000)
+    invalid = [line for line in kth_refusals if INVALID_TEMPLATE in line]
+    if not invalid:
+        fail(f"row {EVIDENCE['row']}: kth logged no invalid-template refusal in {REFUSED_WINDOW}s. "
+             f"refusals: {kth_refusals[-5:]}; P2Pool: {pool_rejections[-5:]}")
+    EVIDENCE["assertions"] = {
+        "pool_accepted_absent": True,
+        "invalid_template_refusals": len(invalid),
+        "other_refusals": len(kth_refusals) - len(invalid),
+        "p2pool_rejected_templates": len(pool_rejections),
+        "first_p2pool_rejection": pool_rejections[0] if pool_rejections else None,
+    }
+    progress(f"row {EVIDENCE['row']}: {len(invalid)} declarations refused as invalid-template, none accepted")
+
+
+def record_template_checks(strict: bool = True) -> None:
+    """What P2Pool made of kth's declared templates, from both logs. With kth
+    as P2Pool's node and a kth that answers proposals, none may be
+    invalid-template."""
+    kth_refusals = matching_lines(kth_log_text(), ("pool refused the local custom job",), 1000)
+    pool_rejections = matching_lines(p2pool_log_text(), (POOL_REJECTED,), 1000)
+    accepted = len(ACCEPTED.findall(kth_log_text()))
+    EVIDENCE["template_checks"] = {
+        "pool_node": POOL_NODE,
+        "declarations_accepted": accepted,
+        "invalid_template_refusals": sum(INVALID_TEMPLATE in line for line in kth_refusals),
+        "kth_refusals": kth_refusals[-20:],
+        "p2pool_rejected_templates": len(pool_rejections),
+        "p2pool_rejections": pool_rejections[-20:],
+    }
+    if strict and POOL_NODE == "kth" and EXPECT != "refused" and EVIDENCE["template_checks"]["invalid_template_refusals"]:
+        fail(f"row {EVIDENCE['row']}: P2Pool refused a job kth declared as invalid-template: "
+             f"{kth_refusals[-3:]}; P2Pool: {pool_rejections[-3:]}")
+
+
 def row25b(binary: str, pubkey: str, solo: str) -> None:
     progress(f"row {EVIDENCE['row']}: waiting for P2Pool to accept the custom job")
-    deadline = time.monotonic() + 120
+    # With kth as P2Pool's node, kth started first and its JD client waits out
+    # its retry back-off before it reaches the pool.
+    deadline = time.monotonic() + (RECONNECT_BOUND if POOL_NODE == "kth" else 120)
     accepted = False
     while time.monotonic() < deadline:
         ensure_kth()
@@ -1274,8 +1347,9 @@ def row25b(binary: str, pubkey: str, solo: str) -> None:
         line = fallback_line(kth_log_text())
         fail(
             f"row {EVIDENCE['row']}: kth did not log the pool accepting its local template "
-            "within 120s. "
+            f"within {RECONNECT_BOUND if POOL_NODE == 'kth' else 120}s. "
             + (f"fallback: {line}" if line else "no 'continuing solo mining' line either")
+            + "; " + "; ".join(matching_lines(kth_log_text(), ("pool refused the local custom job",), 3))
         )
     before_probe = int(cli("getblockcount"))
     printed = probe_hashrate(binary, pubkey, before_probe)
@@ -2257,10 +2331,18 @@ def run() -> None:
         EVIDENCE["settings"]["user_identity"] = identity
         EVIDENCE["settings"]["sv2_mining_address"] = solo
 
-        progress("starting P2Pool")
-        start_p2pool(p2pool_bin, OUT / "p2pool.toml")
-        progress("starting kth")
-        start_kth(image, src, binary, solo, identity)
+        if POOL_NODE == "kth":
+            # P2Pool reads its node from the start, so kth comes first; kth's
+            # JD client keeps trying the pool until it listens.
+            progress("starting kth, P2Pool's node")
+            start_kth(image, src, binary, solo, identity)
+            progress("starting P2Pool on kth")
+            start_p2pool(p2pool_bin, OUT / "p2pool.toml")
+        else:
+            progress("starting P2Pool")
+            start_p2pool(p2pool_bin, OUT / "p2pool.toml")
+            progress("starting kth")
+            start_kth(image, src, binary, solo, identity)
         pubkey = authority_key()
         EVIDENCE["kth_authority_public_key"] = pubkey
         if not port_open(SV2_PORT):
@@ -2268,6 +2350,8 @@ def run() -> None:
 
         if row == "25":
             row25(device_bin, pubkey, solo)
+        elif EXPECT == "refused":
+            row_refused()
         else:
             if WATCH_SECONDS > 0:
                 watch_declarations(WATCH_SECONDS)
@@ -2278,6 +2362,7 @@ def run() -> None:
             if SOAK_SECONDS > 0 and WATCH_SECONDS == 0:
                 soak(SOAK_SECONDS)
     record_p2pool_api()
+    record_template_checks()
     EVIDENCE["heights"]["bchn_after"] = int(cli("getblockcount"))
     EVIDENCE["heights"]["kth_after"] = kth_height()
     EVIDENCE["ok"] = True
@@ -2309,6 +2394,11 @@ def main() -> None:
             attach_logs()
         except Exception as error:
             EVIDENCE["log_error"] = f"{type(error).__name__}: {error}"
+        if "template_checks" not in EVIDENCE:
+            try:
+                record_template_checks(strict=False)
+            except Exception as error:
+                EVIDENCE["template_checks_error"] = f"{type(error).__name__}: {error}"
         write_evidence()
         print(f"evidence: {OUT / 'jd-p2pool-e2e.json'}", flush=True)
 

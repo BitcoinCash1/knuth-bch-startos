@@ -6,6 +6,8 @@ name: kth SV2 job declaration against BCH P2Pool
 # P2Pool. Each kth branch has node/announce-blocks (#814) merged in so BCHN
 # hears the blocks kth mines; kth master does not announce its own blocks yet.
 # Build that kth with kth's toolchain, build BCH P2Pool, and run the row.
+# A row with proposals set builds kth alone and compares its getblocktemplate
+# proposals (BIP23) with BCHN's on one regtest chain (scripts/proposal_e2e.py).
 # Runs when this file changes, or by hand.
 on:
   push:
@@ -22,55 +24,39 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # The pool restarted under a running kth: once P2Pool has accepted
-          # kth's declaration and counted a share from it, P2Pool is killed
-          # (SIGKILL) and started again on the same store after restart_gaps
-          # seconds, with the mining device stopped and started with it as the
-          # live pool's restart does with the translator (restart_device "0"
-          # keeps it mining). kth must be on the pool again within 420 s of
-          # P2Pool listening and have a share counted after that. P2Pool is the
-          # deployed node's alpha e3cf4c88. Run 44740639123 had the quick, long
-          # and pool-only rows on the Start9's build (test/coinbase-tag
-          # 8582780e); all three passed. This run: the package combination
-          # test/kth-jd-reconnect (8582780e merged with #1005, which brings
-          # #993) on the same rows, three restarts in one kth lifetime on both
-          # builds, a restart with kth's upstreams through a SOCKS5 relay
-          # (net.proxy, as through Tor), and row 25w through the relay at a 2 s
-          # round trip as in run 43701597157, with kth's node tests.
-          - name: restart-combo-quick
-            branch: test/kth-jd-reconnect
-            row: "25w"
-            p2pool: e3cf4c8872cbbc2940f44b91d8824da3a0cb0c94
-            restart_gaps: "5"
-          - name: restart-combo-long
-            branch: test/kth-jd-reconnect
-            row: "25w"
-            p2pool: e3cf4c8872cbbc2940f44b91d8824da3a0cb0c94
-            restart_gaps: "420"
-          - name: restart-combo-repeat
-            branch: test/kth-jd-reconnect
-            row: "25w"
-            p2pool: e3cf4c8872cbbc2940f44b91d8824da3a0cb0c94
-            restart_gaps: "5,420,5"
-          - name: restart-combo-proxy
-            branch: test/kth-jd-reconnect
-            row: "25w"
-            p2pool: e3cf4c8872cbbc2940f44b91d8824da3a0cb0c94
-            restart_gaps: "5,420"
-            proxy: true
-          - name: combo-proxy-rt2000
-            branch: test/kth-jd-reconnect
-            row: "25w"
-            p2pool: e3cf4c8872cbbc2940f44b91d8824da3a0cb0c94
-            delay_ms: 1000
-            proxy: true
-            soak: 900
+          # BIP23 proposals on kth rpc/getblocktemplate-proposal (k-nuth/kth
+          # master 53ec7760 and the change): scripts/proposal_e2e.py sends the
+          # same proposals to kth and to BCHN 29.2.0 on one regtest chain and
+          # compares the answers one by one; kth's blockchain and node test
+          # suites run on the same build. No P2Pool and no mining device.
+          - name: proposals-vs-bchn
+            branch: rpc/getblocktemplate-proposal
+            proposals: true
+            blockchain: true
             node_tests: true
-          - name: restart-8582780e-repeat
-            branch: test/coinbase-tag
+          # Row 25w with P2Pool's own node set to kth instead of BCHN
+          # (KTH_JD_POOL_NODE=kth), so P2Pool e3cf4c88 checks every
+          # Full-Template job kth declares with a proposal to kth. Before:
+          # the Start9 JD build test/kth-jd-reconnect (7856e9b8), whose
+          # getblocktemplate is master's and refuses proposals; P2Pool must
+          # refuse every declaration as invalid-template for 300 s
+          # (KTH_JD_EXPECT=refused). After: the same build with the change
+          # (test/kth-jd-proposal); P2Pool must accept the declarations,
+          # count a share and pay a PPLNS block, with no invalid-template
+          # refusal. kth's blockchain and node tests run on the after build.
+          - name: pool-on-kth-before
+            branch: test/kth-jd-reconnect
             row: "25w"
             p2pool: e3cf4c8872cbbc2940f44b91d8824da3a0cb0c94
-            restart_gaps: "5,420,5"
+            pool_node: kth
+            expect: refused
+          - name: pool-on-kth-after
+            branch: test/kth-jd-proposal
+            row: "25w"
+            p2pool: e3cf4c8872cbbc2940f44b91d8824da3a0cb0c94
+            pool_node: kth
+            blockchain: true
+            node_tests: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -214,6 +200,21 @@ jobs:
           echo "kth_node_test exit $rc"
           exit $rc
         shell: bash
+      # kth's blockchain test suite on the built tree, as kth-rows.yml runs
+      # it. A failure lets the row run, and fails the job at the end.
+      - name: Run kth's blockchain tests
+        id: blockchain_tests
+        if: matrix.blockchain
+        continue-on-error: true
+        run: |
+          TEST=$(find kth-src/build -name kth_blockchain_test -type f -perm -u+x | head -1)
+          if [ -z "$TEST" ]; then echo "missing kth_blockchain_test under kth-src/build"; exit 1; fi
+          rc=0
+          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w "/src/$(dirname "${TEST#kth-src/}")" "$IMAGE"             bash -c "timeout --kill-after=30 1800 ./kth_blockchain_test --reporter compact" > blockchain-tests.log 2>&1 || rc=$?
+          tail -5 blockchain-tests.log
+          echo "kth_blockchain_test exit $rc"
+          exit $rc
+        shell: bash
       - name: Save the Conan packages
         if: success() && steps.restore-conan.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
@@ -245,6 +246,7 @@ jobs:
           echo "$PWD/bitcoin-cash-node-29.2.0/bin" >> "$GITHUB_PATH"
         shell: bash
       - name: Fetch SRI's mining_device (sv2-apps, pinned)
+        if: ${{ !matrix.proposals }}
         run: |
           sudo apt-get install -y -qq capnproto libcapnp-dev >/dev/null
           git clone --quiet https://github.com/stratum-mining/sv2-apps.git sv2-apps
@@ -257,13 +259,16 @@ jobs:
       # todo!() that panics when kth hands it the pool's extranonce prefix.
       # Patch the pinned tree, then build it.
       - name: Patch mining_device ntime roll and extranonce prefix (test only)
+        if: ${{ !matrix.proposals }}
         run: python3 scripts/patch_mining_device.py sv2-apps/integration-tests/lib/mining_device/mod.rs
         shell: bash
       - name: Build SRI's mining_device (sv2-apps, pinned)
+        if: ${{ !matrix.proposals }}
         run: cargo build --release --locked --manifest-path sv2-apps/Cargo.toml -p integration_tests_sv2 --bin mining_device
         shell: bash
       # A branch name, or a full commit id such as the one a live node runs.
       - name: Fetch BCH P2Pool ${{ matrix.p2pool }}
+        if: ${{ !matrix.proposals }}
         run: |
           REF="${{ matrix.p2pool }}"
           URL=https://github.com/CyberAshven/BitcoinCash-p2poolv2.git
@@ -277,6 +282,7 @@ jobs:
           git -C p2pool log -1 --format='%H %s' | tee p2pool-commit.txt
         shell: bash
       - name: Build BCH P2Pool
+        if: ${{ !matrix.proposals }}
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
@@ -329,6 +335,7 @@ jobs:
           sudo tc -s qdisc show dev lo
         shell: bash
       - name: Run the Job Declaration check
+        if: ${{ !matrix.proposals }}
         run: |
           KTH_BIN=$(find "$PWD/kth-src/build" -name kth -type f -perm -u+x -path '*node-exe*' -print -quit)
           if [ -z "$KTH_BIN" ]; then
@@ -343,6 +350,8 @@ jobs:
           export KTH_JD_WATCH_SECONDS="${{ matrix.watch || '0' }}"
           export KTH_JD_RESTART_GAPS="${{ matrix.restart_gaps || '' }}"
           export KTH_JD_RESTART_DEVICE="${{ matrix.restart_device || '1' }}"
+          export KTH_JD_POOL_NODE="${{ matrix.pool_node || 'bchn' }}"
+          export KTH_JD_EXPECT="${{ matrix.expect || 'accepted' }}"
           export KTH_SRC="$PWD/kth-src"
           export KTH_BIN
           export P2POOL_BIN="$PWD/p2pool/target/release/p2poolv2"
@@ -359,6 +368,19 @@ jobs:
           if [ -n "${{ matrix.delay_ms }}" ]; then sudo tc -s qdisc show dev lo | tee e2e-out/netem.txt; fi
           exit $rc
         shell: bash
+      - name: Run the proposal comparison
+        if: matrix.proposals
+        run: |
+          KTH_BIN=$(find "$PWD/kth-src/build" -name kth -type f -perm -u+x -path '*node-exe*' -print -quit)
+          if [ -z "$KTH_BIN" ]; then
+            echo "missing kth node-exe binary under kth-src/build"
+            exit 1
+          fi
+          export KTH_IMAGE="$IMAGE"
+          export KTH_SRC="$PWD/kth-src"
+          export KTH_BIN
+          python3 -u scripts/proposal_e2e.py e2e-out
+        shell: bash
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -368,12 +390,19 @@ jobs:
             p2pool-commit.txt
             p2pool-tests.log
             node-tests.log
+            blockchain-tests.log
             e2e-out
           if-no-files-found: error
       - name: Fail on kth's node tests
         if: always() && steps.node_tests.outcome == 'failure'
         run: |
           echo "kth_node_test failed; see node-tests.log in the artifact"
+          exit 1
+        shell: bash
+      - name: Fail on kth's blockchain tests
+        if: always() && steps.blockchain_tests.outcome == 'failure'
+        run: |
+          echo "kth_blockchain_test failed; see blockchain-tests.log in the artifact"
           exit 1
         shell: bash
       - name: Fail on BCH P2Pool's SV2 unit tests
