@@ -3,11 +3,12 @@
 
 BCHN A mines on regtest; the follower takes A's blocks over P2P and serves
 BCH P2Pool's templates. The follower is kth (TB_FOLLOWER=kth) or a second BCHN
-(TB_FOLLOWER=bchn), set up the same way: A is its only peer, and P2Pool takes
-its templates with getblocktemplate (template_source = "rpc") and hears its
-new blocks on its P2P port (node_p2p_address), as the chipnet pool does with
-the Start9's Knuth. A has no ZMQ publisher the pool listens to, so the two
-followers wake P2Pool alike.
+(TB_FOLLOWER=bchn), set up the same way: A is its only block source, and
+P2Pool takes its templates with getblocktemplate (template_source = "rpc"),
+polling every 10 s. With TB_NODE_P2P=1 P2Pool also connects to the
+follower's P2P port (node_p2p_address) and fetches on each block it
+announces, as the chipnet pool does with the Start9's Knuth. No ZMQ
+publisher is one the pool listens to, so the two followers wake P2Pool alike.
 
 Phases:
 - quiet: a block every 20 s, the baseline;
@@ -75,6 +76,10 @@ DATA = Path("/tmp/kth-tb-data")
 OUT = Path(sys.argv[1] if len(sys.argv) > 1 else "e2e-out").resolve()
 
 FOLLOWER = os.environ.get("TB_FOLLOWER", "kth")
+# TB_NODE_P2P=1: P2Pool also connects to the follower's P2P port
+# (node_p2p_address) and fetches on its block announcements, as the chipnet
+# pool does. 0: P2Pool polls alone, and the follower's only peer is A.
+NODE_P2P = os.environ.get("TB_NODE_P2P", "1") == "1"
 QUIET_SECONDS = int(os.environ.get("TB_QUIET_SECONDS") or "60")
 BURST_SECONDS = int(os.environ.get("TB_BURST_SECONDS") or "300")
 SETTLE_SECONDS = int(os.environ.get("TB_SETTLE_SECONDS") or "30")
@@ -98,6 +103,7 @@ EVIDENCE: dict = {
     "error": "started",
     "follower": FOLLOWER,
     "delay_ms": os.environ.get("TB_DELAY_MS") or "0",
+    "node_p2p": NODE_P2P,
     "phases": {},
     "probe": {},
     "p2pool": {},
@@ -366,6 +372,8 @@ def write_p2pool_config(payout: str) -> Path:
     stats.mkdir(parents=True, exist_ok=True)
     node = follower()
     config = OUT / "p2pool.toml"
+    address = toml_string(f"127.0.0.1:{follower_p2p()}")
+    node_p2p = f"node_p2p_address = {address}\n" if NODE_P2P else ""
     config.write_text(f"""# Regtest config for the template burst check.
 [network]
 listen_address = {toml_string(LIBP2P)}
@@ -395,8 +403,7 @@ minimum_difficulty = 1
 maximum_difficulty = 1
 bootstrap_address = {toml_string(payout)}
 zmqpubhashblock = {toml_string(ZMQ_UNUSED)}
-node_p2p_address = {toml_string(f"127.0.0.1:{follower_p2p()}")}
-chain = "bitcoin-cash"
+{node_p2p}chain = "bitcoin-cash"
 bitcoin_cash_network = "regtest"
 sv2_port = {P2POOL_SV2}
 sv2_authority_public_key = {toml_string(SV2_PUBLIC)}
@@ -751,7 +758,12 @@ def run() -> None:
     time.sleep(1)
     top = int(cli("getblockcount"))
     EVIDENCE["heights"]["after_burst"] = top
-    EVIDENCE["heights"]["follower_caught_up_after_s"] = wait_follower_height(top, 120)
+    caught_up = None
+    try:
+        caught_up = wait_follower_height(top, 120)
+    except SystemExit as error:
+        EVIDENCE["heights"]["follower_not_caught_up"] = str(error)
+    EVIDENCE["heights"]["follower_caught_up_after_s"] = caught_up
     EVIDENCE["phases"] = {
         "quiet": {"start": t0, "end": t1, "blocks": quiet_blocks},
         "burst": {"start": t1, "end": t2, **bursts},
@@ -781,6 +793,8 @@ def run() -> None:
              f"longest without a template {burst_pool['longest_without_template_s']}s, "
              f"work withdrawn {burst_pool['work_withdrawn']} times")
     stop_process(P2POOL)
+    if caught_up is None:
+        fail("the follower stopped following A: " + EVIDENCE["heights"]["follower_not_caught_up"])
 
     progress("transactions at 1 sat/byte, the follower as configured")
     first_payments = pay(PAYMENTS, "default")

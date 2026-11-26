@@ -9,8 +9,13 @@ name: kth templates while blocks come seconds apart
 # with node.sigop_fee_satoshis at its default (0) and with 100.
 #
 # Rows: kth master (before), kth rpc/template-while-headers-ahead (after), and
-# BCHN, each on loopback and with 100 ms each way on the link to A (the delay
-# sits on TCP port 18444 alone: RPC and P2Pool's connections are untouched).
+# BCHN, on loopback and with 100 ms each way on the link to A (the delay sits
+# on TCP port 18444 alone: RPC and P2Pool's connections are untouched). The
+# "poll" rows have P2Pool poll alone, so A is the follower's only peer; the
+# "p2p" rows also connect P2Pool to the follower's P2P port, as the chipnet
+# pool does. Run 45818211454 had p2p on every row: kth, master and branch
+# alike, asked P2Pool's listener (which advertises no services) for blocks,
+# waited out the 15 s chunk timeout, and then stopped following A.
 # Runs when this file or the script changes, or by hand.
 on:
   push:
@@ -27,33 +32,55 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: kth-master-lan
+          - name: kth-master-lan-poll
             follower: kth
             repo: k-nuth/kth
             ref: 53ec7760dc34da7f2d4c9c708fadb7329aec2014
             delay_ms: ""
-          - name: kth-master-wan
+            node_p2p: "0"
+          - name: kth-master-wan-poll
             follower: kth
             repo: k-nuth/kth
             ref: 53ec7760dc34da7f2d4c9c708fadb7329aec2014
             delay_ms: "100"
-          - name: kth-fix-lan
+            node_p2p: "0"
+          - name: kth-master-wan-p2p
+            follower: kth
+            repo: k-nuth/kth
+            ref: 53ec7760dc34da7f2d4c9c708fadb7329aec2014
+            delay_ms: "100"
+            node_p2p: "1"
+          - name: kth-fix-lan-poll
             follower: kth
             repo: CyberAshven/kth
-            ref: 4b6b267ba25ef8246f33c102325ae75f35004ed5
+            ref: 9e50c01d0b6490c454a96dcbb14233798b655ed4
             delay_ms: ""
+            node_p2p: "0"
             node_tests: true
-          - name: kth-fix-wan
+          - name: kth-fix-wan-poll
             follower: kth
             repo: CyberAshven/kth
-            ref: 4b6b267ba25ef8246f33c102325ae75f35004ed5
+            ref: 9e50c01d0b6490c454a96dcbb14233798b655ed4
             delay_ms: "100"
-          - name: bchn-lan
+            node_p2p: "0"
+          - name: kth-fix-wan-p2p
+            follower: kth
+            repo: CyberAshven/kth
+            ref: 9e50c01d0b6490c454a96dcbb14233798b655ed4
+            delay_ms: "100"
+            node_p2p: "1"
+          - name: bchn-lan-poll
             follower: bchn
             delay_ms: ""
-          - name: bchn-wan
+            node_p2p: "0"
+          - name: bchn-wan-poll
             follower: bchn
             delay_ms: "100"
+            node_p2p: "0"
+          - name: bchn-wan-p2p
+            follower: bchn
+            delay_ms: "100"
+            node_p2p: "1"
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 240
@@ -250,6 +277,7 @@ jobs:
         run: |
           export TB_FOLLOWER="${{ matrix.follower }}"
           export TB_DELAY_MS="${{ matrix.delay_ms }}"
+          export TB_NODE_P2P="${{ matrix.node_p2p }}"
           export P2POOL_BIN="$PWD/p2pool/target/release/p2poolv2"
           if [ "$TB_FOLLOWER" = "kth" ]; then
             export KTH_IMAGE="$IMAGE"
