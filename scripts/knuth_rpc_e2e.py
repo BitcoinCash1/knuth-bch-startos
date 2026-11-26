@@ -4382,17 +4382,25 @@ def rpa_kth_bchd_neutrino(s: dict) -> None:
                 result, prefixes, reference, tip,
                 [(0, heights["block16"], rpa["txid16"]), (2, heights["block8"], rpa["txid8"])])
 
-        # The reorganization: from the block of the 8-bit payment up.
+        # The reorganization: from the block of the 8-bit payment up. The
+        # chain runs ahead of the clock after the long run of blocks, so a
+        # block on the same parent gets the same time: another payment makes
+        # the first block of the new branch other than the one left (BCHN
+        # refuses that one, which it was told is invalid). The funding and the
+        # 31 inputs, whose lock time is the height they were signed at, go
+        # one block later.
         fork = heights["block8"]
         left = hashes[fork:]
         cli("invalidateblock", left[0][::-1].hex())
+        extra = cli("sendtoaddress", cli("getnewaddress"), "0.5")
         mined = json.loads(cli("generatetoaddress", str(len(left) + 1), s["addr"]))
         seen["bchd at the new tip"] = wait_best(bchd_call, mined[-1], 300)
         seen["kth at the new tip"] = wait_best(lambda m: call(KTH, m), mined[-1], 300)
         tip2, hashes2, reference2 = rpa_chain_now()
         moved = call(BCHN, "getblock", hashes2[fork][::-1].hex(), 1)[0]["tx"]
-        seen["the new block at the fork holds the payment and the 31 inputs"] = (
-            rpa["txid8"] in moved and rpa["txid31"] in moved)
+        moved_next = call(BCHN, "getblock", hashes2[fork + 1][::-1].hex(), 1)[0]["tx"]
+        seen["the new block at the fork holds the payment and another, then the 31 inputs"] = (
+            rpa["txid8"] in moved and extra in moved and rpa["txid31"] in moved + moved_next)
         views = {"kth": rpa_served(KTH_P2P_PORT, hashes2, tip2), "bchd": rpa_served(BCHD_P2P_PORT, hashes2, tip2)}
         after_ok, seen["after"], after_headers = rpa_views_agree(views, hashes2, reference2, tip2)
         seen["after"]["tip"] = tip2
@@ -4433,7 +4441,7 @@ def rpa_kth_bchd_neutrino(s: dict) -> None:
 
         ok = bool(seen["bchd at the tip"] and seen["kth at the tip"] and before_ok and neutrino_before_ok
                   and seen["bchd at the new tip"] and seen["kth at the new tip"]
-                  and seen["the new block at the fork holds the payment and the 31 inputs"]
+                  and seen["the new block at the fork holds the payment and another, then the 31 inputs"]
                   and after_ok and kept_below and changed_above and silent and answers and neutrino_after_ok
                   and file_ok)
     except subprocess.CalledProcessError as error:
@@ -4451,6 +4459,10 @@ def rpa_kth_bchd_neutrino(s: dict) -> None:
             logs = sorted(BCHD_DIR.glob("logs/**/*.log")) + [BCHD_DIR / "stdout.log"]
             (OUT / "bchd.log").write_text("".join(path.read_text(errors="replace")[-300000:]
                                                   for path in logs if path.exists()))
+        if not ok:
+            bchn_log = BCHN_DIR / "regtest" / "debug.log"
+            if bchn_log.exists():
+                (OUT / "bchn-debug-row1016.log").write_text(bchn_log.read_text(errors="replace")[-300000:])
         (OUT / "row1016.json").write_text(json.dumps(seen, indent=1, default=str))
     row(1016, client, "kth's type 2 filters, filter hashes, headers and checkpoints equal bchd's and the "
         "reference for every block of a chain with ground inputs, before and after BCHN leaves three blocks "
