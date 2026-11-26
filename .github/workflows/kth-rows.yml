@@ -9,10 +9,10 @@ name: kth rows from #773, build, tests and client checks
 # check of its row. It runs when this file changes, or by hand.
 on:
   push:
-    # Filter type 2 served from the compact filter index of #1057
-    # (CyberAshven/kth node/input-prefix-filter-index): every push of this
-    # branch.
-    branches: [e2e/type2-index]
+    # Wallet support from peers on the regular filter (type 0) and the input
+    # prefix filter (type 2), CyberAshven/kth restack/6 to restack/11: every
+    # push of this branch.
+    branches: [e2e/wallet-peer-path]
   workflow_dispatch:
 
 permissions:
@@ -25,24 +25,41 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # The input prefix filter served by the index of #1057, on the
-          # domain part of k-nuth/kth#1087: the neutrino suites, kth's node
-          # suite, the filter rows on a chain of 2,100 blocks and more (1003,
-          # 1004, 1010), and row 1016: kth against the bchd that serves type
-          # 2 (gcash/bchd#785 head) before and after a reorganization, and
-          # the Neutrino library's RPA search (gcash/neutrino#56 head).
-          - name: type2-index
-            branch: node/input-prefix-filter-index
+          # The peer path of wallet support without filter type 1. Branches
+          # not pushed yet come from scripts/kth-peer-path.bundle (bundle:
+          # true), on top of what the fork and k-nuth/kth master hold.
+          - name: r7-filter-files
+            branch: restack/7-filter-files
+            bundle: true
             gcc: '16'
-            options: -o neutrino=True
-            targets: kth_domain_neutrino_test kth_node_neutrino_test
-            suites: kth_domain_neutrino_test kth_node_neutrino_test
-            e2e: true
-            filters: true
-            rpa_filters: true
-            neutrino: true
-            bchd: true
-            long: 2100
+            options: -o neutrino=True -o wallet=True
+            targets: kth_node_wallet_test
+            suites: kth_node_wallet_test
+            e2e: false
+          - name: r8-scan
+            branch: restack/8-scan
+            bundle: true
+            gcc: '16'
+            options: -o neutrino=True -o wallet=True
+            targets: kth_domain_neutrino_test kth_node_wallet_test
+            suites: kth_domain_neutrino_test kth_node_wallet_test
+            e2e: false
+          - name: r9-block-checks
+            branch: restack/9-block-checks
+            bundle: true
+            gcc: '16'
+            options: -o neutrino=True -o wallet=True
+            targets: kth_domain_neutrino_test kth_node_wallet_test
+            suites: kth_domain_neutrino_test kth_node_wallet_test
+            e2e: false
+          - name: r10-peers
+            branch: restack/10-peers
+            bundle: true
+            gcc: '16'
+            options: -o neutrino=True -o wallet=True
+            targets: kth_domain_neutrino_test kth_node_neutrino_test kth_node_wallet_test
+            suites: kth_domain_neutrino_test kth_node_neutrino_test kth_node_wallet_test
+            e2e: false
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -87,7 +104,15 @@ jobs:
         shell: bash
       - name: Fetch kth ${{ matrix.branch }}
         run: |
-          git clone --depth 1 --branch "${{ matrix.branch }}" https://github.com/CyberAshven/kth.git kth-src
+          if [ "${{ matrix.bundle }}" = "true" ]; then
+            # The branch as the bundle holds it, on the fork and k-nuth/kth master.
+            git clone --quiet --filter=blob:none --no-checkout https://github.com/CyberAshven/kth.git kth-src
+            git -C kth-src fetch --quiet https://github.com/k-nuth/kth.git master
+            git -C kth-src fetch --quiet "$PWD/scripts/kth-peer-path.bundle" "refs/heads/*:refs/bundle/*"
+            git -C kth-src checkout --quiet --detach "refs/bundle/${{ matrix.branch }}"
+          else
+            git clone --depth 1 --branch "${{ matrix.branch }}" https://github.com/CyberAshven/kth.git kth-src
+          fi
           git -C kth-src log -1 --format='%H %s' | tee kth-commit.txt
         shell: bash
       # The packages ci-deps.yml keeps for this lock file and compiler: the
