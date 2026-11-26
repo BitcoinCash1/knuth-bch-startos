@@ -9,9 +9,10 @@ name: kth rows from #773, build, tests and client checks
 # check of its row. It runs when this file changes, or by hand.
 on:
   push:
-    # Wallet support in the node restacked on k-nuth/kth master, branch by
-    # branch (restack/*): every push of this branch.
-    branches: [e2e/wallet-restack]
+    # k-nuth/kth master 53ec7760 merged into #808 (test/m1126-808 on the fork),
+    # with the Conan options it needs: every push of this file on this branch.
+    branches: [e2e/m1126-stack]
+    paths: [.github/workflows/kth-rows.yml]
   workflow_dispatch:
 
 permissions:
@@ -24,51 +25,48 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Each restack branch builds with the Conan options it needs and runs
-        # kth's suites and the optional features' own test executables. Rows
-        # that need a listener run where the branch has one.
-          # Runs 45696605881, 45759066499 and 45766654503: every branch green.
-          # This run: the input prefix filter coded by its count (a bitmap from
-          # 19,197 values) on r1 and merged up: the domain tests, rows 1015
-          # and 1014, and the branches whose tests read filter type 2.
-          - name: r1-input-prefix-filter
-            branch: restack/1-input-prefix-filter
+        # #808 (I2P through SAM) with master 53ec7760 merged in and I2P made
+        # the optional feature `i2p`: every suite with i2p and socks5 on, the
+        # I2P end-to-end row (BCHN over i2pd, a second kth inbound over I2P),
+        # the SOCKS5 relay row, the default build, and master as the baseline.
+          - name: m808-i2p
+            branch: test/m1126-808
             gcc: '16'
-            options: -o neutrino=True
-            targets: kth_domain_neutrino_test kth_node_neutrino_test
-            suites: kth_domain_neutrino_test kth_node_neutrino_test
+            options: -o i2p=True -o socks5=True
+            targets: kth_network_i2p_test kth_node_i2p_test kth_network_socks5_test kth_node_socks5_test kth_blockchain_vmlimits_test kth_p2p_close_test kth_ws_config_test
+            suites: kth_network_i2p_test kth_node_i2p_test kth_network_socks5_test kth_node_socks5_test kth_blockchain_vmlimits_test kth_p2p_close_test kth_ws_config_test
             domain: true
-            e2e: false
-          - name: r3-electrum
-            branch: restack/3-electrum
+            blockchain: true
+            network: true
+            infrastructure: true
+            capi: true
+            i2p: true
+          - name: m808-proxy
+            branch: test/m1126-808
             gcc: '16'
-            options: -o neutrino=True -o wallet=True
-            targets: kth_domain_neutrino_test kth_node_wallet_test
-            suites: kth_domain_neutrino_test kth_node_wallet_test
-            node_wallet: true
-            e2e: true
-          - name: r5-cashtokens-bcmr
-            branch: restack/5-cashtokens-bcmr
+            options: -o i2p=True -o socks5=True
+            proxy: true
+          - name: m808-default
+            branch: test/m1126-808
             gcc: '16'
-            options: -o neutrino=True -o wallet=True
-            targets: kth_domain_neutrino_test kth_node_wallet_test
-            suites: kth_domain_neutrino_test kth_node_wallet_test
-            node_wallet: true
-            e2e: true
-          - name: r8-scan
-            branch: restack/8-scan
+            targets: kth_blockchain_vmlimits_test kth_p2p_close_test kth_ws_config_test
+            suites: kth_blockchain_vmlimits_test kth_p2p_close_test kth_ws_config_test
+            domain: true
+            blockchain: true
+            network: true
+            infrastructure: true
+            capi: true
+          - name: master-53ec7760
+            branch: test/m1126-master
             gcc: '16'
-            options: -o neutrino=True -o wallet=True
-            targets: kth_domain_neutrino_test kth_node_wallet_test
-            suites: kth_domain_neutrino_test kth_node_wallet_test
-            e2e: false
-          - name: r9-block-checks
-            branch: restack/9-block-checks
-            gcc: '16'
-            options: -o neutrino=True -o wallet=True
-            targets: kth_domain_neutrino_test kth_node_wallet_test
-            suites: kth_domain_neutrino_test kth_node_wallet_test
-            e2e: false
+            options: -o socks5=True
+            targets: kth_network_socks5_test kth_node_socks5_test kth_blockchain_vmlimits_test kth_p2p_close_test kth_ws_config_test
+            suites: kth_network_socks5_test kth_node_socks5_test kth_blockchain_vmlimits_test kth_p2p_close_test kth_ws_config_test
+            domain: true
+            blockchain: true
+            network: true
+            infrastructure: true
+            capi: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
