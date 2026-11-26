@@ -1,28 +1,26 @@
 name: kth templates while blocks come seconds apart
 
-# BCHN A mines on regtest in bursts; the follower (kth, or a second BCHN for
-# comparison) takes A's blocks over P2P, and BCH P2Pool takes its templates
-# from the follower with getblocktemplate, as the chipnet pool does with the
-# Start9's Knuth. scripts/template_burst_e2e.py counts what P2Pool and a probe
-# got: templates, refusals and the longest time without one. Then it compares
-# the follower's template with A's for a mempool of 1 sat/byte payments, on kth
-# with node.sigop_fee_satoshis at its default (0) and with 100.
+# BCHN A mines on regtest in bursts; the follower (kth) takes A's blocks over
+# P2P, and BCH P2Pool takes its templates from the follower with
+# getblocktemplate, as the chipnet pool does with the Start9's Knuth.
+# scripts/template_burst_e2e.py counts what P2Pool and a probe got:
+# templates, refusals, the longest time without one and the longest time the
+# follower held headers past its blocks, and, from kth's debug log, whom kth
+# asked for chunks and headers and which sessions it lost.
 #
-# Rows: kth master (before), kth rpc/template-while-headers-ahead (after), and
-# BCHN, on loopback and with 100 ms each way on the link to A (the delay sits
-# on TCP port 18444 alone: RPC and P2Pool's connections are untouched). The
-# "poll" rows have P2Pool poll alone, so A is the follower's only peer; the
-# "p2p" rows also connect P2Pool to the follower's P2P port, as the chipnet
-# pool does. Run 45818211454 had p2p on every row: kth, master and branch
-# alike, asked P2Pool's listener (which advertises no services) for blocks,
-# waited out the 15 s chunk timeout, and then stopped following A. Run
-# 45858016488 has the poll and p2p rows on master 53ec7760 and the branch
-# 9e50c01d. The fold rows here add test/chunk-fold-on-master (ebbb6ded) to
-# each: a body chunk whose first block a compact block already stored held
-# the body cursor below the range end, so no later range opened; with that
-# fixed, the rows compare the template rule alone (run 45858901992). This
-# run adds a stream of 1 sat/byte payments through the bursts and counts the
-# ones A holds and the follower misses, before and after the relay change.
+# THROWAWAY COPY (e2e/kth-sync-fixes): the two block download fixes on
+# CyberAshven/kth, from master a0a5455d.
+# - fold: fix/sync-fold-overlapping-chunk f8cbbd65. A chunk that starts at or
+#   below the synced height (its first block stored on its own, from a
+#   compact block) is counted; before, the range read as in flight for good.
+# - peers: fix/sync-only-peers-that-serve-blocks a406cb09. A peer without
+#   NODE_NETWORK or NODE_NETWORK_LIMITED is asked for neither blocks nor
+#   headers; one with NODE_NETWORK_LIMITED alone only for its last 288 blocks.
+# - both: f8cbbd65 with a406cb09 merged in.
+# Each on loopback (lan), with 100 ms each way on the link to A (wan; TCP port
+# 18444 alone), and with P2Pool also connected to kth's P2P port (p2p), whose
+# listener advertises no services. The two tests-* rows build each branch
+# with its fix put back to master and run its new cases, which must fail.
 # Runs when this file or the script changes, or by hand.
 on:
   push:
@@ -39,55 +37,110 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Before the relay change: the template branch with the chunk fold.
-          - name: kth-tmpl-fold-lan-poll
+          - name: master-lan-poll
             follower: kth
-            repo: CyberAshven/kth
-            ref: a4ee9fb89fdb12a1cbe0eaeed96fd296291722a7
+            repo: k-nuth/kth
+            ref: a0a5455d72d3e7f643e50b1fba0f25976661bdcc
             delay_ms: ""
             node_p2p: "0"
-          - name: kth-tmpl-fold-wan-poll
-            follower: kth
-            repo: CyberAshven/kth
-            ref: a4ee9fb89fdb12a1cbe0eaeed96fd296291722a7
-            delay_ms: "100"
-            node_p2p: "0"
-          # After: test/relay-while-blocks-arrive-with-chunk-fold, the same plus
-          # the relay change.
-          - name: kth-relay-fold-lan-poll
-            follower: kth
-            repo: CyberAshven/kth
-            ref: f1e682499461f6037e1c74f8a028cf1c7bb2b4ec
-            delay_ms: ""
-            node_p2p: "0"
-          - name: kth-relay-fold-wan-poll
-            follower: kth
-            repo: CyberAshven/kth
-            ref: f1e682499461f6037e1c74f8a028cf1c7bb2b4ec
-            delay_ms: "100"
-            node_p2p: "0"
-          - name: bchn-lan-poll
-            follower: bchn
-            delay_ms: ""
-            node_p2p: "0"
-          - name: bchn-wan-poll
-            follower: bchn
-            delay_ms: "100"
-            node_p2p: "0"
-          # kth's node tests alone, on the PR branches as pushed (no fold, so
-          # no burst row): the template branch merged with master a0a5455d,
-          # and the relay branch on it.
-          - name: tests-template-7e25c7bd
-            follower: kth
-            repo: CyberAshven/kth
-            ref: 7e25c7bd78b66d739f37be083d1a716042e19ed3
             node_tests: true
+          - name: master-wan-poll
+            follower: kth
+            repo: k-nuth/kth
+            ref: a0a5455d72d3e7f643e50b1fba0f25976661bdcc
+            delay_ms: "100"
+            node_p2p: "0"
+          - name: master-wan-p2p
+            follower: kth
+            repo: k-nuth/kth
+            ref: a0a5455d72d3e7f643e50b1fba0f25976661bdcc
+            delay_ms: "100"
+            node_p2p: "1"
+          - name: fold-lan-poll
+            follower: kth
+            repo: CyberAshven/kth
+            ref: f8cbbd65c90df67a79108a276df5f87cabed30fc
+            delay_ms: ""
+            node_p2p: "0"
+            node_tests: true
+            test_tags: "[stored_chunks];[chunk_coordinator]"
+          - name: fold-wan-poll
+            follower: kth
+            repo: CyberAshven/kth
+            ref: f8cbbd65c90df67a79108a276df5f87cabed30fc
+            delay_ms: "100"
+            node_p2p: "0"
+          - name: fold-wan-p2p
+            follower: kth
+            repo: CyberAshven/kth
+            ref: f8cbbd65c90df67a79108a276df5f87cabed30fc
+            delay_ms: "100"
+            node_p2p: "1"
+          - name: peers-lan-poll
+            follower: kth
+            repo: CyberAshven/kth
+            ref: a406cb09a5d6843a22ff2c8831bb2d9e6c80ccb7
+            delay_ms: ""
+            node_p2p: "0"
+            node_tests: true
+            test_tags: "[stored_chunks];[block_service];[chunk_coordinator]"
+          - name: peers-wan-poll
+            follower: kth
+            repo: CyberAshven/kth
+            ref: a406cb09a5d6843a22ff2c8831bb2d9e6c80ccb7
+            delay_ms: "100"
+            node_p2p: "0"
+          - name: peers-wan-p2p
+            follower: kth
+            repo: CyberAshven/kth
+            ref: a406cb09a5d6843a22ff2c8831bb2d9e6c80ccb7
+            delay_ms: "100"
+            node_p2p: "1"
+          - name: both-lan-poll
+            follower: kth
+            repo: CyberAshven/kth
+            ref: f8cbbd65c90df67a79108a276df5f87cabed30fc
+            delay_ms: ""
+            node_p2p: "0"
+            merge_ref: a406cb09a5d6843a22ff2c8831bb2d9e6c80ccb7
+            node_tests: true
+            test_tags: "[stored_chunks];[block_service];[chunk_coordinator]"
+          - name: both-wan-poll
+            follower: kth
+            repo: CyberAshven/kth
+            ref: f8cbbd65c90df67a79108a276df5f87cabed30fc
+            delay_ms: "100"
+            node_p2p: "0"
+            merge_ref: a406cb09a5d6843a22ff2c8831bb2d9e6c80ccb7
+          - name: both-wan-p2p
+            follower: kth
+            repo: CyberAshven/kth
+            ref: f8cbbd65c90df67a79108a276df5f87cabed30fc
+            delay_ms: "100"
+            node_p2p: "1"
+            merge_ref: a406cb09a5d6843a22ff2c8831bb2d9e6c80ccb7
+          # The new cases with the fix they test put back to master: they must fail.
+          - name: tests-fold-without-fix
+            follower: kth
+            repo: CyberAshven/kth
+            ref: f8cbbd65c90df67a79108a276df5f87cabed30fc
+            revert_to: a0a5455d72d3e7f643e50b1fba0f25976661bdcc
+            revert: src/node/include/kth/node/detail/stored_chunks.hpp
+            node_tests: true
+            test_tags: "[stored_chunks]"
+            tags_only: "1"
+            expect_test_failure: "1"
             skip_e2e: "1"
-          - name: tests-relay-4d8f522c
+          - name: tests-peers-without-fix
             follower: kth
             repo: CyberAshven/kth
-            ref: 4d8f522cd0e6475d9adfa996534dcdebed577693
+            ref: a406cb09a5d6843a22ff2c8831bb2d9e6c80ccb7
+            revert_to: a0a5455d72d3e7f643e50b1fba0f25976661bdcc
+            revert: src/node/src/sync/orchestrator.cpp src/node/src/sync/block_tasks.cpp
             node_tests: true
+            test_tags: "[block_service]"
+            tags_only: "1"
+            expect_test_failure: "1"
             skip_e2e: "1"
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -130,10 +183,24 @@ jobs:
         if: matrix.follower == 'kth'
         run: |
           git init --quiet kth-src
-          git -C kth-src fetch --quiet --depth 1 "https://github.com/${{ matrix.repo }}.git" "${{ matrix.ref }}"
+          git -C kth-src fetch --quiet --depth 5 "https://github.com/${{ matrix.repo }}.git" "${{ matrix.ref }}"
           git -C kth-src checkout --quiet FETCH_HEAD
-          git -C kth-src log -1 --format='%H %s' | tee kth-commit.txt
           if [ "$(git -C kth-src rev-parse HEAD)" != "${{ matrix.ref }}" ]; then echo "kth is not at ${{ matrix.ref }}"; exit 1; fi
+          git -C kth-src log -1 --format='%H %s' | tee kth-commit.txt
+          # Both fixes: the second branch merged into the first, as a merge of
+          # the two PRs would leave master.
+          if [ -n "${{ matrix.merge_ref }}" ]; then
+            git -C kth-src fetch --quiet --depth 5 "https://github.com/${{ matrix.repo }}.git" "${{ matrix.merge_ref }}"
+            git -C kth-src -c user.name=e2e -c user.email=e2e@localhost merge --quiet --no-edit FETCH_HEAD
+            git -C kth-src log -1 --format='merged %P' | tee -a kth-commit.txt
+          fi
+          # The branch's own cases without the fix they test.
+          if [ -n "${{ matrix.revert }}" ]; then
+            git -C kth-src fetch --quiet --depth 1 "https://github.com/${{ matrix.repo }}.git" "${{ matrix.revert_to }}"
+            git -C kth-src checkout FETCH_HEAD -- ${{ matrix.revert }}
+            echo "put back to ${{ matrix.revert_to }}: ${{ matrix.revert }}" | tee -a kth-commit.txt
+            git -C kth-src status --short | tee -a kth-commit.txt
+          fi
         shell: bash
       - name: Fetch the kept Conan packages
         if: matrix.follower == 'kth'
@@ -216,8 +283,9 @@ jobs:
         with:
           path: ccache
           key: kth-tb-ccache-${{ matrix.name }}-${{ github.run_id }}
-      # The template tests by tag first, so their result reads on its own, then
-      # the whole suite. A failure lets the row run, and fails the job at the end.
+      # The cases the branches add by tag first, so their result reads on its
+      # own, then the whole suite unless the row is the tags alone. A failure
+      # lets the row run, and fails the job at the end.
       - name: Run kth's node tests
         id: node_tests
         if: matrix.node_tests
@@ -226,14 +294,20 @@ jobs:
           TEST=$(find kth-src/build -name kth_node_test -type f -perm -u+x | head -1)
           if [ -z "$TEST" ]; then echo "missing kth_node_test under kth-src/build"; exit 1; fi
           rc=0
-          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w "/src/$(dirname "${TEST#kth-src/}")" "$IMAGE" \
-            bash -c 'timeout --kill-after=30 900 ./kth_node_test "[chain_view]" --reporter compact; echo "chain_view exit $?"; timeout --kill-after=30 600 ./kth_node_test "[sv2 template_provider]" --reporter compact; echo "template_provider exit $?"; timeout --kill-after=30 900 ./kth_node_test "[tx_relay]" --reporter compact; echo "tx_relay exit $?"' \
-            > node-tests-template.log 2>&1 || true
-          grep -E "exit|passed|failed" node-tests-template.log | tail -8
-          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w "/src/$(dirname "${TEST#kth-src/}")" "$IMAGE" \
-            bash -c "timeout --kill-after=30 1500 ./kth_node_test --reporter compact" > node-tests.log 2>&1 || rc=$?
-          tail -5 node-tests.log
-          if grep -q "chain_view exit [^0]\|template_provider exit [^0]\|tx_relay exit [^0]" node-tests-template.log; then rc=1; fi
+          : > node-tests-tags.log
+          if [ -n "${{ matrix.test_tags }}" ]; then
+            docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w "/src/$(dirname "${TEST#kth-src/}")" \
+              -e TAGS="${{ matrix.test_tags }}" "$IMAGE" \
+              bash -c 'set -f; IFS=";"; for tag in $TAGS; do timeout --kill-after=30 900 ./kth_node_test "$tag" --reporter compact; echo "tag $tag exit $?"; done' \
+              > node-tests-tags.log 2>&1 || true
+            grep -E "exit|passed|failed|FAILED" node-tests-tags.log | tail -20
+            if grep -q "exit [^0]" node-tests-tags.log; then rc=1; fi
+          fi
+          if [ "${{ matrix.tags_only }}" != "1" ]; then
+            docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w "/src/$(dirname "${TEST#kth-src/}")" "$IMAGE" \
+              bash -c "timeout --kill-after=30 1500 ./kth_node_test --reporter compact" > node-tests.log 2>&1 || rc=$?
+            tail -5 node-tests.log
+          fi
           echo "kth_node_test exit $rc"
           exit $rc
         shell: bash
@@ -310,12 +384,19 @@ jobs:
             kth-commit.txt
             p2pool-commit.txt
             node-tests.log
-            node-tests-template.log
+            node-tests-tags.log
             e2e-out
           if-no-files-found: warn
       - name: Fail on kth's node tests
-        if: always() && steps.node_tests.outcome == 'failure'
+        if: always() && steps.node_tests.outcome == 'failure' && matrix.expect_test_failure != '1'
         run: |
           echo "kth_node_test failed; see node-tests.log in the artifact"
+          exit 1
+        shell: bash
+      # The tests-* rows: the cases must fail with their fix put back.
+      - name: Fail when the cases pass without their fix
+        if: always() && matrix.expect_test_failure == '1' && steps.node_tests.outcome != 'failure'
+        run: |
+          echo "the cases passed with their fix put back; see node-tests-tags.log in the artifact"
           exit 1
         shell: bash
