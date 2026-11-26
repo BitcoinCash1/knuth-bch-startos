@@ -14,7 +14,10 @@ require.extensions['.ts'] = (module, filename) => {
 }
 
 const { shape } = require('../startos/fileModels/knuth.conf.ts')
-const { sigopFeeAfterUpdate } = require('../startos/versions/current.ts')
+const {
+  sigopFeeAfterUpdate,
+  dustThresholdAfterUpdate,
+} = require('../startos/versions/current.ts')
 
 test('numeric INI values retain ordinary finite values', () => {
   const parsed = shape.parse({
@@ -67,4 +70,35 @@ test('an update from 1.7.0:2 or later keeps 100, set after the default changed',
 test('without a single data version the sigop fee is kept', () => {
   assert.equal(sigopFeeAfterUpdate(100, null), undefined)
   assert.equal(sigopFeeAfterUpdate(100, 'not a version'), undefined)
+})
+
+test("a missing dust threshold refuses no output, kth's BCH default", () => {
+  assert.equal(shape.parse({})['node.minimum_output_satoshis'], 0)
+})
+
+// Versions before 1.7.0:2 stored 546 as the package default.
+for (const from of ['1.7.0:1', '1.7.0:1.2', '1.5.2:1', '1.3.0:5']) {
+  test(`an update from ${from} sets the old dust default 546 to 0`, () => {
+    assert.equal(dustThresholdAfterUpdate(546, from), 0)
+  })
+}
+
+test('an update keeps a dust threshold the operator chose', () => {
+  for (const stored of [0, 1, 540, 545, 547, 1000]) {
+    assert.equal(dustThresholdAfterUpdate(stored, '1.7.0:1'), undefined)
+  }
+  assert.equal(dustThresholdAfterUpdate(undefined, '1.7.0:1'), undefined)
+})
+
+test('an update from 1.7.0:2 or later keeps a dust threshold of 546', () => {
+  for (const from of ['1.7.0:2', '1.7.0:3', '1.8.0:0']) {
+    assert.equal(dustThresholdAfterUpdate(546, from), undefined)
+  }
+  assert.equal(dustThresholdAfterUpdate(546, null), undefined)
+  assert.equal(dustThresholdAfterUpdate(546, 'not a version'), undefined)
+})
+
+test('the two old defaults are reset apart: 546 is not a sigop fee default', () => {
+  assert.equal(sigopFeeAfterUpdate(546, '1.7.0:1'), undefined)
+  assert.equal(dustThresholdAfterUpdate(100, '1.7.0:1'), undefined)
 })
