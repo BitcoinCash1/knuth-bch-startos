@@ -1,0 +1,376 @@
+{
+ "blocks": [
+  {
+   "name": "empty",
+   "what": "a coinbase alone: no values",
+   "block": "0000002000000000000000000000000000000000000000000000000000000000000000009d6475cc74d5e2c36a9c5fa564b25676a0442a86eff51081bd077a9fc0919d2b00f15365ffff7f20000000000101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff06010003727061ffffffff0100f2052a01000000015100000000",
+   "block_hash": "679d3aae7bad61757b5e1e3e225764d3a90a72d6f383e104953f82f36c7d5235",
+   "values": [],
+   "k": null,
+   "filter": "00",
+   "filter_hash": "1406e05881e299367766d313e26c05564ec91bf721d31726bd6e46e60689539a",
+   "header": "a80ba8d54948ed417954508791bcf9321bcda26c160b77ab695258281c0d3e75",
+   "input_values": []
+  },
+  {
+   "name": "one input",
+   "what": "one transaction after the coinbase with one input",
+   "block": "00000020679d3aae7bad61757b5e1e3e225764d3a90a72d6f383e104953f82f36c7d5235382edb97970c0e4c882a3736d227780325ae84c0fdf065b1402c61a949e6ced658f35365ffff7f20000000000201000000010000000000000000000000000000000000000000000000000000000000000000ffffffff06010103727061ffffffff0100f2052a0100000001510000000002000000011111111111111111111111111111111111111111111111111111111111111111000000000151ffffffff01e803000000000000015100000000",
+   "block_hash": "8c3745485793913b4370e90cfc2edba60842edfc107f116fa447338bf101f23a",
+   "values": [
+    "9408"
+   ],
+   "k": 15,
+   "filter": "010f8a0400",
+   "filter_hash": "e1452af78ceb4f079714cb094c3f5c69bbb1a0d38bb90fd4fc63365649474fce",
+   "header": "1c0123a83da1787bd17ee2b07312e3a2769ab6d6fd2963b97fcd28e595b75c6f",
+   "input_values": [
+    [
+     "9408"
+    ]
+   ]
+  },
+  {
+   "name": "two inputs sharing a prefix",
+   "what": "one transaction with two inputs whose values are equal (input 1's sequence, 60806, ground to it): one value",
+   "block": "000000208c3745485793913b4370e90cfc2edba60842edfc107f116fa447338bf101f23ab67e94cdd0d6a920578271a0c13997f863e77ae4346962950e36c392dfdc1f56b0f55365ffff7f20000000000201000000010000000000000000000000000000000000000000000000000000000000000000ffffffff06010203727061ffffffff0100f2052a0100000001510000000002000000022222222222222222222222222222222222222222222222222222222222222222000000000151ffffffff222222222222222222222222222222222222222222222222222222222222222201000000015186ed000001e803000000000000015100000000",
+   "block_hash": "747869088322e048c5f4dd87ec0a1b1eef99b91b78d8c06b2291e41bad869a2c",
+   "values": [
+    "c3ed"
+   ],
+   "k": 15,
+   "filter": "010fa1f680",
+   "filter_hash": "f423f13e1b97819945f324ed136d136f15a71656b4ae0fd031ff6e287257879c",
+   "header": "8f18899a3f80fdbf3ca6f15203b5c016fb0577cf5853ee912d4c88e6685192ca",
+   "input_values": [
+    [
+     "c3ed",
+     "c3ed"
+    ]
+   ]
+  },
+  {
+   "name": "several transactions",
+   "what": "two transactions after the coinbase, with 2 and 3 inputs: five values",
+   "block": "00000020747869088322e048c5f4dd87ec0a1b1eef99b91b78d8c06b2291e41bad869a2c48e727a0229de260837dba408a3a308097fce37f6b7950954f250f60aa61d74708f85365ffff7f20000000000301000000010000000000000000000000000000000000000000000000000000000000000000ffffffff06010303727061ffffffff0100f2052a01000000015100000000020000000233333333333333333333333333333333333333333333333333333333333333330000000000ffffffff33333333333333333333333333333333333333333333333333333333333333330100000000ffffffff01e803000000000000015100000000020000000344444444444444444444444444444444444444444444444444444444444444440000000015140000000000000000000000000000000000000000feffffff44444444444444444444444444444444444444444444444444444444444444440100000015140101010101010101010101010101010101010101fdffffff44444444444444444444444444444444444444444444444444444444444444440200000015140202020202020202020202020202020202020202fcffffff01e803000000000000015100000000",
+   "block_hash": "ceac327bc87e749b35938b61e9e0d5b82c37ceaf1c22545e16ad35ee047a5026",
+   "values": [
+    "0c06",
+    "231f",
+    "5e33",
+    "a8e6",
+    "c535"
+   ],
+   "k": 13,
+   "filter": "050d3019719b6299566e2780",
+   "filter_hash": "eea30a94c8acfa84935aa0a4a2a442a3e709ae60b21ed77e108831a5a9d1565d",
+   "header": "6e50997c60f71d3ceb2905e2ed7cec28d294c0c51b645e5508356b42f67b3a3b",
+   "input_values": [
+    [
+     "c535",
+     "a8e6"
+    ],
+    [
+     "5e33",
+     "0c06",
+     "231f"
+    ]
+   ]
+  },
+  {
+   "name": "31 inputs",
+   "what": "one transaction with 31 inputs (outpoints 55..55:0 to :30, empty scripts): the values of the first 30, and not the 31st",
+   "block": "00000020ceac327bc87e749b35938b61e9e0d5b82c37ceaf1c22545e16ad35ee047a5026fa0e9a584e95dcc70d048c798bc45f3c4f25c88bb3b03db97deafda47640d88d60fa5365ffff7f20000000000201000000010000000000000000000000000000000000000000000000000000000000000000ffffffff06010403727061ffffffff0100f2052a01000000015100000000020000001f55555555555555555555555555555555555555555555555555555555555555550000000000ffffffff55555555555555555555555555555555555555555555555555555555555555550100000000ffffffff55555555555555555555555555555555555555555555555555555555555555550200000000ffffffff55555555555555555555555555555555555555555555555555555555555555550300000000ffffffff55555555555555555555555555555555555555555555555555555555555555550400000000ffffffff55555555555555555555555555555555555555555555555555555555555555550500000000ffffffff55555555555555555555555555555555555555555555555555555555555555550600000000ffffffff55555555555555555555555555555555555555555555555555555555555555550700000000ffffffff55555555555555555555555555555555555555555555555555555555555555550800000000ffffffff55555555555555555555555555555555555555555555555555555555555555550900000000ffffffff55555555555555555555555555555555555555555555555555555555555555550a00000000ffffffff55555555555555555555555555555555555555555555555555555555555555550b00000000ffffffff55555555555555555555555555555555555555555555555555555555555555550c00000000ffffffff55555555555555555555555555555555555555555555555555555555555555550d00000000ffffffff55555555555555555555555555555555555555555555555555555555555555550e00000000ffffffff55555555555555555555555555555555555555555555555555555555555555550f00000000ffffffff55555555555555555555555555555555555555555555555555555555555555551000000000ffffffff55555555555555555555555555555555555555555555555555555555555555551100000000ffffffff55555555555555555555555555555555555555555555555555555555555555551200000000ffffffff55555555555555555555555555555555555555555555555555555555555555551300000000ffffffff55555555555555555555555555555555555555555555555555555555555555551400000000ffffffff55555555555555555555555555555555555555555555555555555555555555551500000000ffffffff55555555555555555555555555555555555555555555555555555555555555551600000000ffffffff55555555555555555555555555555555555555555555555555555555555555551700000000ffffffff55555555555555555555555555555555555555555555555555555555555555551800000000ffffffff55555555555555555555555555555555555555555555555555555555555555551900000000ffffffff55555555555555555555555555555555555555555555555555555555555555551a00000000ffffffff55555555555555555555555555555555555555555555555555555555555555551b00000000ffffffff55555555555555555555555555555555555555555555555555555555555555551c00000000ffffffff55555555555555555555555555555555555555555555555555555555555555551d00000000ffffffff55555555555555555555555555555555555555555555555555555555555555551e00000000ffffffff01e803000000000000015100000000",
+   "block_hash": "c885f61646770e7b5d63091040ed1cb73ed026c22de6d5e35a8bf7baf49f81c1",
+   "values": [
+    "02ed",
+    "1013",
+    "171b",
+    "1874",
+    "1d3c",
+    "3542",
+    "4d39",
+    "51de",
+    "54bf",
+    "5c3e",
+    "6ce7",
+    "7e8e",
+    "81ef",
+    "8ffe",
+    "9376",
+    "96aa",
+    "9798",
+    "9885",
+    "af16",
+    "b033",
+    "b08d",
+    "b75a",
+    "c3ac",
+    "d207",
+    "d2fd",
+    "de98",
+    "e39d",
+    "ebfa",
+    "ed4c",
+    "fc15"
+   ],
+   "k": 10,
+   "filter": "1e0a5dbc935841598c8fc037dfbc52ae1b7ff153e69db0f41ede19a0ee1dbf5224742d566f0a5d2d8f6dcdc82e174a975920",
+   "filter_hash": "5773e5c29f136644b9f88d2d3df1cd527d9ed5a68a6773d25b113dc50930f8c0",
+   "header": "4b595d03261b964c360e1d9f39a670ada0dd94c5a6298ef947334b7026792489",
+   "input_values": [
+    [
+     "d2fd",
+     "51de",
+     "ebfa",
+     "9376",
+     "54bf",
+     "96aa",
+     "af16",
+     "4d39",
+     "b033",
+     "8ffe",
+     "9885",
+     "81ef",
+     "1d3c",
+     "b75a",
+     "171b",
+     "b08d",
+     "1013",
+     "1874",
+     "e39d",
+     "fc15",
+     "ed4c",
+     "3542",
+     "7e8e",
+     "02ed",
+     "6ce7",
+     "c3ac",
+     "de98",
+     "5c3e",
+     "9798",
+     "d207",
+     "a938"
+    ]
+   ]
+  }
+ ],
+ "large": {
+  "inputs": 30000,
+  "count": 24051,
+  "k": 16,
+  "bytes": 8196,
+  "head": "fdf35d106003cf5803bc3d88c206f1b0",
+  "tail": "012cdca4351184ec",
+  "filter_hash": "a067316c9de0820f3a0d59e8f8f3afd1faa9fdabe19fcbd0240fc586bd0c0a5c",
+  "first_values": [
+   "0001",
+   "0002",
+   "000e",
+   "000f"
+  ],
+  "last_values": [
+   "fff9",
+   "fffa",
+   "fffc",
+   "fffd"
+  ]
+ },
+ "accepted": [
+  {
+   "name": "value 0",
+   "count": 1,
+   "bytes": 4,
+   "hex": "010f0000",
+   "canonical": true,
+   "hash": "d765bddba686b5d7a4eee92e6da5c4cf23f3fb5d272b71b478d5e7b29beef01b"
+  },
+  {
+   "name": "value 65535",
+   "count": 1,
+   "bytes": 5,
+   "hex": "010fbfff80",
+   "canonical": true,
+   "hash": "f604888baa2af992bba2f2511bc214e31c272608c23092cb8bc63e0d0630122b"
+  },
+  {
+   "name": "two values",
+   "count": 2,
+   "bytes": 6,
+   "hex": "020e00020004",
+   "canonical": true,
+   "hash": "fc45657f3a482e5872d033a5c86387e5801c723c4c11caed079b92810a61b447"
+  },
+  {
+   "name": "first 19196 values, k = 1",
+   "count": 19196,
+   "bytes": 4803,
+   "hex": "fdfc4a01155555555555555555555555..5555555555555555",
+   "canonical": true,
+   "hash": "c87c720767d86452f2dfde01c6a5300a755a1fc9eabda48f4d4b56dc4ad17fea"
+  },
+  {
+   "name": "first 19197 values, bitmap",
+   "count": 19197,
+   "bytes": 8196,
+   "hex": "fdfd4a10ffffffffffffffffffffffff..0000000000000000",
+   "canonical": true,
+   "hash": "355b13f4d81ff87e20fc33ce4ef7931acdbb3867f7b128bb71286322d3850001"
+  },
+  {
+   "name": "even values, bitmap",
+   "count": 32768,
+   "bytes": 8196,
+   "hex": "fd008010aaaaaaaaaaaaaaaaaaaaaaaa..aaaaaaaaaaaaaaaa",
+   "canonical": true,
+   "hash": "b0abac56021c4436c49a9de58243b2d5594633503c83cddd2e190da6a5be37b7"
+  },
+  {
+   "name": "every value",
+   "count": 65536,
+   "bytes": 8198,
+   "hex": "fe0000010010ffffffffffffffffffff..ffffffffffffffff",
+   "canonical": true,
+   "hash": "79d65549e1801072cda4736a9b36ee687cdb2ff6b94139437f242ddfc1251c01"
+  }
+ ],
+ "malformed": [
+  {
+   "name": "empty",
+   "refused": "truncated: no count",
+   "reference": "truncated",
+   "hex": ""
+  },
+  {
+   "name": "count only",
+   "refused": "truncated: no k",
+   "reference": "truncated",
+   "hex": "01"
+  },
+  {
+   "name": "no stream",
+   "refused": "truncated: no value",
+   "reference": "truncated",
+   "hex": "010f"
+  },
+  {
+   "name": "k above 16",
+   "refused": "k not the one N gives",
+   "reference": "k not the one its count gives",
+   "hex": "0111000000"
+  },
+  {
+   "name": "bitmap byte for one value",
+   "refused": "k not the one N gives",
+   "reference": "k not the one its count gives",
+   "hex": "0110000000"
+  },
+  {
+   "name": "gap of 0",
+   "refused": "a gap of 0 after the first value",
+   "reference": "gap of 0 after the first value",
+   "hex": "020e000a0000"
+  },
+  {
+   "name": "value above 65535",
+   "refused": "a value above 65,535",
+   "reference": "value above 65,535",
+   "hex": "010fc00000"
+  },
+  {
+   "name": "sum above 65535",
+   "refused": "a value above 65,535",
+   "reference": "value above 65,535",
+   "hex": "020eefffc00080"
+  },
+  {
+   "name": "fewer values",
+   "refused": "fewer values than N",
+   "reference": "truncated",
+   "hex": "020e000a"
+  },
+  {
+   "name": "more values",
+   "refused": "more values than N",
+   "reference": "trailing bytes",
+   "hex": "010f00070009"
+  },
+  {
+   "name": "padding",
+   "refused": "a padding bit set",
+   "reference": "padding bit set",
+   "hex": "020e00000005"
+  },
+  {
+   "name": "trailing after none",
+   "refused": "trailing bytes",
+   "reference": "trailing bytes",
+   "hex": "0000"
+  },
+  {
+   "name": "trailing after one",
+   "refused": "trailing bytes",
+   "reference": "trailing bytes",
+   "hex": "010f000700"
+  },
+  {
+   "name": "long count",
+   "refused": "N not in its shortest CompactSize form",
+   "reference": "count not in its shortest form",
+   "hex": "fd01000f0007"
+  },
+  {
+   "name": "count above 65536",
+   "refused": "N above 65,536",
+   "reference": "count above 65,536",
+   "hex": "fe010001000000"
+  },
+  {
+   "name": "k below the one N gives",
+   "refused": "k not the one N gives",
+   "reference": "k not the one its count gives",
+   "hex": "0100e0"
+  },
+  {
+   "name": "k one below the one N gives",
+   "refused": "k not the one N gives",
+   "reference": "k not the one its count gives",
+   "hex": "010e0006"
+  },
+  {
+   "name": "rice for 19197 values",
+   "refused": "k not the one N gives",
+   "reference": "k not the one its count gives",
+   "bytes": 4804,
+   "hash": "c551e5e24157e4367c8cc57f079c261da9c23a8eb8b70f018a99841b126e453d"
+  },
+  {
+   "name": "bitmap for 19196 values",
+   "refused": "k not the one N gives",
+   "reference": "k not the one its count gives",
+   "bytes": 8196,
+   "hash": "9b1c0366745c1b16661d5e317f16ee6d75a1d9ff3699985247e520b8c2ff9c52"
+  },
+  {
+   "name": "bitmap with a value too many",
+   "refused": "bitmap holds another number of values than N",
+   "reference": "bitmap holds another number of values than N",
+   "bytes": 8196,
+   "hash": "2586850d51f1817c222f702d38b16670fbe12717088b75bc13fc9fff19176e5b"
+  },
+  {
+   "name": "bitmap a byte short",
+   "refused": "truncated",
+   "reference": "truncated",
+   "bytes": 8195,
+   "hash": "a1a425d9b033a1f3f6e77f3364e07feb1976ca08d6d3c2ae8147c9a27cc084c6"
+  },
+  {
+   "name": "bitmap a byte long",
+   "refused": "trailing bytes",
+   "reference": "trailing bytes",
+   "bytes": 8197,
+   "hash": "f4ebf525e4ef4851cee0e4aef8e29461070b672df51702b2f225d44224bafb3b"
+  }
+ ]
+}

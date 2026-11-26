@@ -106,7 +106,7 @@ def large_block() -> dict:
     """1,000 transactions of 30 inputs each: transaction j (1 to 1,000) spends
     outpoints whose txid (stored order) is j as four little-endian bytes and
     28 zero bytes, indexes 0 to 29, with empty scripts and sequence
-    0xffffffff. Enough distinct values for k = 0."""
+    0xffffffff. Enough distinct values for the bitmap."""
     transactions = []
     for j in range(1, 1001):
         txid = struct.pack("<I", j) + bytes(28)
@@ -126,7 +126,8 @@ def malformed() -> list[dict]:
         ("empty", b"", "truncated: no count"),
         ("count only", bytes([1]), "truncated: no k"),
         ("no stream", bytes([1, 15]), "truncated: no value"),
-        ("k above 15", bytes([1, 16]) + pack(bits(16, [0])), "k above 15"),
+        ("k above 16", bytes([1, 17]) + pack(bits(17, [0])), "k not the one N gives"),
+        ("bitmap byte for one value", bytes([1, 16]) + pack(bits(16, [0])), "k not the one N gives"),
         ("gap of 0", bytes([2, 14]) + pack(bits(14, [5, 0])), "a gap of 0 after the first value"),
         ("value above 65535", bytes([1, 15]) + pack(bits(15, [65536])), "a value above 65,535"),
         ("sum above 65535", bytes([2, 14]) + pack(bits(14, [65535, 1])), "a value above 65,535"),
@@ -144,12 +145,32 @@ def malformed() -> list[dict]:
         ("k below the one N gives", bytes([1, 0]) + pack(bits(0, [3])), "k not the one N gives"),
         ("k one below the one N gives", bytes([1, 14]) + pack(bits(14, [3])), "k not the one N gives"),
     ]
+    # Around the bitmap, built in full and listed by length and hash: the
+    # coding N doesn't give, a bitmap with a value too many, and bitmaps a
+    # byte short and a byte long.
+    first_19196, first_19197 = list(range(19196)), list(range(19197))
+    rice_19197 = ref.compact_size(19197) + bytes([1]) + pack(bits(1, [0] + [1] * 19196))
+    bitmap_19196 = ref.compact_size(19196) + ref.rpa_encode(first_19196 + [65535])[3:]
+    bitmap_19197 = ref.rpa_encode(first_19197)
+    one_more = bitmap_19197[:-1] + bytes([bitmap_19197[-1] | 1])
+    big = [
+        ("rice for 19197 values", rice_19197, "k not the one N gives"),
+        ("bitmap for 19196 values", bitmap_19196, "k not the one N gives"),
+        ("bitmap with a value too many", one_more, "bitmap holds another number of values than N"),
+        ("bitmap a byte short", bitmap_19197[:-1], "truncated"),
+        ("bitmap a byte long", bitmap_19197 + b"\x00", "trailing bytes"),
+    ]
     out = []
-    for name, data, why in cases:
+    for name, data, why in cases + big:
         try:
             ref.rpa_decode(data)
         except ValueError as error:
-            out.append({"name": name, "hex": data.hex(), "refused": why, "reference": str(error)})
+            entry = {"name": name, "refused": why, "reference": str(error)}
+            if len(data) > 64:
+                entry.update({"bytes": len(data), "hash": sha256d(data).hex()})
+            else:
+                entry["hex"] = data.hex()
+            out.append(entry)
             continue
         raise SystemExit(f"the reference took the malformed case {name}")
     return out
@@ -163,13 +184,16 @@ def accepted() -> list[dict]:
         ("value 0", [0], ref.rpa_encode([0])),
         ("value 65535", [65535], ref.rpa_encode([65535])),
         ("two values", [1, 2], ref.rpa_encode([1, 2])),
-        ("even values, k = 0", even, ref.rpa_encode(even)),
+        ("first 19196 values, k = 1", list(range(19196)), ref.rpa_encode(list(range(19196)))),
+        ("first 19197 values, bitmap", list(range(19197)), ref.rpa_encode(list(range(19197)))),
+        ("even values, bitmap", even, ref.rpa_encode(even)),
         ("every value", every, ref.rpa_encode(every)),
     ]
     out = []
     for name, values, data in cases:
         assert ref.rpa_decode(data) == values, name
-        out.append({"name": name, "count": len(values), "hex": data.hex(),
+        out.append({"name": name, "count": len(values), "bytes": len(data),
+                    "hex": data.hex() if len(data) <= 64 else data[:16].hex() + ".." + data[-8:].hex(),
                     "canonical": data == ref.rpa_encode(values), "hash": sha256d(data).hex()})
     return out
 
