@@ -78,6 +78,10 @@ WALLET_IMAGE = os.environ.get("KTH_WALLET_IMAGE") or ""
 # Row 1012: kth's own wallet support, answered from its own chain behind the
 # node's local Electrum listener (node.wallet_electrum).
 NODE_WALLET_PORT = 50002
+# KTH_NODE_WALLET=1 (row 1015): a build with wallet support and no peer path
+# (k-nuth/kth master with the restack branches): the node answers its own
+# wallet behind node.wallet_electrum, checked against BCHN's blocks.
+NODE_WALLET = os.environ.get("KTH_NODE_WALLET") == "1"
 # KTH_FULCRUM_BIN=<path> (row 1013): a Fulcrum release on BCHN, compared
 # method by method with kth-wallet's answers, and both measured.
 FULCRUM_BIN = os.environ.get("KTH_FULCRUM_BIN") or ""
@@ -203,7 +207,7 @@ def start_kth() -> None:
                     "4" if SHV or I2P or SERVE or ANNOUNCE or COMPACT or FILTERS or BLOOM else "0",
                     *(["--node.mmr_index", "true"] if SHV else []),
                     *(["--node.compact_filters", "true"] if FILTERS else []),
-                    *(["--node.wallet_electrum", f"127.0.0.1:{NODE_WALLET_PORT}"] if WALLET_BIN else []),
+                    *(["--node.wallet_electrum", f"127.0.0.1:{NODE_WALLET_PORT}"] if WALLET_BIN or NODE_WALLET else []),
                     *(["--node.bloom_filters", "true"] if BLOOM else []),
                     "--net.outbound_connections", "1",
                     "--net.peer", (f"{BCHN_I2P.address}:0" if I2P
@@ -2742,7 +2746,7 @@ def rows(s: dict) -> None:
                   row21_template_provider, row23_template_flow, row22_noise, pr803_outbound_proxy,
                   shv_light_client, compact_filter_light_client, neutrino_wallet_client,
                   script_filter_light_client, explorer_p2p_client, vault_wallet_filters, rpa_wallet_filters,
-                  wallet_from_peers, token_identity_wallet,
+                  wallet_from_peers, node_wallet_from_chain, token_identity_wallet,
                   bloom_filter_light_client, i2p_second_node, serve_second_node, announce_second_node,
                   compact_blocks_both_ways, row24_mining_protocol, pr874_long_polling):
         try:
@@ -4471,6 +4475,129 @@ def wallet_from_peers(s: dict) -> None:
         "txid alone; an RPA prefix finds BCHN's transactions; no message names a watched script or txid", ok, seen)
 
 
+def node_wallet_from_chain(s: dict) -> None:
+    """kth's own wallet support answered from its own chain (row 1015), in a
+    build with wallet support and no peer path: the node's local Electrum
+    listener (node.wallet_electrum) against BCHN's reading of every block.
+    For the wallet's addresses, two addresses BCHN pays and spends here, and
+    OP_TRUE, histories, balances and unspent outputs must equal BCHN's; a
+    transaction whose only output is spent must be found by its txid alone,
+    with its block height; the transactions with an input in an RPA prefix
+    must be BCHN's. The first lookup of every target, a rescan from genesis,
+    and a repeated one are timed. Fulcrum on BCHN is then asked the same
+    Electrum calls as the listener (row 1013)."""
+    client = "kth's own wallet support from its own chain (node.wallet_electrum), against BCHN"
+    if not NODE_WALLET or WALLET_BIN:
+        return
+    seen: dict = {}
+    ok = False
+    sats = 100_000_000
+    try:
+        # A payment to A with A's output alone, then a spend of all of it to B:
+        # the first transaction is then fully spent.
+        a_address, b_address = cli("getnewaddress"), cli("getnewaddress")
+        coin = next(u for u in json.loads(cli("listunspent", "1"))
+                    if u["amount"] >= 1 and u["txid"] not in s["confirmed"])
+        value_a = round(coin["amount"] - 0.001, 8)
+        raw = cli("createrawtransaction", json.dumps([{"txid": coin["txid"], "vout": coin["vout"]}]),
+                  json.dumps({a_address: value_a}))
+        t1 = cli("sendrawtransaction", json.loads(cli("signrawtransactionwithwallet", raw))["hex"])
+        raw = cli("createrawtransaction", json.dumps([{"txid": t1, "vout": 0}]),
+                  json.dumps({b_address: round(value_a - 0.001, 8)}))
+        t2 = cli("sendrawtransaction", json.loads(cli("signrawtransactionwithwallet", raw))["hex"])
+        cli("generatetoaddress", "1", s["addr"])
+        tip = int(cli("getblockcount"))
+        seen["fully spent"] = cli("gettxout", t1, "0") in ("", "null")
+
+        electrum = ElectrumLine(NODE_WALLET_PORT)
+        height = -1
+        deadline = time.monotonic() + 300
+        while time.monotonic() < deadline:
+            height = electrum.ask("blockchain.headers.get_tip")["height"]
+            if height >= tip:
+                break
+            time.sleep(1)
+        seen["synced"] = {"height": height, "tip": tip}
+        if height < tip:
+            raise ValueError(f"the node's listener reached {height}, not {tip}")
+
+        # The fully spent transaction, by its txid alone, before anything is watched.
+        seen["txid alone"] = electrum.ask("blockchain.transaction.get", t1) == call(BCHN, "getrawtransaction", t1)[0]
+        verbose = call(BCHN, "getrawtransaction", t1, 1)[0]
+        merkle = electrum.ask("blockchain.transaction.get_merkle", t1)
+        seen["merkle height"] = merkle["block_height"] == call(BCHN, "getblock", verbose["blockhash"])[0]["height"]
+
+        # BCHN's reading of every block: who received what, and what was spent.
+        def script_of(address: str) -> str:
+            return call(BCHN, "validateaddress", address)[0]["scriptPubKey"]
+        targets = {"mining address": script_of(s["addr"]), "A": script_of(a_address), "B": script_of(b_address),
+                   "OP_TRUE": "51"}
+        for i, other in enumerate(s["others"]):
+            targets[f"wallet address {i + 1}"] = script_of(other)
+        wanted = set(targets.values())
+        received: dict = {script: {} for script in wanted}
+        spent_by: dict = {}
+        history: dict = {script: set() for script in wanted}
+        rpa_blocks: list = []
+        for h in range(tip + 1):
+            block_hash = call(BCHN, "getblockhash", h)[0]
+            block = call(BCHN, "getblock", block_hash, 2)[0]
+            for position, tx in enumerate(block["tx"]):
+                for out in tx["vout"]:
+                    script = out["scriptPubKey"]["hex"]
+                    if script in wanted:
+                        received[script][(tx["txid"], out["n"])] = round(out["value"] * sats)
+                        history[script].add((tx["txid"], h))
+                if position > 0:
+                    for vin in tx["vin"]:
+                        spent_by[(vin["txid"], vin["vout"])] = (tx["txid"], h)
+            rpa_blocks.append((h, rpa_read_block(bytes.fromhex(call(BCHN, "getblock", block_hash, 0)[0]))))
+        for script in wanted:
+            for outpoint in received[script]:
+                if outpoint in spent_by:
+                    history[script].add(spent_by[outpoint])
+
+        checks = {}
+        started = time.monotonic()
+        for name, script in targets.items():
+            hashed = hashlib.sha256(bytes.fromhex(script)).digest()[::-1].hex()
+            got_history = {(item["tx_hash"], item["height"]) for item in
+                           electrum.ask("blockchain.scripthash.get_history", hashed) if item["height"] > 0}
+            unspent = {o: v for o, v in received[script].items() if o not in spent_by}
+            got_unspent = {(item["tx_hash"], item["tx_pos"]): item["value"] for item in
+                           electrum.ask("blockchain.scripthash.listunspent", hashed) if item["height"] > 0}
+            balance = electrum.ask("blockchain.scripthash.get_balance", hashed)
+            checks[name] = {"history": got_history == history[script], "transactions": len(history[script]),
+                            "unspent": got_unspent == unspent, "balance": balance["confirmed"] == sum(unspent.values())}
+        seen["rescan seconds (all targets, from genesis)"] = round(time.monotonic() - started, 3)
+        repeat = time.monotonic()
+        for name, script in targets.items():
+            electrum.ask("blockchain.scripthash.get_history", hashlib.sha256(bytes.fromhex(script)).digest()[::-1].hex())
+        seen["repeated lookup seconds (all targets)"] = round(time.monotonic() - repeat, 3)
+        seen["targets"] = checks
+
+        # RPA: an 8-bit prefix of T2's first input; BCHN's blocks give every
+        # transaction with one of its first 30 inputs in it.
+        t2_inputs = next(inputs for _, txs in rpa_blocks for txid, inputs in txs if txid == t2)
+        prefix = rpa_value(t2_inputs[0]) >> 8
+        reference = {(txid, h) for h, txs in rpa_blocks for i, (txid, inputs) in enumerate(txs) if i > 0
+                     and any(rpa_value(item) >> 8 == prefix for item in inputs[:RPA_INPUTS])}
+        got_rpa = {(item["tx_hash"], item["height"]) for item in
+                   rpa_history(electrum, f"{prefix:02x}", tip) if item["height"] > 0}
+        seen["rpa"] = {"prefix": f"{prefix:02x}", "transactions": len(reference), "equal": got_rpa == reference,
+                       "t2 found": any(txid == t2 for txid, _ in got_rpa)}
+        electrum.close()
+        ok = (seen["fully spent"] and seen["txid alone"] and seen["merkle height"]
+              and all(all(v for k, v in c.items() if k != "transactions") for c in checks.values())
+              and seen["rpa"]["equal"] and seen["rpa"]["t2 found"])
+        fulcrum_parity(ElectrumLine(NODE_WALLET_PORT), None, [], targets, t1, t2, None, tip)
+    except (OSError, ValueError, KeyError, StopIteration, subprocess.SubprocessError) as error:
+        seen["error"] = f"{type(error).__name__}: {error}"
+    row(1015, client, "the node answers its own wallet from its own chain behind its local Electrum listener: "
+        "histories, balances and unspent outputs equal BCHN's blocks; a fully spent transaction is found by its "
+        "txid alone; an RPA prefix finds BCHN's transactions; the rescan from genesis is timed", ok, seen)
+
+
 def rpa_history(electrum, prefix: str, tip: int) -> list:
     """Every confirmed match of an RPA prefix, as an RPA wallet pages through
     the chain: Fulcrum answers at most 60 blocks a call (rpa_history_blocks),
@@ -4486,7 +4613,7 @@ def du(path: str) -> int:
     return int(run.stdout.split()[0]) if run.returncode == 0 and run.stdout else -1
 
 
-def fulcrum_parity(wallet, data: Path, output: list, targets: dict, t1: str, t2: str, sync_seconds, tip: int) -> None:
+def fulcrum_parity(wallet, data: Path | None, output: list, targets: dict, t1: str, t2: str, sync_seconds, tip: int) -> None:
     """Fulcrum against kth-wallet (row 1013): a Fulcrum release indexes BCHN's
     chain, and every Electrum method a wallet or explorer calls is asked of
     both and compared, every difference reported. Side by side: each
@@ -4578,6 +4705,16 @@ def fulcrum_parity(wallet, data: Path, output: list, targets: dict, t1: str, t2:
         seen["shown only"] = {m[0]: {"kth": json.dumps(wallet.answer(*m))[:300], "fulcrum": json.dumps(other.answer(*m))[:300]}
                               for m in shown_only}
 
+        if data is None:
+            # The node's own listener: it answers from the node's chain and
+            # stores nothing, so there is no store or download to measure.
+            seen["storage bytes"] = {"fulcrum database": du("/tmp/fulcrum/db"), "kth node's wallet support": 0}
+            seen["bytes"] = {"Fulcrum client received for the compared calls": other.received - other_before,
+                             "kth node's listener answered for the compared calls": wallet.received - wallet_before}
+            other.close()
+            wallet.close()
+            ok = not differences
+            raise StopIteration
         # Storage and bytes.
         status = next((json.loads(line[len("status "):]) for line in reversed(output) if line.startswith("status ")), {})
         seen["storage bytes"] = {
@@ -4622,6 +4759,8 @@ def fulcrum_parity(wallet, data: Path, output: list, targets: dict, t1: str, t2:
         other.close()
         wallet.close()
         ok = not differences and synced_late is not None
+    except StopIteration:
+        pass
     except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         seen["error"] = f"{type(error).__name__}: {error}"
     finally:
@@ -4654,8 +4793,12 @@ def token_identity_wallet(s: dict) -> None:
     the same chain and a diverged one be refused; and no message kth-wallet
     sent may name the category or a locking script involved."""
     client = "CashTokens and BCMR in kth's wallet support (category leaves, identity outputs followed spend by spend)"
-    if not WALLET_BIN or not WALLET_IMAGE or not SCRIPT_FILTERS:
+    # Without kth-wallet (a build with no peer path), the node's own chain alone.
+    peer_path = bool(WALLET_BIN and WALLET_IMAGE and SCRIPT_FILTERS)
+    if not peer_path and not NODE_WALLET:
         return
+    if not peer_path:
+        client = "CashTokens and BCMR in kth's wallet support, from the node's own chain"
     seen: dict = {}
     ok = False
     process = None
@@ -4756,8 +4899,8 @@ def token_identity_wallet(s: dict) -> None:
         subprocess.run(["sudo", "rm", "-rf", str(data)], capture_output=True)
         data.mkdir(parents=True, exist_ok=True)
         source = Path("kth-src").resolve()
-        binary = "/src/" + str(Path(WALLET_BIN).resolve().relative_to(source))
-        process = subprocess.Popen(
+        binary = "/src/" + str(Path(WALLET_BIN).resolve().relative_to(source)) if peer_path else ""
+        process = None if not peer_path else subprocess.Popen(
             ["docker", "run", "--rm", "--name", "kth-wallet-tokens", "--network", "host", "--platform", "linux/amd64",
              "-v", f"{source}:/src:ro", "-v", f"{data}:/data", WALLET_IMAGE, binary,
              "--network", "regtest", "--directory", "/data", "--peer", f"127.0.0.1:{KTH_P2P_PORT}",
@@ -4765,16 +4908,17 @@ def token_identity_wallet(s: dict) -> None:
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         port = None
         deadline = time.monotonic() + 180
-        while port is None and time.monotonic() < deadline:
+        while peer_path and port is None and time.monotonic() < deadline:
             line = process.stdout.readline()
             if not line:
                 break
             if line.startswith("electrum "):
                 port = int(line.split()[1])
-        if port is None:
+        if peer_path and port is None:
             raise ValueError("kth-wallet did not report its Electrum port")
-        threading.Thread(target=lambda: [None for _ in process.stdout], daemon=True).start()
-        peers = ElectrumLine(port)
+        if peer_path:
+            threading.Thread(target=lambda: [None for _ in process.stdout], daemon=True).start()
+        peers = ElectrumLine(port) if peer_path else None
 
         def synced(line, height: int, seconds: int) -> bool:
             until = time.monotonic() + seconds
@@ -4785,7 +4929,8 @@ def token_identity_wallet(s: dict) -> None:
         def last_step(line) -> dict:
             return line.ask("kth.identity.resolve", other_base)["chain"][-1]
 
-        seen["peers synced"] = synced(peers, tip, 600)
+        if peer_path:
+            seen["peers synced"] = synced(peers, tip, 600)
         node = ElectrumLine(NODE_WALLET_PORT)
         seen["node synced"] = synced(node, tip, 300)
         # The second identity burned once both follow the chain: relay brings
@@ -4895,28 +5040,32 @@ def token_identity_wallet(s: dict) -> None:
                 "diverged refused": "error" in got["diverged"],
             }
 
-        for line in (peers, node):
+        lines = (peers, node) if peer_path else (node,)
+        for line in lines:
             until = time.monotonic() + 120
             while last_step(line)["tx_hash"] != burn and time.monotonic() < until:
                 time.sleep(1)
-        from_peers = answers(peers)
-        seen["peers"] = matches(from_peers)
+        from_peers = answers(peers) if peer_path else None
+        if peer_path:
+            seen["peers"] = matches(from_peers)
         from_node = answers(node)
         seen["node"] = matches(from_node)
-        seen["node equals peers"] = from_node == from_peers
+        if peer_path:
+            seen["node equals peers"] = from_node == from_peers
 
         # Mined: the burn is confirmed, on both paths.
         mine()
         tip = int(cli("getblockcount"))
         mined_ok = True
-        for line in (peers, node):
+        for line in lines:
             mined_ok = synced(line, tip, 300) and mined_ok
             until = time.monotonic() + 60
             while last_step(line) != {"tx_hash": burn, "height": tip, "source": "chain"} and time.monotonic() < until:
                 time.sleep(1)
             mined_ok = mined_ok and last_step(line) == {"tx_hash": burn, "height": tip, "source": "chain"}
         seen["burn mined"] = mined_ok
-        peers.close()
+        if peer_path:
+            peers.close()
         node.close()
 
         # Nothing sent names the category or a locking script involved.
@@ -4925,12 +5074,16 @@ def token_identity_wallet(s: dict) -> None:
             secrets.add(r[n][1].hex())
             secrets.add(hashlib.sha256(r[n][1]).hexdigest())
         leaks = []
-        for line in (data / "sent.log").read_text().splitlines():
+        sent_log = data / "sent.log"
+        for line in (sent_log.read_text().splitlines() if peer_path and sent_log.exists() else []):
             command, _, payload = line.partition(" ")
             leaks += [f"{command} names {secret[:16]}" for secret in secrets if secret in payload]
         seen["leaks"] = leaks[:10]
-        ok = (all(seen["peers"].values()) and all(seen["node"].values()) and seen["node equals peers"]
-              and mined_ok and not leaks)
+        if peer_path:
+            ok = (all(seen["peers"].values()) and all(seen["node"].values()) and seen["node equals peers"]
+                  and mined_ok and not leaks)
+        else:
+            ok = all(seen["node"].values()) and mined_ok
         if not ok:
             seen["answers"] = {"peers": from_peers, "node": from_node, "expected category": reference_category}
     except subprocess.CalledProcessError as error:
