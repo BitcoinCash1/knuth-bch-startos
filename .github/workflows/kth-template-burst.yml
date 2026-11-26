@@ -20,7 +20,9 @@ name: kth templates while blocks come seconds apart
 # 9e50c01d. The fold rows here add test/chunk-fold-on-master (ebbb6ded) to
 # each: a body chunk whose first block a compact block already stored held
 # the body cursor below the range end, so no later range opened; with that
-# fixed, the rows compare the template rule alone.
+# fixed, the rows compare the template rule alone (run 45858901992). This
+# run adds a stream of 1 sat/byte payments through the bursts and counts the
+# ones A holds and the follower misses, before and after the relay change.
 # Runs when this file or the script changes, or by hand.
 on:
   push:
@@ -37,44 +39,56 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: kth-fold-master-lan-poll
-            follower: kth
-            repo: CyberAshven/kth
-            ref: ebbb6ded2e815fe3d04ab8c794c581da47fe40c2
-            delay_ms: ""
-            node_p2p: "0"
-            node_tests: true
-          - name: kth-fold-master-wan-poll
-            follower: kth
-            repo: CyberAshven/kth
-            ref: ebbb6ded2e815fe3d04ab8c794c581da47fe40c2
-            delay_ms: "100"
-            node_p2p: "0"
-          - name: kth-fold-master-wan-p2p
-            follower: kth
-            repo: CyberAshven/kth
-            ref: ebbb6ded2e815fe3d04ab8c794c581da47fe40c2
-            delay_ms: "100"
-            node_p2p: "1"
-          - name: kth-fold-fix-lan-poll
+          # Before the relay change: the template branch with the chunk fold.
+          - name: kth-tmpl-fold-lan-poll
             follower: kth
             repo: CyberAshven/kth
             ref: a4ee9fb89fdb12a1cbe0eaeed96fd296291722a7
             delay_ms: ""
             node_p2p: "0"
-            node_tests: true
-          - name: kth-fold-fix-wan-poll
+          - name: kth-tmpl-fold-wan-poll
             follower: kth
             repo: CyberAshven/kth
             ref: a4ee9fb89fdb12a1cbe0eaeed96fd296291722a7
             delay_ms: "100"
             node_p2p: "0"
-          - name: kth-fold-fix-wan-p2p
+          # After: test/relay-while-blocks-arrive-with-chunk-fold, the same plus
+          # the relay change.
+          - name: kth-relay-fold-lan-poll
             follower: kth
             repo: CyberAshven/kth
-            ref: a4ee9fb89fdb12a1cbe0eaeed96fd296291722a7
+            ref: f1e682499461f6037e1c74f8a028cf1c7bb2b4ec
+            delay_ms: ""
+            node_p2p: "0"
+          - name: kth-relay-fold-wan-poll
+            follower: kth
+            repo: CyberAshven/kth
+            ref: f1e682499461f6037e1c74f8a028cf1c7bb2b4ec
             delay_ms: "100"
-            node_p2p: "1"
+            node_p2p: "0"
+          - name: bchn-lan-poll
+            follower: bchn
+            delay_ms: ""
+            node_p2p: "0"
+          - name: bchn-wan-poll
+            follower: bchn
+            delay_ms: "100"
+            node_p2p: "0"
+          # kth's node tests alone, on the PR branches as pushed (no fold, so
+          # no burst row): the template branch merged with master a0a5455d,
+          # and the relay branch on it.
+          - name: tests-template-7e25c7bd
+            follower: kth
+            repo: CyberAshven/kth
+            ref: 7e25c7bd78b66d739f37be083d1a716042e19ed3
+            node_tests: true
+            skip_e2e: "1"
+          - name: tests-relay-4d8f522c
+            follower: kth
+            repo: CyberAshven/kth
+            ref: 4d8f522cd0e6475d9adfa996534dcdebed577693
+            node_tests: true
+            skip_e2e: "1"
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 240
@@ -213,17 +227,18 @@ jobs:
           if [ -z "$TEST" ]; then echo "missing kth_node_test under kth-src/build"; exit 1; fi
           rc=0
           docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w "/src/$(dirname "${TEST#kth-src/}")" "$IMAGE" \
-            bash -c 'timeout --kill-after=30 900 ./kth_node_test "[chain_view]" --reporter compact; echo "chain_view exit $?"; timeout --kill-after=30 600 ./kth_node_test "[sv2 template_provider]" --reporter compact; echo "template_provider exit $?"' \
+            bash -c 'timeout --kill-after=30 900 ./kth_node_test "[chain_view]" --reporter compact; echo "chain_view exit $?"; timeout --kill-after=30 600 ./kth_node_test "[sv2 template_provider]" --reporter compact; echo "template_provider exit $?"; timeout --kill-after=30 900 ./kth_node_test "[tx_relay]" --reporter compact; echo "tx_relay exit $?"' \
             > node-tests-template.log 2>&1 || true
           grep -E "exit|passed|failed" node-tests-template.log | tail -8
           docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w "/src/$(dirname "${TEST#kth-src/}")" "$IMAGE" \
             bash -c "timeout --kill-after=30 1500 ./kth_node_test --reporter compact" > node-tests.log 2>&1 || rc=$?
           tail -5 node-tests.log
-          if grep -q "chain_view exit [^0]\|template_provider exit [^0]" node-tests-template.log; then rc=1; fi
+          if grep -q "chain_view exit [^0]\|template_provider exit [^0]\|tx_relay exit [^0]" node-tests-template.log; then rc=1; fi
           echo "kth_node_test exit $rc"
           exit $rc
         shell: bash
       - name: Fetch BCHN 29.2.0
+        if: matrix.skip_e2e != '1'
         run: |
           TARBALL=bitcoin-cash-node-29.2.0-x86_64-linux-gnu.tar.gz
           SHA256=23bbe9ff749136a9b832a2a59023ce76a5391322c1ea2f4f24b5b91f035081bc
@@ -241,6 +256,7 @@ jobs:
           echo "$PWD/bitcoin-cash-node-29.2.0/bin" >> "$GITHUB_PATH"
         shell: bash
       - name: Fetch BCH P2Pool ${{ env.P2POOL_REF }}
+        if: matrix.skip_e2e != '1'
         run: |
           git init --quiet p2pool
           git -C p2pool fetch --quiet --depth 1 https://github.com/CyberAshven/BitcoinCash-p2poolv2.git "$P2POOL_REF"
@@ -248,6 +264,7 @@ jobs:
           git -C p2pool log -1 --format='%H %s' | tee p2pool-commit.txt
         shell: bash
       - name: Build BCH P2Pool
+        if: matrix.skip_e2e != '1'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq build-essential clang cmake git libbz2-dev liblz4-dev \
@@ -256,7 +273,7 @@ jobs:
           cargo build --release --locked -p p2poolv2_node
         shell: bash
       - name: Delay the link to BCHN A
-        if: matrix.delay_ms != ''
+        if: matrix.skip_e2e != '1' && matrix.delay_ms != ''
         run: |
           # On loopback, TCP port 18444 alone (A's P2P port), both ways.
           sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" >/dev/null 2>&1 || true
@@ -268,6 +285,7 @@ jobs:
           sudo tc -s qdisc show dev lo
         shell: bash
       - name: Run the template burst check
+        if: matrix.skip_e2e != '1'
         run: |
           export TB_FOLLOWER="${{ matrix.follower }}"
           export TB_DELAY_MS="${{ matrix.delay_ms }}"

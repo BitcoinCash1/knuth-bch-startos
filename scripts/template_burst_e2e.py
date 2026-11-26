@@ -24,11 +24,17 @@ its own log) and what the probe saw (answers, refusals, the longest time
 without a template, and whether any template was built on a block the
 follower had not connected).
 
-Then the transaction phase: A's wallet sends ordinary 1 sat/byte payments, and
-the follower's template must carry the same transactions as A's. On kth this
-is done twice: with node.sigop_fee_satoshis at kth's BCH default (0), and on a
-fresh kth with 100, where each payment's two P2PKH outputs cost 200 satoshis
-more than it pays, so kth refuses them and its template stays empty.
+Through the bursts A's wallet also sends one ordinary 1 sat/byte payment a
+second. A mines nothing below 2 sat/byte (-blockmintxfee), so they stay in
+its mempool, and once the follower has caught up the row counts the ones A
+holds and the follower's mempool and template do not: a peer announces a
+transaction once, so one the follower ignored is missed for good.
+
+Then the transaction phase: A's wallet sends 40 more payments, and the
+follower's template must carry every one of them A's mempool holds. On kth
+this is done twice: with node.sigop_fee_satoshis at kth's BCH default (0),
+and on a fresh kth with 100, where each payment's two P2PKH outputs cost 200
+satoshis more than it pays, so kth refuses them and its template stays empty.
 
 Standard library only. Writes <out>/template-burst.json.
 """
@@ -87,6 +93,12 @@ PROBE_INTERVAL = 0.5
 # (blocks, then seconds to the next burst), in turn: 17 blocks in 16 s a cycle.
 BURSTS = [(1, 2.0), (1, 1.0), (2, 3.0), (1, 0.5), (3, 2.0), (1, 1.5), (5, 4.0), (1, 1.0), (2, 1.0)]
 PAYMENTS = 40
+# One ordinary payment from A's wallet every STREAM_INTERVAL seconds through
+# the bursts. A mines no transaction below 2 sat/byte (-blockmintxfee), so the
+# 1 sat/byte payments stay in its mempool, and what the follower does not hold
+# at the end is what it missed.
+STREAM_INTERVAL = 1.0
+BLOCK_MIN_FEE_BCH_PER_KB = "0.00002"
 # BCHN's relay floor and kth's byte fee: 1 satoshi per byte.
 FEE_RATE_BCH_PER_KB = "0.00001"
 
@@ -116,6 +128,9 @@ P2POOL = None
 HANDLES: list = []
 PROBES: list[dict] = []
 STOP_PROBE = threading.Event()
+STREAM: list[dict] = []
+STREAM_ERRORS: list[str] = []
+STOP_STREAM = threading.Event()
 
 
 def fail(message: str) -> NoReturn:
@@ -280,7 +295,8 @@ def start_bchn() -> None:
         ["bitcoind", "-regtest", f"-datadir={BCHN_DIR}", "-daemon", "-server",
          f"-rpcuser={AUTH}", f"-rpcpassword={AUTH}", f"-rpcport={BCHN[1]}", f"-port={BCHN_P2P}",
          "-listen=1", "-bind=127.0.0.1", "-txindex=1", "-fallbackfee=0.00001",
-         f"-paytxfee={FEE_RATE_BCH_PER_KB}", "-allowunconnectedmining"],
+         f"-paytxfee={FEE_RATE_BCH_PER_KB}", f"-blockmintxfee={BLOCK_MIN_FEE_BCH_PER_KB}",
+         "-allowunconnectedmining"],
         capture_output=True, text=True, timeout=30,
     )
     if result.returncode != 0:
@@ -629,9 +645,70 @@ def quiet(seconds: int, address: str) -> int:
     return blocks
 
 
+def stream_loop(addresses: list[str]) -> None:
+    sent = 0
+    while not STOP_STREAM.is_set():
+        started = time.time()
+        txid, error = call(BCHN, "sendtoaddress", addresses[sent % len(addresses)], 0.001)
+        if error is None and isinstance(txid, str):
+            STREAM.append({"txid": txid, "t": round(started, 3)})
+        else:
+            STREAM_ERRORS.append(str(error)[:200])
+        sent += 1
+        STOP_STREAM.wait(max(0.0, STREAM_INTERVAL - (time.time() - started)))
+
+
+def compare_stream() -> dict:
+    """The stream's payments that A holds and the follower does not. A peer
+    announces a transaction once, so one the follower ignored stays missed;
+    the follower is given until its count stops moving for 30 s (at most
+    120 s) to take what is still on its way."""
+    node = follower()
+    stream = {entry["txid"] for entry in STREAM}
+    a_pool = set(must(BCHN, "getrawmempool")) & stream
+    deadline = time.monotonic() + 120
+    held = -1
+    since = time.monotonic()
+    f_pool: set[str] = set()
+    while time.monotonic() < deadline:
+        ensure_follower()
+        result, _ = call(node, "getrawmempool")
+        f_pool = set(result) if isinstance(result, list) else set()
+        have = len(a_pool & f_pool)
+        if have == len(a_pool):
+            break
+        if have != held:
+            held, since = have, time.monotonic()
+        elif time.monotonic() - since >= 30:
+            break
+        time.sleep(2)
+    template, error = template_txids(node)
+    missed = sorted(a_pool - f_pool)
+    record = {
+        "sent": len(STREAM),
+        "send_errors": len(STREAM_ERRORS),
+        "send_error_examples": STREAM_ERRORS[:3],
+        "in_bchn_a_mempool": len(a_pool),
+        "in_follower_mempool": len(a_pool & f_pool),
+        "in_follower_template": len(a_pool & set(template)),
+        "missed": len(missed),
+        "missed_examples": missed[:5],
+        "follower_template_error": error,
+    }
+    EVIDENCE["transactions"]["stream"] = record
+    progress(f"stream: {record['sent']} sent, A holds {record['in_bchn_a_mempool']}, "
+             f"the follower's mempool {record['in_follower_mempool']}, its template "
+             f"{record['in_follower_template']}, missed {record['missed']}")
+    return record
+
+
 def burst(seconds: int, address: str) -> dict:
     blocks = 0
     rounds = 0
+    addresses = [cli("getnewaddress") for _ in range(20)]
+    STOP_STREAM.clear()
+    streamer = threading.Thread(target=stream_loop, args=(addresses,), daemon=True)
+    streamer.start()
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         count, pause = BURSTS[rounds % len(BURSTS)]
@@ -641,7 +718,9 @@ def burst(seconds: int, address: str) -> dict:
         blocks += count
         rounds += 1
         time.sleep(pause)
-    return {"blocks": blocks, "rounds": rounds}
+    STOP_STREAM.set()
+    streamer.join(30)
+    return {"blocks": blocks, "rounds": rounds, "payments": len(STREAM)}
 
 
 def template_txids(node) -> tuple[list[str], dict | None]:
@@ -679,21 +758,23 @@ def compare_templates(label: str, txids: list[str], wait_seconds: int, expect_al
         if expect_all and wanted <= set(held):
             break
         time.sleep(2)
-    a_held, _ = template_txids(BCHN)
+    # A mines nothing below 2 sat/byte, so its mempool, not its template, is
+    # what BCHN holds of these payments.
+    a_pool = set(must(BCHN, "getrawmempool"))
     mempool, _ = call(node, "getrawmempool")
+    f_pool = set(mempool) if isinstance(mempool, list) else set()
     record = {
         "sent": len(txids),
-        "in_bchn_a_template": len(wanted & set(a_held)),
+        "in_bchn_a_mempool": len(wanted & a_pool),
+        "in_follower_mempool": len(wanted & f_pool),
         "in_follower_template": len(wanted & set(held)),
-        "follower_mempool": len(mempool) if isinstance(mempool, list) else mempool,
         "follower_template_error": error,
-        "same_transactions": set(held) == set(a_held),
-        "only_in_follower": sorted(set(held) - set(a_held))[:10],
-        "only_in_bchn_a": sorted(set(a_held) - set(held))[:10],
+        "same_transactions": wanted & a_pool == wanted & set(held),
+        "only_in_bchn_a": sorted((wanted & a_pool) - set(held))[:10],
     }
     EVIDENCE["transactions"][label] = record
-    progress(f"{label}: A's template holds {record['in_bchn_a_template']}/{len(txids)}, "
-             f"the follower's {record['in_follower_template']}/{len(txids)}")
+    progress(f"{label}: A's mempool holds {record['in_bchn_a_mempool']}/{len(txids)}, "
+             f"the follower's template {record['in_follower_template']}/{len(txids)}")
     return record
 
 
@@ -795,12 +876,12 @@ def run() -> None:
     stop_process(P2POOL)
     if caught_up is None:
         fail("the follower stopped following A: " + EVIDENCE["heights"]["follower_not_caught_up"])
+    compare_stream()
 
     progress("transactions at 1 sat/byte, the follower as configured")
     first_payments = pay(PAYMENTS, "default")
     compare_templates("default", first_payments, 180, expect_all=True)
     if FOLLOWER == "kth":
-        mine(1, address)
         stop_kth()
         progress("a fresh kth with node.sigop_fee_satoshis = 100")
         start_kth("sigop100", "100")
