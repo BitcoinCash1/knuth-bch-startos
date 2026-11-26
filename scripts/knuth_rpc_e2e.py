@@ -76,6 +76,12 @@ BCHD_P2P_PORT = 18666
 # scripts/rpa-neutrino-client, a wallet of reusable payment addresses made with
 # the Neutrino library's search on filter type 2 (gcash/neutrino#56).
 RPA_NEUTRINO_BIN = os.environ.get("KTH_RPA_NEUTRINO_BIN") or ""
+# KTH_PEER_WALLET_BIN=<path under kth-src> and KTH_PEER_WALLET_IMAGE=<toolchain
+# image>, with KTH_RPA_FILTERS=1 and KTH_BCHD_BIN (row 1017): kth's wallet
+# support from peers on filter types 0 and 2, run as the harness's driver
+# (scripts/kth-peer-wallet) built in the kth tree, against kth and bchd.
+PEER_WALLET_BIN = os.environ.get("KTH_PEER_WALLET_BIN") or ""
+PEER_WALLET_IMAGE = os.environ.get("KTH_PEER_WALLET_IMAGE") or ""
 # KTH_EXPLORER_BACKEND, with KTH_SCRIPT_FILTERS=1: the backend directory of a
 # built BCH Explorer (CyberAshven/bitcoin-cash-explorer, feat/p2p-light-client),
 # whose 'p2p' backend reads addresses from kth as a light client (row 1008,
@@ -215,6 +221,9 @@ def start_kth() -> None:
                     "--db.directory", "/data/e2e", "--db.db_mode", "full",
                     "--net.inbound_port", str(KTH_P2P_PORT),
                     "--net.inbound_connections",
+                    # Row 1017's wallet downloads each block over a connection
+                    # of its own, four at a time, beside its long-lived one.
+                    "16" if PEER_WALLET_BIN else
                     "4" if SHV or I2P or SERVE or ANNOUNCE or COMPACT or FILTERS or BLOOM else "0",
                     *(["--node.mmr_index", "true"] if SHV else []),
                     *(["--node.compact_filters", "true"] if FILTERS else []),
@@ -2761,8 +2770,8 @@ def rows(s: dict) -> None:
                   wallet_from_peers, node_wallet_from_chain, token_identity_wallet,
                   bloom_filter_light_client, i2p_second_node, serve_second_node, announce_second_node,
                   compact_blocks_both_ways, row24_mining_protocol, pr874_long_polling,
-                  # Last: it reorganizes BCHN's chain.
-                  rpa_kth_bchd_neutrino):
+                  # Last: they reorganize BCHN's chain.
+                  rpa_kth_bchd_neutrino, peer_wallet_from_peers):
         try:
             check(s)
         except Exception as error:  # one broken check must not hide the others
@@ -4475,6 +4484,288 @@ def rpa_kth_bchd_neutrino(s: dict) -> None:
         "for four; kth's headers change from the fork up only and it answers nothing naming a block left; "
         "Neutrino's RPA search finds the paying transactions from kth alone, then from kth and bchd agreeing",
         ok, seen)
+
+
+
+# ---- row 1017: kth's wallet support from peers on filter types 0 and 2 --------
+
+def peer_wallet_truth(targets: dict, prefixes: list) -> tuple[int, str, dict, dict]:
+    """BCHN's reading of every block: for each target script, its history
+    (txid, height), its unspent outputs ((txid, vout) -> satoshis) and its
+    balance; for each RPA prefix (value, bits), the transactions with one of
+    their first 30 inputs in it, with their heights."""
+    sats = 100_000_000
+    tip = int(cli("getblockcount"))
+    best = cli("getbestblockhash")
+    wanted = set(targets.values())
+    received: dict = {script: {} for script in wanted}
+    spent_by: dict = {}
+    history: dict = {script: set() for script in wanted}
+    rpa: dict = {f"{value:x}/{bits}": set() for value, bits in prefixes}
+    for h in range(tip + 1):
+        block_hash = call(BCHN, "getblockhash", h)[0]
+        block = call(BCHN, "getblock", block_hash, 2)[0]
+        for position, tx in enumerate(block["tx"]):
+            for out in tx["vout"]:
+                script = out["scriptPubKey"]["hex"]
+                if script in wanted:
+                    received[script][(tx["txid"], out["n"])] = round(out["value"] * sats)
+                    history[script].add((tx["txid"], h))
+            if position > 0:
+                for vin in tx["vin"]:
+                    spent_by[(vin["txid"], vin["vout"])] = (tx["txid"], h)
+        for position, (txid, inputs) in enumerate(rpa_read_block(bytes.fromhex(call(BCHN, "getblock", block_hash, 0)[0]))):
+            if position == 0:
+                continue
+            values = [rpa_value(item) for item in inputs[:RPA_INPUTS]]
+            for value, bits in prefixes:
+                if any(v >> (16 - bits) == value for v in values):
+                    rpa[f"{value:x}/{bits}"].add((txid, h))
+    truth = {}
+    for name, script in targets.items():
+        unspent = {o: v for o, v in received[script].items() if o not in spent_by}
+        spends = {spent_by[o] for o in received[script] if o in spent_by}
+        truth[name] = {"history": history[script] | spends, "unspent": unspent, "balance": sum(unspent.values())}
+    return tip, best, truth, rpa
+
+
+def peer_wallet_run(name: str, peers: list, best: str, targets: dict, prefixes: list, tip: int,
+                    extra: list) -> dict:
+    """kth's wallet support from peers, the driver built in this kth tree,
+    run in the image it was built in until its headers end at `best`."""
+    source = Path("kth-src").resolve()
+    binary = "/src/" + str(Path(PEER_WALLET_BIN).resolve().relative_to(source))
+    data = Path("/tmp/kth-peer-wallet")
+    data.mkdir(parents=True, exist_ok=True)
+    command = ["docker", "run", "--rm", "--network", "host", "--platform", "linux/amd64",
+               "-v", f"{source}:/src:ro", "-v", f"{data}:/data", PEER_WALLET_IMAGE, binary,
+               "--directory", f"/data/{name}", "--input-prefix-filters", "--tip-hash", best, "--timeout", "900",
+               "--sent-log", f"/data/{name}-sent.log"]
+    for peer in peers:
+        command += ["--peer", peer]
+    for script in targets.values():
+        command += ["--script", script]
+    for value, bits in prefixes:
+        command += ["--rpa", f"{value:x}/{bits}/0/{tip}"]
+    command += extra
+    started = time.monotonic()
+    run = subprocess.run(command, capture_output=True, text=True, timeout=1800)
+    lines = [line for line in run.stdout.splitlines() if line.startswith("{")]
+    with open(OUT / f"row1017-{name}.log", "a") as log:
+        log.write(run.stdout[-200000:] + "\n--- stderr\n" + run.stderr[-200000:] + "\n===\n")
+    out = json.loads(lines[-1]) if lines else {"output": (run.stdout + run.stderr)[-600:]}
+    out["exit"] = run.returncode
+    out["seconds"] = round(time.monotonic() - started, 1)
+    sent = data / f"{name}-sent.log"
+    out["sent"] = sent.read_text() if sent.exists() else ""
+    return out
+
+
+def peer_wallet_compare(answer: dict, targets: dict, truth: dict, rpa: dict) -> tuple[bool, dict]:
+    """Whether every answer equals BCHN's reading of the chain."""
+    status = answer.get("status") or {}
+    found: dict = {"reached": answer.get("reached"), "exit": answer.get("exit"), "seconds": answer.get("seconds"),
+                   "sync seconds": answer.get("sync_seconds"), "answer seconds": answer.get("answer_seconds"),
+                   "status": {k: status.get(k) for k in ("header_height", "tip", "input_prefix_tip", "blocks_downloaded",
+                                                         "bytes_received", "filter_bytes", "refused", "error")}}
+    if "output" in answer:
+        found["output"] = answer["output"]
+    ok = bool(answer.get("reached")) and answer.get("exit") == 0
+    answers = answer.get("scripts") or {}
+    for name, script in targets.items():
+        got = answers.get(script) or {}
+        history = {(txid, height) for txid, height in got.get("history") or []}
+        unspent = {(txid, vout): value for txid, vout, value, _ in got.get("unspent") or []}
+        same = {"history": history == truth[name]["history"], "unspent": unspent == truth[name]["unspent"],
+                "balance": got.get("balance") == truth[name]["balance"],
+                "transactions": len(truth[name]["history"])}
+        if "error" in got:
+            same["error"] = got["error"]
+        if not same["history"]:
+            same["missing"] = sorted(truth[name]["history"] - history)[:5]
+            same["extra"] = sorted(history - truth[name]["history"])[:5]
+        found[name] = same
+        ok = ok and same["history"] and same["unspent"] and same["balance"]
+    for key, expected in rpa.items():
+        listed = next((v for k, v in (answer.get("rpa") or {}).items() if k.startswith(key + "/")), [])
+        got = {(txid, height) for txid, height in listed} if isinstance(listed, list) else {"error": str(listed)}
+        found[f"rpa {key}"] = {"equal": got == expected, "transactions": len(expected)}
+        ok = ok and got == expected
+    # None of these peers lies: none may be refused.
+    ok = ok and not status.get("refused")
+    return ok, found
+
+
+def peer_wallet_quiet(answer: dict, targets: dict, txids: list, outpoints: list) -> bool:
+    """No message sent names a watched script, an outpoint or a transaction
+    looked up, and only filter types 0 and 2 are asked for."""
+    secrets = list(targets.values())
+    for txid, vout in outpoints:
+        secrets.append(bytes.fromhex(txid)[::-1].hex() + struct.pack("<I", vout).hex())
+    for txid in txids:
+        secrets += [txid, bytes.fromhex(txid)[::-1].hex()]
+    for line in answer.get("sent", "").splitlines():
+        command, _, payload = line.partition(" ")
+        if command in ("getcfrange", "getcfproof", "filterload", "filteradd"):
+            return False
+        if command in ("getcfilters", "getcfheaders", "getcfcheckpt") and payload[:2] not in ("00", "02"):
+            return False
+        if any(secret in payload for secret in secrets):
+            return False
+    return bool(answer.get("sent"))
+
+
+def peer_wallet_from_peers(s: dict) -> None:
+    """kth's wallet support from peers on the regular filter (type 0) and the
+    input prefix filter (type 2), with no filter type 1 (row 1017). The
+    driver built in this kth tree syncs headers and both filter types from
+    kth (which serves type 0 from the index of #1057 and type 2 beside it),
+    from bchd (gcash/bchd#785, types 0 and 2), and from both together. For the
+    wallet's addresses, OP_TRUE, an address paid and spent, an address paid,
+    and two RPA prefixes, every history, unspent output, balance and RPA match
+    must equal BCHN's reading of every block, and the node's own wallet
+    support (its Electrum listener) where the build has it. A script hash, a
+    token category and a transaction by its hash alone are answered
+    not_implemented. Then BCHN leaves the block below a payment for a longer
+    branch that holds it higher, and the same stores must follow: every
+    answer equal BCHN's again."""
+    client = "kth's wallet support from peers, filter types 0 and 2 (kth and bchd as peers)"
+    if not PEER_WALLET_BIN or not PEER_WALLET_IMAGE or not RPA_FILTERS or not BCHD_BIN:
+        return
+    seen: dict = {}
+    ok = False
+    bchd = None
+    try:
+        subprocess.run(["sudo", "rm", "-rf", "/tmp/kth-peer-wallet"], capture_output=True)
+        # An address paid and spent (A to B), one paid (C), and a payment
+        # between two addresses nobody watches (G to F).
+        a_address, b_address, c_address = cli("getnewaddress"), cli("getnewaddress"), cli("getnewaddress")
+        g_address, f_address = cli("getnewaddress"), cli("getnewaddress")
+        t1 = cli("sendtoaddress", a_address, "1.5")
+        tg = cli("sendtoaddress", g_address, "0.3")
+        cli("generatetoaddress", "1", s["addr"])
+        coins = json.loads(cli("listunspent", "1"))
+        a_coin = next(u for u in coins if u["txid"] == t1 and u["address"] == a_address)
+        g_coin = next(u for u in coins if u["txid"] == tg and u["address"] == g_address)
+        raw = cli("createrawtransaction", json.dumps([{"txid": t1, "vout": a_coin["vout"]}]),
+                  json.dumps({b_address: round(a_coin["amount"] - 0.001, 8)}))
+        t2 = cli("sendrawtransaction", json.loads(cli("signrawtransactionwithwallet", raw))["hex"])
+        raw = cli("createrawtransaction", json.dumps([{"txid": tg, "vout": g_coin["vout"]}]),
+                  json.dumps({f_address: round(g_coin["amount"] - 0.001, 8)}))
+        t6 = cli("sendrawtransaction", json.loads(cli("signrawtransactionwithwallet", raw))["hex"])
+        t3 = cli("sendtoaddress", c_address, "0.7")
+        cli("generatetoaddress", "1", s["addr"])
+
+        def script_of(address: str) -> str:
+            return call(BCHN, "validateaddress", address)[0]["scriptPubKey"]
+        # Not the mining address: every block pays it, so its history is the
+        # whole chain, each block downloaded over a connection of its own.
+        targets = {"A": script_of(a_address), "B": script_of(b_address), "C": script_of(c_address), "OP_TRUE": "51"}
+        for i, other in enumerate(s["others"]):
+            targets[f"wallet address {i + 1}"] = script_of(other)
+        t2_inputs = next(inputs for txid, inputs in
+                         rpa_read_block(bytes.fromhex(call(BCHN, "getblock", cli("getbestblockhash"), 0)[0])) if txid == t2)
+        t2_value = rpa_value(t2_inputs[0])
+        prefixes = [(t2_value, 16), (t2_value >> 8, 8)]
+        f_height = call(BCHN, "getblock", call(BCHN, "getrawtransaction", t6, 1)[0]["blockhash"])[0]["height"]
+        a_vout = a_coin["vout"]
+        c_vout = next(o["n"] for o in call(BCHN, "getrawtransaction", t3, 1)[0]["vout"]
+                      if o["scriptPubKey"]["hex"] == targets["C"])
+        # t6 touches no watched script: by its hash alone it is not looked
+        # for, with its height it is found; t1 is in a watched history.
+        missing = "00" * 31 + "01"
+        extra = ["--tx", t6, "--tx", f"{t6}@{f_height}", "--tx", f"{missing}@{f_height}", "--tx", t1,
+                 "--script-hash", hashlib.sha256(bytes.fromhex(targets["A"])).digest()[::-1].hex(),
+                 "--category", "11" * 32,
+                 "--outpoint", f"{t1}:{a_vout}", "--outpoint", f"{t3}:{c_vout}"]
+        seen["setup"] = {"t1": t1, "t2": t2, "t3": t3, "t6": t6, "t6 height": f_height,
+                         "prefixes": [f"{v:x}/{b}" for v, b in prefixes]}
+
+        bchd = start_bchd()
+
+        def round_of(label: str) -> bool:
+            tip, best, truth, rpa = peer_wallet_truth(targets, prefixes)
+            view: dict = {"tip": tip, "best": best[:16],
+                          "bchd at the tip": wait_best(bchd_call, best, 900),
+                          "kth at the tip": wait_best(lambda m: call(KTH, m), best, 600)}
+            good = bool(view["bchd at the tip"] and view["kth at the tip"])
+            for name, peers in (("kth", [f"127.0.0.1:{KTH_P2P_PORT}"]), ("bchd", [f"127.0.0.1:{BCHD_P2P_PORT}"]),
+                                ("both", [f"127.0.0.1:{KTH_P2P_PORT}", f"127.0.0.1:{BCHD_P2P_PORT}"])):
+                answer = peer_wallet_run(name, peers, best, targets, prefixes, tip, extra)
+                same, found = peer_wallet_compare(answer, targets, truth, rpa)
+                txs = answer.get("txs") or {}
+                outs = answer.get("outpoints") or {}
+                checks = {
+                    "txid alone not_implemented": (txs.get(t6) or {}).get("code") == 4,
+                    "txid with its height": (txs.get(f"{t6}@{f_height}") or {}).get("height") == f_height,
+                    "missing txid with a height not found": "error" in (txs.get(f"{missing}@{f_height}") or {}),
+                    "txid of a watched history": (txs.get(t1) or {}).get("txid") == t1,
+                    "script hash and category not_implemented": all(
+                        (entry or {}).get("code") == 4
+                        for group in ("script_hashes", "categories") for entry in (answer.get(group) or {}).values()),
+                    "spent outpoint": f"{t1}:{a_vout}" in outs and outs[f"{t1}:{a_vout}"] is None,
+                    "unspent outpoint": (outs.get(f"{t3}:{c_vout}") or {}).get("value") == 70_000_000,
+                    "nothing watched sent": peer_wallet_quiet(answer, targets, [t1, t3, t6], [(t1, a_vout)]),
+                }
+                found.update(checks)
+                same = same and all(checks.values())
+                found["equal"] = same
+                view[name] = found
+                good = good and same
+            # The node's own wallet support, from its own chain.
+            if NODE_WALLET:
+                electrum = ElectrumLine(NODE_WALLET_PORT)
+                own = {}
+                for name, script in targets.items():
+                    hashed = hashlib.sha256(bytes.fromhex(script)).digest()[::-1].hex()
+                    got = {(item["tx_hash"], item["height"]) for item in
+                           electrum.ask("blockchain.scripthash.get_history", hashed) if item["height"] > 0}
+                    own[name] = got == truth[name]["history"]
+                electrum.close()
+                view["the node's own wallet support, the same histories"] = own
+                good = good and all(own.values())
+            seen[label] = view
+            return good
+
+        before_ok = round_of("before")
+
+        # The reorganization: a payment to D, then BCHN leaves the block below
+        # it for a longer branch. The payment has the lock time of the height
+        # it was made at, so BCHN drops it when it leaves that height; it is
+        # sent again once the new branch is long enough, and lands higher.
+        d_address = cli("getnewaddress")
+        targets["D"] = script_of(d_address)
+        start = int(cli("getblockcount"))
+        t4 = cli("sendtoaddress", d_address, "0.4")
+        raw4 = call(BCHN, "getrawtransaction", t4)[0]
+        cli("generatetoaddress", "3", s["addr"])
+        d_before = call(BCHN, "getblock", call(BCHN, "getrawtransaction", t4, 1)[0]["blockhash"])[0]["height"]
+        middle_ok = round_of("with the payment to D")
+        cli("invalidateblock", cli("getblockhash", str(start)))
+        cli("generatetoaddress", "4", s["addr"])
+        call(BCHN, "sendrawtransaction", raw4)
+        cli("generatetoaddress", "1", s["addr"])
+        d_after = call(BCHN, "getblock", call(BCHN, "getrawtransaction", t4, 1)[0]["blockhash"])[0]["height"]
+        seen["payment to D moved"] = {"from": d_before, "to": d_after, "fork below": start}
+        after_ok = round_of("after the reorganization")
+        ok = before_ok and middle_ok and after_ok and d_after > d_before
+    except subprocess.CalledProcessError as error:
+        seen["error"] = f"{error.cmd[-2:] if isinstance(error.cmd, list) else error.cmd}: {(error.stderr or '').strip()[:200]}"
+    except (OSError, ValueError, KeyError, IndexError, TypeError, StopIteration, struct.error,
+            subprocess.TimeoutExpired, json.JSONDecodeError) as error:
+        seen["error"] = f"{type(error).__name__}: {error}"
+    finally:
+        if bchd is not None:
+            bchd.terminate()
+            try:
+                bchd.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                bchd.kill()
+        (OUT / "row1017.json").write_text(json.dumps(seen, indent=1, default=str))
+    row(1017, client, "from kth, from bchd and from both, wallet support from peers on filter types 0 and 2 answers "
+        "every history, unspent output, balance and RPA prefix as BCHN's blocks say (and the node's own wallet "
+        "support), refuses no peer, sends nothing watched, answers a script hash, a category and a txid alone "
+        "not_implemented, and follows BCHN to a longer branch that moves a payment", ok, seen)
 
 
 def bloom_bits(elements: list[bytes], size: int = 64, functions: int = 5, tweak: int = 0) -> bytes:

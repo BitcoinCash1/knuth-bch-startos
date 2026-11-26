@@ -60,6 +60,28 @@ jobs:
             targets: kth_domain_neutrino_test kth_node_neutrino_test kth_node_wallet_test
             suites: kth_domain_neutrino_test kth_node_neutrino_test kth_node_wallet_test
             e2e: false
+          # End to end: restack/10 with the type 2 serving of
+          # node/input-prefix-filter-index and the node's Electrum listener of
+          # restack/3 merged in (TEST ONLY tree e2e/peer-path-node, in the
+          # bundle), and the harness's peer wallet driver built in it. kth
+          # serves types 0 and 2 to the driver, bchd (gcash/bchd#785) too; row
+          # 1017 compares the driver's answers with BCHN's blocks and the
+          # node's own wallet support, before and after a reorganization.
+          - name: e2e-peer-path
+            branch: e2e/peer-path-node
+            bundle: true
+            gcc: '16'
+            options: -o neutrino=True -o wallet=True
+            targets: kth_node_wallet_test kth_peer_wallet_e2e
+            suites: kth_node_wallet_test
+            e2e: true
+            filters: true
+            rpa_filters: true
+            neutrino: true
+            bchd: true
+            node_wallet: true
+            peer_wallet: true
+            long: 2100
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
@@ -156,6 +178,20 @@ jobs:
           restore-keys: |
             ${{ env.CCACHE_PREFIX }}${{ matrix.branch }}-
             ${{ env.CCACHE_PREFIX }}
+      # Row 1017: the harness's driver of wallet support from peers, built
+      # in this kth tree as one more executable of the node.
+      - name: Add the peer wallet driver to the kth tree
+        if: matrix.peer_wallet
+        run: |
+          mkdir -p kth-src/src/node/e2e
+          cp scripts/kth-peer-wallet/peer_wallet_e2e.cpp kth-src/src/node/e2e/
+          printf '%s\n' '' \
+            'if(KTH_WITH_WALLET AND NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")' \
+            '  add_executable(kth_peer_wallet_e2e e2e/peer_wallet_e2e.cpp)' \
+            '  target_link_libraries(kth_peer_wallet_e2e PRIVATE ${PROJECT_NAME})' \
+            'endif()' >> kth-src/src/node/CMakeLists.txt
+          tail -6 kth-src/src/node/CMakeLists.txt
+        shell: bash
       - name: Build kth and its tests in the kth toolchain
         run: |
           TARGETS="kth_node_test node-exe"
@@ -439,6 +475,15 @@ jobs:
           echo "kth-wallet: $WALLET"
           echo "KTH_WALLET_BIN=$WALLET" >> "$GITHUB_ENV"
           echo "KTH_WALLET_IMAGE=$IMAGE" >> "$GITHUB_ENV"
+        shell: bash
+      # Row 1017: the peer wallet driver, run in the image it was built in.
+      - name: Find the peer wallet driver
+        if: matrix.peer_wallet
+        run: |
+          DRIVER=$(find kth-src/build -name kth_peer_wallet_e2e -type f -perm -u+x | head -1)
+          echo "peer wallet driver: $DRIVER"
+          echo "KTH_PEER_WALLET_BIN=$DRIVER" >> "$GITHUB_ENV"
+          echo "KTH_PEER_WALLET_IMAGE=$IMAGE" >> "$GITHUB_ENV"
         shell: bash
       # Row 1013: a Fulcrum release, pinned by version and SHA-256, on BCHN.
       - name: Fetch Fulcrum 2.1.4
