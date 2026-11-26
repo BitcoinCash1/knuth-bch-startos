@@ -3698,7 +3698,17 @@ def vault_wallet_filters(s: dict) -> None:
 # makes the test vectors with it.
 
 RPA_INPUTS = 30
-RPA_RICE_SCALE = 45426  # round(65536 * ln 2)
+# The coding of N values follows from N alone. For each N it is the one with
+# the fewest expected bits for N distinct values drawn at random, worked out
+# exactly (the larger k on the one tie, at N = 1): Rice with parameter k for
+# N from RPA_K_FROM[k] up to the next k's start, and a bitmap of every 16-bit
+# value from RPA_BITMAP_FROM on, past which every k takes more than its 65,536
+# bits. k = 0 is never used.
+RPA_K_FROM = {15: 1, 14: 2, 13: 3, 12: 7, 11: 15, 10: 30, 9: 61, 8: 123, 7: 246, 6: 494,
+              5: 992, 4: 1997, 3: 4051, 2: 8356, 1: 18055}
+RPA_BITMAP_FROM = 19197
+RPA_BITMAP = 16  # the byte after N for a bitmap
+RPA_BITMAP_BYTES = 65536 // 8
 
 
 def rpa_input_bytes(txid_internal: bytes, vout: int, script_sig: bytes, sequence: int) -> bytes:
@@ -3727,9 +3737,11 @@ def rpa_block_values(block: dict) -> list[int]:
 
 
 def rpa_rice_parameter(n: int) -> int:
-    """k = floor(log2(floor(45426 / N))), and 0 when that quotient is 0."""
-    quotient = RPA_RICE_SCALE // n
-    return quotient.bit_length() - 1 if quotient else 0
+    """The byte after N: the Rice parameter k for 1 <= N < 19,197 (the k
+    whose RPA_K_FROM band holds N), or RPA_BITMAP from 19,197 on."""
+    if n >= RPA_BITMAP_FROM:
+        return RPA_BITMAP
+    return min(k for k, start in RPA_K_FROM.items() if n >= start)
 
 
 def rpa_rice_bits(k: int, gaps: list[int]) -> str:
@@ -3745,13 +3757,20 @@ def rpa_pack_bits(bits: str) -> bytes:
 
 
 def rpa_encode(values: list[int]) -> bytes:
-    """The one encoding of a set: CompactSize N, then, when N > 0, k in one
-    byte and the Rice-coded gaps (the first from 0)."""
+    """The one encoding of a set: CompactSize N, then, when N > 0, the byte N
+    gives and the Rice-coded gaps (the first from 0), or for 19,197 values
+    or more the byte 16 and a bitmap of the 65,536 values, most significant
+    bit first."""
     values = sorted(set(values))
     out = compact_size(len(values))
     if not values:
         return out
     k = rpa_rice_parameter(len(values))
+    if k == RPA_BITMAP:
+        bitmap = bytearray(RPA_BITMAP_BYTES)
+        for v in values:
+            bitmap[v // 8] |= 0x80 >> (v % 8)
+        return out + bytes([k]) + bytes(bitmap)
     gaps = [b - a for a, b in zip([0] + values[:-1], values)]
     return out + bytes([k]) + rpa_pack_bits(rpa_rice_bits(k, gaps))
 
@@ -3780,6 +3799,15 @@ def rpa_decode(data: bytes) -> list[int]:
     if k != rpa_rice_parameter(n):
         raise ValueError("k not the one its count gives")
     stream = data[o + 1:]
+    if k == RPA_BITMAP:
+        if len(stream) < RPA_BITMAP_BYTES:
+            raise ValueError("truncated")
+        if len(stream) > RPA_BITMAP_BYTES:
+            raise ValueError("trailing bytes")
+        values = [v for v in range(65536) if stream[v // 8] & (0x80 >> (v % 8))]
+        if len(values) != n:
+            raise ValueError("bitmap holds another number of values than N")
+        return values
     total = len(stream) * 8
     pos = 0
 
