@@ -27,16 +27,10 @@ jobs:
         # Each restack branch builds with the Conan options it needs and runs
         # kth's suites and the optional features' own test executables. Rows
         # that need a listener run where the branch has one.
-          # Run 45696605881: r1 (19a78969) and r2 (cbfedc2a) green. This run:
-          # r2 with its two later commits, and r3 to r5.
-          - name: r2-own-chain
-            branch: restack/2-own-chain
-            gcc: '16'
-            options: -o neutrino=True -o wallet=True
-            targets: kth_domain_neutrino_test kth_node_wallet_test
-            suites: kth_domain_neutrino_test kth_node_wallet_test
-            blockchain: true
-            e2e: false
+          # Run 45696605881: r1 (19a78969) and r2 (cbfedc2a) green. Run
+          # 45759066499: r2 (798a8b25) to r5 suites green, the end-to-end rows
+          # skipped (an unset e2e reads as false). This run: r3 and r5 with
+          # their rows, and the peer path's groundwork r6 to r9.
           - name: r3-electrum
             branch: restack/3-electrum
             gcc: '16'
@@ -45,14 +39,7 @@ jobs:
             suites: kth_node_wallet_test
             node_wallet: true
             fulcrum: true
-          - name: r4-capi
-            branch: restack/4-capi
-            gcc: '16'
-            options: -o neutrino=True -o wallet=True
-            targets: kth_node_wallet_test kth_capi_wallet_test
-            suites: kth_node_wallet_test kth_capi_wallet_test
-            capi: true
-            e2e: false
+            e2e: true
           - name: r5-cashtokens-bcmr
             branch: restack/5-cashtokens-bcmr
             gcc: '16'
@@ -60,6 +47,35 @@ jobs:
             targets: kth_node_wallet_test
             suites: kth_node_wallet_test
             node_wallet: true
+            e2e: true
+          - name: r6-golomb-match-each
+            branch: restack/6-golomb-match-each
+            gcc: '16'
+            options: -o neutrino=True
+            targets: kth_domain_neutrino_test
+            suites: kth_domain_neutrino_test
+            e2e: false
+          - name: r7-filter-files
+            branch: restack/7-filter-files
+            gcc: '16'
+            options: -o neutrino=True -o wallet=True
+            targets: kth_node_wallet_test
+            suites: kth_node_wallet_test
+            e2e: false
+          - name: r8-scan
+            branch: restack/8-scan
+            gcc: '16'
+            options: -o neutrino=True -o wallet=True
+            targets: kth_domain_neutrino_test kth_node_wallet_test
+            suites: kth_domain_neutrino_test kth_node_wallet_test
+            e2e: false
+          - name: r9-block-checks
+            branch: restack/9-block-checks
+            gcc: '16'
+            options: -o neutrino=True -o wallet=True
+            targets: kth_domain_neutrino_test kth_node_wallet_test
+            suites: kth_domain_neutrino_test kth_node_wallet_test
+            e2e: false
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
