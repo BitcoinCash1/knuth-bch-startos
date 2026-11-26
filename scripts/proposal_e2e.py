@@ -6,7 +6,7 @@ spendable by anyone and the chain is past regtest's BIP65 height (1351).
 kth syncs from it. Each proposal below is built here, on the tip both nodes
 share, and the same hex is sent to BCHN and to kth with
 getblocktemplate {"mode":"proposal","data":...}. The answers are compared one
-by one. Two rows are expected to differ and are reported, not failed:
+by one. Three rows are expected to differ and are reported, not failed:
 
 - bad-cb-height: BCHN 29.2.0's regtest never activates BIP34
   (BIP34Height = 100000000), kth's regtest enforces it from height 1
@@ -15,6 +15,9 @@ by one. Two rows are expected to differ and are reported, not failed:
   (bad-txns-undersize, ContextualCheckTransaction). kth checks the minimum
   size in transaction::accept, which the mempool uses and block validation
   does not, so kth's connect path takes such a block.
+- old version and time-too-old: both refuse it, for different reasons. kth's
+  header validation checks the version before the median time past, BCHN's
+  ContextualCheckBlockHeader the other way round.
 
 Then the valid proposal is mined (regtest proof of work, a few nonces) and
 submitted to BCHN, kth must connect it, and both must answer "duplicate".
@@ -54,6 +57,8 @@ CHAIN_LENGTH = 1400
 EXPECTED_DIFFERENCES = {
     "bad-cb-height": "BCHN 29.2.0 regtest has no BIP34 (BIP34Height 100000000); kth regtest enforces it",
     "undersize": "kth's block validation does not apply the 65-byte minimum transaction size",
+    "old version and time-too-old": "both refuse it; kth's header validation checks the version "
+                                    "before the median time past, BCHN the other way round",
 }
 EVIDENCE: dict = {"ok": False, "error": "started", "rows": [], "heights": {}, "kth_argv": []}
 _next_id = 0
@@ -330,7 +335,10 @@ def run() -> None:
     bits = int(header["bits"], 16)
     mtp = header["mediantime"]
     parent = header["previousblockhash"]
-    now = int(time.time())
+    # generatetoaddress stamps a block at MTP + 1 when it mines faster than one
+    # a second, so the median time past of this tip runs ahead of the clock:
+    # a block on it must be later than that.
+    now = max(int(time.time()), mtp + 1)
     new_height = height + 1
     subsidy = (50 * 100_000_000) >> (new_height // 150)
     fee = 1000
@@ -380,6 +388,7 @@ def run() -> None:
         ("time-too-old", block(tip, mtp, bits, valid_txs).hex()),
         ("time-too-new", block(tip, now + 3 * 3600, bits, valid_txs).hex()),
         ("old version", block(tip, now, bits, valid_txs, version=1).hex()),
+        ("old version and time-too-old", block(tip, mtp, bits, valid_txs, version=1).hex()),
         ("bad-cb-height", block(tip, now, bits, [coinbase(new_height, subsidy + fee, height_in_script=height),
                                                  valid_spend]).hex()),
         ("undersize", block(tip, now, bits, [coinbase(new_height, subsidy, small=True)]).hex()),

@@ -29,6 +29,9 @@ jobs:
           # same proposals to kth and to BCHN 29.2.0 on one regtest chain and
           # compares the answers one by one; kth's blockchain and node test
           # suites run on the same build. No P2Pool and no mining device.
+          # Run 45772050418 (attempt 2): both suites passed; the rows agreed
+          # but most were time-too-old, as the script stamped blocks with the
+          # clock while the regtest tip's median time past ran ahead of it.
           - name: proposals-vs-bchn
             branch: rpc/getblocktemplate-proposal
             proposals: true
@@ -44,6 +47,11 @@ jobs:
           # (test/kth-jd-proposal); P2Pool must accept the declarations,
           # count a share and pay a PPLNS block, with no invalid-template
           # refusal. kth's blockchain and node tests run on the after build.
+          # Run 45772050418: before passed (5 declarations refused, P2Pool's
+          # node answering -32602 "only template mode is supported"); after
+          # (attempt 2) mined: 9 declarations accepted, 6 shares, PPLNS block
+          # 109, no invalid-template; its one blockchain test failure was the
+          # genesis duplicate on a base without #1011, fixed in a73cde56.
           - name: pool-on-kth-before
             branch: test/kth-jd-reconnect
             row: "25w"
