@@ -15,7 +15,12 @@ name: kth templates while blocks come seconds apart
 # "p2p" rows also connect P2Pool to the follower's P2P port, as the chipnet
 # pool does. Run 45818211454 had p2p on every row: kth, master and branch
 # alike, asked P2Pool's listener (which advertises no services) for blocks,
-# waited out the 15 s chunk timeout, and then stopped following A.
+# waited out the 15 s chunk timeout, and then stopped following A. Run
+# 45858016488 has the poll and p2p rows on master 53ec7760 and the branch
+# 9e50c01d. The fold rows here add test/chunk-fold-on-master (ebbb6ded) to
+# each: a body chunk whose first block a compact block already stored held
+# the body cursor below the range end, so no later range opened; with that
+# fixed, the rows compare the template rule alone.
 # Runs when this file or the script changes, or by hand.
 on:
   push:
@@ -32,53 +37,42 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: kth-master-lan-poll
-            follower: kth
-            repo: k-nuth/kth
-            ref: 53ec7760dc34da7f2d4c9c708fadb7329aec2014
-            delay_ms: ""
-            node_p2p: "0"
-          - name: kth-master-wan-poll
-            follower: kth
-            repo: k-nuth/kth
-            ref: 53ec7760dc34da7f2d4c9c708fadb7329aec2014
-            delay_ms: "100"
-            node_p2p: "0"
-          - name: kth-master-wan-p2p
-            follower: kth
-            repo: k-nuth/kth
-            ref: 53ec7760dc34da7f2d4c9c708fadb7329aec2014
-            delay_ms: "100"
-            node_p2p: "1"
-          - name: kth-fix-lan-poll
+          - name: kth-fold-master-lan-poll
             follower: kth
             repo: CyberAshven/kth
-            ref: 9e50c01d0b6490c454a96dcbb14233798b655ed4
+            ref: ebbb6ded2e815fe3d04ab8c794c581da47fe40c2
             delay_ms: ""
             node_p2p: "0"
             node_tests: true
-          - name: kth-fix-wan-poll
+          - name: kth-fold-master-wan-poll
             follower: kth
             repo: CyberAshven/kth
-            ref: 9e50c01d0b6490c454a96dcbb14233798b655ed4
+            ref: ebbb6ded2e815fe3d04ab8c794c581da47fe40c2
             delay_ms: "100"
             node_p2p: "0"
-          - name: kth-fix-wan-p2p
+          - name: kth-fold-master-wan-p2p
             follower: kth
             repo: CyberAshven/kth
-            ref: 9e50c01d0b6490c454a96dcbb14233798b655ed4
+            ref: ebbb6ded2e815fe3d04ab8c794c581da47fe40c2
             delay_ms: "100"
             node_p2p: "1"
-          - name: bchn-lan-poll
-            follower: bchn
+          - name: kth-fold-fix-lan-poll
+            follower: kth
+            repo: CyberAshven/kth
+            ref: a4ee9fb89fdb12a1cbe0eaeed96fd296291722a7
             delay_ms: ""
             node_p2p: "0"
-          - name: bchn-wan-poll
-            follower: bchn
+            node_tests: true
+          - name: kth-fold-fix-wan-poll
+            follower: kth
+            repo: CyberAshven/kth
+            ref: a4ee9fb89fdb12a1cbe0eaeed96fd296291722a7
             delay_ms: "100"
             node_p2p: "0"
-          - name: bchn-wan-p2p
-            follower: bchn
+          - name: kth-fold-fix-wan-p2p
+            follower: kth
+            repo: CyberAshven/kth
+            ref: a4ee9fb89fdb12a1cbe0eaeed96fd296291722a7
             delay_ms: "100"
             node_p2p: "1"
     name: ${{ matrix.name }}
