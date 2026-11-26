@@ -65,6 +65,17 @@ BLOOM = os.environ.get("KTH_BLOOM") == "1"
 # KTH_NEUTRINO_BIN, with KTH_FILTERS=1: the built scripts/neutrino-client, a
 # wallet's node connection made with the gcash/neutrino library itself.
 NEUTRINO_BIN = os.environ.get("KTH_NEUTRINO_BIN") or ""
+# KTH_BCHD_BIN, with KTH_RPA_FILTERS=1 (row 1016): a bchd that serves filter
+# type 2 (gcash/bchd#785), run beside kth on BCHN's chain; kth's input prefix
+# filters, filter headers and checkpoints must equal its own.
+BCHD_BIN = os.environ.get("KTH_BCHD_BIN") or ""
+BCHD_DIR = Path("/tmp/bchd-regtest")
+BCHD = ("127.0.0.1", 18667)
+BCHD_P2P_PORT = 18666
+# KTH_RPA_NEUTRINO_BIN, with KTH_RPA_FILTERS=1 (row 1016): the built
+# scripts/rpa-neutrino-client, a wallet of reusable payment addresses made with
+# the Neutrino library's search on filter type 2 (gcash/neutrino#56).
+RPA_NEUTRINO_BIN = os.environ.get("KTH_RPA_NEUTRINO_BIN") or ""
 # KTH_EXPLORER_BACKEND, with KTH_SCRIPT_FILTERS=1: the backend directory of a
 # built BCH Explorer (CyberAshven/bitcoin-cash-explorer, feat/p2p-light-client),
 # whose 'p2p' backend reads addresses from kth as a light client (row 1008,
@@ -207,6 +218,7 @@ def start_kth() -> None:
                     "4" if SHV or I2P or SERVE or ANNOUNCE or COMPACT or FILTERS or BLOOM else "0",
                     *(["--node.mmr_index", "true"] if SHV else []),
                     *(["--node.compact_filters", "true"] if FILTERS else []),
+                    *(["--node.input_prefix_filters", "true"] if RPA_FILTERS else []),
                     *(["--node.wallet_electrum", f"127.0.0.1:{NODE_WALLET_PORT}"] if WALLET_BIN or NODE_WALLET else []),
                     *(["--node.bloom_filters", "true"] if BLOOM else []),
                     "--net.outbound_connections", "1",
@@ -2748,7 +2760,9 @@ def rows(s: dict) -> None:
                   script_filter_light_client, explorer_p2p_client, vault_wallet_filters, rpa_wallet_filters,
                   wallet_from_peers, node_wallet_from_chain, token_identity_wallet,
                   bloom_filter_light_client, i2p_second_node, serve_second_node, announce_second_node,
-                  compact_blocks_both_ways, row24_mining_protocol, pr874_long_polling):
+                  compact_blocks_both_ways, row24_mining_protocol, pr874_long_polling,
+                  # Last: it reorganizes BCHN's chain.
+                  rpa_kth_bchd_neutrino):
         try:
             check(s)
         except Exception as error:  # one broken check must not hide the others
@@ -3019,12 +3033,13 @@ def compact_filter_light_client(s: dict) -> None:
         peer.send(b"getcfilters", b"\x00" + struct.pack("<I", tip) + hashes[tip])
         seen["answers after them"] = len(peer.collect((b"cfilter",), 1, quiet=30.0, limit=60.0)) == 1
 
-        # The only thing stored: 64 bytes for every thousand blocks.
+        # What is stored (#1057): the filter hash and the filter header of
+        # every block, 64 bytes each, after a header of 48 bytes.
         stored = subprocess.run(["docker", "exec", "kth", "sh", "-c",
-                                 "wc -c < /data/e2e/compact_filter_checkpoints"],
+                                 "wc -c < /data/e2e/compact_filter_headers"],
                                 capture_output=True, text=True).stdout.strip()
-        seen["checkpoint file bytes"] = stored
-        file_ok = stored.isdigit() and int(stored) == 64 * (tip // 1000)
+        seen["filter header file bytes"] = stored
+        file_ok = stored.isdigit() and int(stored) == 48 + 64 * (tip + 1)
 
         ok = (bool(seen["NODE_CF advertised"]) and seen["cfheaders batches chain"] and checkpoints_ok
               and filters_ok and compared == sum(last - first + 1 for first, last in ranges)
@@ -3991,6 +4006,9 @@ def rpa_wallet_filters(s: dict) -> None:
             if value31 not in first30:
                 break
         txid31, block31 = mine_alone(hex31)
+        # For row 1016, which searches for these payments.
+        s["rpa"] = {"value16": value16, "txid16": txid16, "block16": block16,
+                    "value8": value8, "txid8": txid8, "block8": block8, "txid31": txid31, "block31": block31}
         tip = call(BCHN, "getblockheader", block31, True)[0]["height"]
         seen["kth at the tip"] = wait_kth_height(tip, 300)
         heights = {name: call(BCHN, "getblockheader", h, True)[0]["height"]
@@ -4125,11 +4143,13 @@ def rpa_wallet_filters(s: dict) -> None:
         answers = len(peer.collect((b"cfilter",), 1, quiet=30.0, limit=60.0)) == 1
         seen["answers after them"] = answers
 
+        # The index keeps the filter hash and the filter header of every
+        # block for type 2 too, in a file of their own.
         stored = subprocess.run(["docker", "exec", "kth", "sh", "-c",
-                                 "wc -c < /data/e2e/input_prefix_filter_checkpoints"],
+                                 "wc -c < /data/e2e/input_prefix_filter_headers"],
                                 capture_output=True, text=True).stdout.strip()
-        seen["checkpoint file bytes"] = stored
-        file_ok = stored.isdigit() and int(stored) == 64 * (tip // 1000)
+        seen["filter header file bytes"] = stored
+        file_ok = stored.isdigit() and int(stored) == 48 + 64 * (tip + 1)
 
         ok = bool(seen["kth at the tip"] and checkpoints_ok and filters_ok and scans_ok and thirty_ok
                   and download_ok and silent and answers and file_ok)
@@ -4146,6 +4166,297 @@ def rpa_wallet_filters(s: dict) -> None:
         "the headers chain from zeros to the checkpoints, each 4/8/12/16-bit prefix of a ground input finds "
         "the reference's blocks with the payment's among them, absent prefixes do not, the 31st input is left "
         "out, and the block downloaded from kth rebuilds its filter and holds the payment", ok, seen)
+
+
+def bchd_call(method: str, *params):
+    """bchd's JSON-RPC, which takes the version field."""
+    reply = post(BCHD, json.dumps({"jsonrpc": "1.0", "id": 1, "method": method, "params": list(params)}).encode())
+    j = reply["json"]
+    if isinstance(j, dict):
+        return j.get("result"), j.get("error")
+    return None, {"transport": reply.get("transport"), "status": reply["status"]}
+
+
+def start_bchd() -> subprocess.Popen:
+    """bchd on regtest, its type 2 index on as by default, following BCHN alone."""
+    BCHD_DIR.mkdir(parents=True, exist_ok=True)
+    out = open(BCHD_DIR / "stdout.log", "w")
+    return subprocess.Popen([BCHD_BIN, "--regtest", f"--datadir={BCHD_DIR / 'data'}",
+                             f"--logdir={BCHD_DIR / 'logs'}",
+                             f"--listen=127.0.0.1:{BCHD_P2P_PORT}", f"--rpclisten={BCHD[0]}:{BCHD[1]}",
+                             "--rpcuser=e2e", "--rpcpass=e2e", "--notls", "--connect=127.0.0.1:18444"],
+                            stdout=out, stderr=subprocess.STDOUT)
+
+
+def wait_best(ask, best: str, seconds: int) -> bool:
+    for _ in range(seconds):
+        result, error = ask("getbestblockhash")
+        if error is None and result == best:
+            return True
+        time.sleep(1)
+    return False
+
+
+def rpa_served(port: int, hashes: list[bytes], tip: int) -> dict:
+    """What one node serves of filter type 2 over P2P, for the blocks 0 to tip
+    named by `hashes`: the checkpoints (getcfcheckpt), every filter hash with
+    the filter header before each range (getcfheaders, 2,000 a request) and
+    every filter (getcfilters, 1,000 a request). A request the node does not
+    answer is asked again a few times, while its index reaches the tip."""
+    peer = LightPeer(port)
+    view: dict = {"services": peer.services, "checkpoints": None, "previous": {}, "filter_hashes": [],
+                  "filters": {}}
+    try:
+        for _ in range(10):
+            peer.send(b"getcfcheckpt", b"\x02" + hashes[tip])
+            reply = peer.collect((b"cfcheckpt",), 1, quiet=20.0, limit=30.0)
+            if reply:
+                body = reply[0][1]
+                count, o = read_compact(body, 33)
+                if body[0] == 2 and body[1:33] == hashes[tip] and o + 32 * count == len(body):
+                    view["checkpoints"] = [body[o + 32 * i:o + 32 * (i + 1)] for i in range(count)]
+                break
+            time.sleep(3)
+        start = 0
+        while start <= tip:
+            stop = min(tip, start + 1999)
+            body = b""
+            for _ in range(10):
+                peer.send(b"getcfheaders", b"\x02" + struct.pack("<I", start) + hashes[stop])
+                reply = peer.collect((b"cfheaders",), 1, quiet=20.0, limit=120.0)
+                if reply:
+                    body = reply[0][1]
+                    break
+                time.sleep(3)
+            count, o = read_compact(body, 65) if len(body) > 65 else (0, 0)
+            if (not body or body[0] != 2 or body[1:33] != hashes[stop] or count != stop - start + 1
+                    or o + 32 * count != len(body)):
+                view["cfheaders wrong at"] = start
+                break
+            view["previous"][start] = body[33:65]
+            view["filter_hashes"] += [body[o + 32 * i:o + 32 * (i + 1)] for i in range(count)]
+            start = stop + 1
+        start = 0
+        while start <= tip:
+            stop = min(tip, start + 999)
+            peer.send(b"getcfilters", b"\x02" + struct.pack("<I", start) + hashes[stop])
+            for _, body in peer.collect((b"cfilter",), stop - start + 1, quiet=60.0, limit=600.0):
+                size, o = read_compact(body, 33)
+                if body[0] == 2 and o + size == len(body):
+                    view["filters"][body[1:33]] = body[o:o + size]
+            start = stop + 1
+    finally:
+        peer.close()
+    return view
+
+
+def rpa_chain_now() -> tuple[int, list[bytes], list[list[int]]]:
+    """BCHN's chain: its tip, every block hash (stored order) and every block's
+    input prefix values, from BCHN's own reading of each block."""
+    tip = call(BCHN, "getblockcount")[0]
+    hashes = [bytes.fromhex(call(BCHN, "getblockhash", h)[0])[::-1] for h in range(tip + 1)]
+    reference = [rpa_block_values(call(BCHN, "getblock", hashes[h][::-1].hex(), 2)[0]) for h in range(tip + 1)]
+    return tip, hashes, reference
+
+
+def rpa_views_agree(views: dict, hashes: list[bytes], reference: list[list[int]], tip: int) -> tuple[bool, dict, dict]:
+    """Whether each node's filters are the reference's, its filter headers
+    chain from zeros through the header before each range and to its
+    checkpoints, and the nodes serve the same bytes for every block."""
+    found: dict = {}
+    headers: dict = {}
+    ok = True
+    for name, view in views.items():
+        header, chained = bytes(32), []
+        for filter_hash in view["filter_hashes"]:
+            header = sha256d(filter_hash + header)
+            chained.append(header)
+        headers[name] = chained
+        complete = (len(view["filter_hashes"]) == tip + 1 and len(view["filters"]) == tip + 1
+                    and view["checkpoints"] is not None)
+        previous_ok = complete and all(previous == (chained[start - 1] if start else bytes(32))
+                                       for start, previous in view["previous"].items())
+        checkpoints_ok = complete and view["checkpoints"] == [chained[(i + 1) * 1000] for i in range(tip // 1000)]
+        filters_ok = complete and all(
+            view["filters"].get(hashes[h]) == rpa_encode(reference[h])
+            and sha256d(view["filters"][hashes[h]]) == view["filter_hashes"][h] for h in range(tip + 1))
+        found[name] = {"NODE_CF": view["services"] is not None and bool(view["services"] & NODE_CF),
+                       "filters": len(view["filters"]), "filter hashes": len(view["filter_hashes"]),
+                       "checkpoints": None if view["checkpoints"] is None else len(view["checkpoints"]),
+                       "headers before each range chain": previous_ok,
+                       "checkpoints are the chained headers": checkpoints_ok,
+                       "filters are the reference's": filters_ok}
+        if "cfheaders wrong at" in view:
+            found[name]["cfheaders wrong at"] = view["cfheaders wrong at"]
+        ok = ok and complete and previous_ok and checkpoints_ok and filters_ok and found[name]["NODE_CF"]
+    kth, bchd = views["kth"], views["bchd"]
+    differs = next((h for h in range(tip + 1)
+                    if kth["filters"].get(hashes[h]) != bchd["filters"].get(hashes[h])), None)
+    same = (differs is None and kth["filter_hashes"] == bchd["filter_hashes"]
+            and headers["kth"] == headers["bchd"] and kth["checkpoints"] == bchd["checkpoints"])
+    found["kth and bchd byte for byte"] = same
+    if differs is not None:
+        found["first block they differ at"] = differs
+    found["blocks with values"] = sum(1 for values in reference if values)
+    found["tip filter header"] = headers["kth"][-1].hex()[:16] if headers["kth"] else None
+    return ok and same, found, headers
+
+
+def rpa_neutrino_search(ports: list[int], tip: int, prefixes: list[tuple[int, int]], min_peers: int) -> dict:
+    """The Neutrino library's search for each prefix, (value, bits), over the
+    blocks 1 to tip, from the given peers."""
+    run = subprocess.run([RPA_NEUTRINO_BIN, "-connect", ",".join(f"127.0.0.1:{port}" for port in ports),
+                          "-height", str(tip), "-min-peers", str(min_peers), "-timeout", "4m",
+                          "-prefixes", ",".join(f"{value:x}/{bits}" for value, bits in prefixes)],
+                         capture_output=True, text=True, timeout=1200)
+    lines = [line for line in run.stdout.splitlines() if line.startswith("{")]
+    out = json.loads(lines[-1]) if lines else {"output": (run.stdout + run.stderr)[-400:]}
+    out["exit"] = run.returncode
+    return out
+
+
+def rpa_neutrino_found(result: dict, prefixes: list[tuple[int, int]], reference: list[list[int]], tip: int,
+                       paying: list[tuple[int, int, str]]) -> tuple[bool, dict]:
+    """Whether each search found exactly the blocks the reference has a value
+    with its prefix in, and the paying transaction's input 0 in its block:
+    `paying` holds (search index, height, txid)."""
+    ok = result.get("exit") == 0 and bool(result.get("synced"))
+    found: dict = {}
+    searches = result.get("searches") or []
+    for i, (value, bits) in enumerate(prefixes):
+        search = searches[i] if i < len(searches) else {}
+        heights = [m["height"] for m in search.get("matches") or []]
+        expected = [h for h in range(1, tip + 1) if rpa_has_prefix(reference[h], value, bits)]
+        found[f"{value:x}/{bits}"] = {"blocks": heights, "reference": expected, "error": search.get("error")}
+        ok = ok and not search.get("error") and heights == expected and search.get("reached") == tip
+    for i, height, txid in paying:
+        search = searches[i] if i < len(searches) else {}
+        hit = any(m["height"] == height and any(x["tx"] == txid and x["index"] == 0 for x in m["inputs"])
+                  for m in search.get("matches") or [])
+        found[f"paying {txid[:12]} at {height}"] = hit
+        ok = ok and hit
+    return ok, found
+
+
+def rpa_kth_bchd_neutrino(s: dict) -> None:
+    """Filter type 2 served by kth from its index of filter headers (#1057)
+    against the bchd that serves it (gcash/bchd#785), both following BCHN's
+    chain, which holds the ground inputs of row 1010: for every block, the
+    same filter bytes, filter hashes, headers and checkpoints, each the
+    reference's. Then BCHN leaves its last three blocks for four others,
+    which hold the same transactions at other heights: both serve the new
+    chain alike, kth's headers change from the fork up and not below, and kth
+    answers nothing that names a block left. A wallet made with the Neutrino
+    library's search on filter type 2 (gcash/neutrino#56) finds the paying
+    transactions from kth alone before, and from kth and bchd together, both
+    required to agree, after."""
+    client = "kth and bchd, input prefix filters (type 2); Neutrino reusable payment address search"
+    if not RPA_FILTERS or not BCHD_BIN:
+        return
+    seen: dict = {}
+    ok = False
+    bchd = None
+    try:
+        rpa = s.get("rpa")
+        if not rpa:
+            raise ValueError("row 1010 left no ground inputs on the chain")
+        bchd = start_bchd()
+        tip, hashes, reference = rpa_chain_now()
+        best = hashes[tip][::-1].hex()
+        seen["bchd at the tip"] = wait_best(bchd_call, best, 900)
+        seen["kth at the tip"] = wait_best(lambda m: call(KTH, m), best, 300)
+        views = {"kth": rpa_served(KTH_P2P_PORT, hashes, tip), "bchd": rpa_served(BCHD_P2P_PORT, hashes, tip)}
+        before_ok, seen["before"], before_headers = rpa_views_agree(views, hashes, reference, tip)
+        seen["before"]["tip"] = tip
+
+        heights = {name: call(BCHN, "getblockheader", rpa[name], True)[0]["height"]
+                   for name in ("block16", "block8", "block31")}
+        prefixes = [(rpa["value16"], 16), (rpa["value16"] >> 8, 8), (rpa["value8"] >> 8, 8), (rpa["value8"], 16)]
+        taken = {v for values in reference for v in values}
+        absent = next(v for v in range(1 << 16) if v not in taken)
+        prefixes.append((absent, 16))
+        neutrino_before_ok = True
+        if RPA_NEUTRINO_BIN:
+            result = rpa_neutrino_search([KTH_P2P_PORT], tip, prefixes, 1)
+            neutrino_before_ok, seen["neutrino from kth"] = rpa_neutrino_found(
+                result, prefixes, reference, tip,
+                [(0, heights["block16"], rpa["txid16"]), (2, heights["block8"], rpa["txid8"])])
+
+        # The reorganization: from the block of the 8-bit payment up.
+        fork = heights["block8"]
+        left = hashes[fork:]
+        cli("invalidateblock", left[0][::-1].hex())
+        mined = json.loads(cli("generatetoaddress", str(len(left) + 1), s["addr"]))
+        seen["bchd at the new tip"] = wait_best(bchd_call, mined[-1], 300)
+        seen["kth at the new tip"] = wait_best(lambda m: call(KTH, m), mined[-1], 300)
+        tip2, hashes2, reference2 = rpa_chain_now()
+        moved = call(BCHN, "getblock", hashes2[fork][::-1].hex(), 1)[0]["tx"]
+        seen["the new block at the fork holds the payment and the 31 inputs"] = (
+            rpa["txid8"] in moved and rpa["txid31"] in moved)
+        views = {"kth": rpa_served(KTH_P2P_PORT, hashes2, tip2), "bchd": rpa_served(BCHD_P2P_PORT, hashes2, tip2)}
+        after_ok, seen["after"], after_headers = rpa_views_agree(views, hashes2, reference2, tip2)
+        seen["after"]["tip"] = tip2
+        kept_below = after_headers["kth"][:fork] == before_headers["kth"][:fork]
+        changed_above = all(after_headers["kth"][h] != before_headers["kth"][h]
+                            for h in range(fork, min(tip, tip2) + 1))
+        seen["kth headers: same below the fork, changed from it"] = kept_below and changed_above
+
+        # Nothing that names a block left is answered.
+        peer = LightPeer(KTH_P2P_PORT)
+        try:
+            for command, payload in ((b"getcfheaders", b"\x02" + struct.pack("<I", 0) + left[-1]),
+                                     (b"getcfheaders", b"\x02" + struct.pack("<I", fork) + left[0]),
+                                     (b"getcfilters", b"\x02" + struct.pack("<I", fork) + left[0]),
+                                     (b"getcfcheckpt", b"\x02" + left[-1])):
+                peer.send(command, payload)
+            silent = not peer.collect((b"cfheaders", b"cfilter", b"cfcheckpt"), None, quiet=6.0, limit=12.0)
+            peer.send(b"getcfilters", b"\x02" + struct.pack("<I", fork) + hashes2[fork])
+            answers = len(peer.collect((b"cfilter",), 1, quiet=30.0, limit=60.0)) == 1
+        finally:
+            peer.close()
+        seen["kth answers nothing naming a block left, and the new block"] = silent and answers
+
+        neutrino_after_ok = True
+        if RPA_NEUTRINO_BIN:
+            result = rpa_neutrino_search([KTH_P2P_PORT, BCHD_P2P_PORT], tip2, prefixes, 2)
+            neutrino_after_ok, seen["neutrino from kth and bchd, both agreeing"] = rpa_neutrino_found(
+                result, prefixes, reference2, tip2,
+                [(0, heights["block16"], rpa["txid16"]), (2, fork, rpa["txid8"])])
+            seen["neutrino from kth and bchd, both agreeing"]["runs agreed by"] = sorted(
+                {m.get("peers") for search in result.get("searches") or [] for m in search.get("matches") or []})
+
+        stored = subprocess.run(["docker", "exec", "kth", "sh", "-c",
+                                 "wc -c < /data/e2e/input_prefix_filter_headers"],
+                                capture_output=True, text=True).stdout.strip()
+        seen["filter header file bytes"] = stored
+        file_ok = stored.isdigit() and int(stored) == 48 + 64 * (tip2 + 1)
+
+        ok = bool(seen["bchd at the tip"] and seen["kth at the tip"] and before_ok and neutrino_before_ok
+                  and seen["bchd at the new tip"] and seen["kth at the new tip"]
+                  and seen["the new block at the fork holds the payment and the 31 inputs"]
+                  and after_ok and kept_below and changed_above and silent and answers and neutrino_after_ok
+                  and file_ok)
+    except subprocess.CalledProcessError as error:
+        seen["error"] = f"{error.cmd[-2:] if isinstance(error.cmd, list) else error.cmd}: {(error.stderr or '').strip()[:200]}"
+    except (OSError, ValueError, KeyError, IndexError, TypeError, struct.error,
+            subprocess.TimeoutExpired, StopIteration) as error:
+        seen["error"] = f"{type(error).__name__}: {error}"
+    finally:
+        if bchd is not None:
+            bchd.terminate()
+            try:
+                bchd.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                bchd.kill()
+            logs = sorted(BCHD_DIR.glob("logs/**/*.log")) + [BCHD_DIR / "stdout.log"]
+            (OUT / "bchd.log").write_text("".join(path.read_text(errors="replace")[-300000:]
+                                                  for path in logs if path.exists()))
+        (OUT / "row1016.json").write_text(json.dumps(seen, indent=1, default=str))
+    row(1016, client, "kth's type 2 filters, filter hashes, headers and checkpoints equal bchd's and the "
+        "reference for every block of a chain with ground inputs, before and after BCHN leaves three blocks "
+        "for four; kth's headers change from the fork up only and it answers nothing naming a block left; "
+        "Neutrino's RPA search finds the paying transactions from kth alone, then from kth and bchd agreeing",
+        ok, seen)
 
 
 def bloom_bits(elements: list[bytes], size: int = 64, functions: int = 5, tweak: int = 0) -> bytes:
