@@ -12,9 +12,9 @@ name: kth rows from #773, build, tests and client checks
 # changes, or by hand.
 on:
   push:
-    # Rostrum on kth: k-nuth/kth master as it is, each fix on its own, and the
-    # fixes together: every push of this branch.
-    branches: [e2e/rostrum]
+    # The CodeRabbit finding on k-nuth/kth#1083 (the null token), with
+    # k-nuth/kth master a0a5455d: every push of this branch.
+    branches: [e2e/coderabbit-1127]
   workflow_dispatch:
 
 permissions:
@@ -27,52 +27,29 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Earlier runs: 44723202486 (each fix's suites), 44726841771,
-        # 44733715072 and 44740928312 (Rostrum on master 04ec4856, on
-        # test/rostrum-all and with the candidates), 44744727224 (after review,
-        # on 04ec4856). This run: k-nuth/kth master 53ec7760 (with #1011, the
-        # genesis block) as it is, each branch with that master merged in, and
-        # test/rostrum-all-2 (that master and the six branches) with Rostrum and
-        # the existing client rows.
-          - name: master
-            repo: k-nuth/kth
-            branch: master
+        # Earlier runs on e2e/rostrum: 44744727224 and 45693298461. This run,
+        # on k-nuth/kth master a0a5455d (#1080): the CodeRabbit finding on
+        # #1083, "params":nope taken for null. null-token-before is #1083 at
+        # 58f15602 with only the new test cases (nope, nul, nullx, and " null "
+        # in uptime), and must fail on them; null-token is the fix 6ba06e20
+        # with every suite; rostrum-all-3 is that master with #1081-#1085
+        # (#1083 with the fix), with Rostrum and the client rows.
+          - name: null-token-before
+            branch: test/1083-null-token-before
             gcc: '16'
             no_e2e: true
-            rostrum: true
-          - name: rpc-batch
-            branch: fix/rpc-batch
+            expect_failure: true
+          - name: null-token
+            branch: test/1083-null-token
             gcc: '16'
-            blockchain: true
-            no_e2e: true
-          - name: getblockheader-height
-            branch: fix/getblockheader-height
-            gcc: '16'
-            blockchain: true
-            no_e2e: true
-          - name: rpc-null-params
-            branch: fix/rpc-null-params
-            gcc: '16'
-            blockchain: true
-            no_e2e: true
-          - name: rpc-ping-null
-            branch: fix/rpc-ping-null
-            gcc: '16'
+            domain: true
+            capi: true
             blockchain: true
             network: true
+            infrastructure: true
             no_e2e: true
-          - name: getblockchaininfo-pruned
-            branch: fix/getblockchaininfo-pruned
-            gcc: '16'
-            blockchain: true
-            no_e2e: true
-          - name: getmempoolinfo-minfee
-            branch: fix/getmempoolinfo-minfee
-            gcc: '16'
-            blockchain: true
-            no_e2e: true
-          - name: rostrum-all-2
-            branch: test/rostrum-all-2
+          - name: rostrum-all-3
+            branch: test/rostrum-all-3
             gcc: '16'
             blockchain: true
             network: true
@@ -490,5 +467,11 @@ jobs:
       - name: Fail when a kth test suite failed
         run: |
           cat test-status.txt
-          ! grep -v ' exit 0$' test-status.txt
+          if [ "${{ matrix.expect_failure }}" = "true" ]; then
+            # A probe of the code before a fix: its node suite must fail, and
+            # the failures are listed above for the run to be read.
+            grep -q '^kth_node_test exit [1-9]' test-status.txt
+          else
+            ! grep -v ' exit 0$' test-status.txt
+          fi
         shell: bash
