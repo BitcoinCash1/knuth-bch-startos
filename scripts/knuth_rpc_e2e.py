@@ -21,6 +21,7 @@ import json
 import os
 import re
 import select
+import shutil
 import socket
 import struct
 import subprocess
@@ -219,8 +220,9 @@ def start_kth() -> None:
                       if SV2 else []),
                     *(["--sv2.mining.enabled", "true", "--sv2.mining.address", MINING_ADDRESS]
                       if SV2 and SV2_MINING else []),
-                    *(["--sv2.noise", "true", "--sv2.static_key_file", "/data/sv2-static.key",
-                       "--sv2.authority_key_file", "/data/sv2-authority.key"] if SV2 and NOISE else []),
+                    # Noise with its keys where the node keeps them by
+                    # default, in its data directory (db.directory).
+                    *(["--sv2.noise", "true"] if SV2 and NOISE else []),
                     *(["--net.proxy", f"127.0.0.1:{PROXY_PORT}"] if PROXY else []),
                     *(["--net.i2psam", f"127.0.0.1:{SAM_PORT}", "--net.i2p_accept_incoming", "true",
                        "--net.i2p_private_key_file", "/data/i2p_private_key"] if I2P else [])],
@@ -503,7 +505,7 @@ def start_noise_bridge() -> None:
             NOISE_KEYS["printed by kth"] = found[-1]
             break
         time.sleep(1)
-    if subprocess.run(["docker", "cp", "kth:/data/sv2-authority.key", str(secret)],
+    if subprocess.run(["docker", "cp", "kth:/data/e2e/sv2_authority_key", str(secret)],
                       capture_output=True).returncode == 0:
         NOISE_KEYS["key-utils, from the secret file"] = subprocess.run(
             [NOISE_BRIDGE, "--public-key-of", str(secret)], capture_output=True, text=True).stdout.strip()
@@ -2084,12 +2086,23 @@ def row22_noise(s: dict) -> None:
 
     seen["probe pinned to kth's key"] = probe(NOISE_KEYS.get("printed by kth", ""))
     seen["probe pinned to another authority"] = probe(OTHER_AUTHORITY)
+    # A client that completes the handshake and then sends nothing: Noise does
+    # not authenticate it, so only the setup timeout (30 s, the handshake
+    # included) frees its place.
+    try:
+        out = subprocess.run([NOISE_BRIDGE, "--probe", "--connect", f"127.0.0.1:{SV2_PORT}",
+                              "--authority", NOISE_KEYS.get("printed by kth", ""), "--hold", "60"],
+                             capture_output=True, text=True, timeout=90)
+        seen["silent after the handshake"] = json.loads(out.stdout.strip() or "{}")
+    except (subprocess.TimeoutExpired, ValueError) as error:
+        seen["silent after the handshake"] = {"error": f"{type(error).__name__}: {error}"}
+    seen["start with an unusable authority key"] = refused_start()
     try:
         # Shorter than the 64-byte first flight: kth waits for the rest until
-        # its 10-second handshake deadline, then closes.
+        # its 30-second setup timeout, then closes.
         with socket.create_connection(("127.0.0.1", SV2_PORT), timeout=10) as sock:
             sock.sendall(sv2_setup(2))
-            seen["plaintext setup"] = read_until_closed(sock, 30)
+            seen["plaintext setup"] = read_until_closed(sock, 45)
         # Longer: kth takes the first 64 bytes as a key and answers with its
         # 234-byte handshake flight, then the rest fails authentication.
         with socket.create_connection(("127.0.0.1", SV2_PORT), timeout=10) as sock:
@@ -2099,16 +2112,50 @@ def row22_noise(s: dict) -> None:
         seen["error"] = f"{type(error).__name__}: {error}"
     bridge, other = seen["bridge"], seen["probe pinned to another authority"]
     short, long = seen.get("plaintext setup", {}), seen.get("plaintext setup sent twice", {})
+    silent = seen["silent after the handshake"].get("held", {})
+    refused = seen["start with an unusable authority key"]
     ok = (NOISE_KEYS.get("printed by kth") is not None
           and NOISE_KEYS.get("printed by kth") == NOISE_KEYS.get("key-utils, from the secret file")
           and bridge["handshakes ok"] >= 3 and not bridge["handshakes failed"]
           and bridge["frames to kth"] >= 6 and bridge["frames from kth"] >= 5
           and seen["probe pinned to kth's key"]["exit"] == 0
           and other["exit"] == 1 and "second flight" in other["output"]
-          and short.get("bytes") == 0 and short.get("closed") and 8 <= short.get("seconds", 0) <= 15
-          and long.get("bytes") == 234 and long.get("closed") and long.get("seconds", 99) < 5)
+          and short.get("bytes") == 0 and short.get("closed") and 28 <= short.get("seconds", 0) <= 40
+          and long.get("bytes") == 234 and long.get("closed") and long.get("seconds", 99) < 5
+          and silent.get("closed") is True and not silent.get("sent_bytes")
+          and 28 <= silent.get("seconds", 0) <= 40
+          and refused.get("exit") not in (None, 0) and refused.get("logged"))
     row(22, client, "SRI's handshake and ciphers carry rows 21 and 23; another authority is refused; "
-        "plaintext gets no answer and is closed", ok, seen)
+        "plaintext gets no answer and is closed; a client silent after the handshake is closed "
+        "at the setup timeout; an unusable authority key fails the start", ok, seen)
+
+
+def refused_start() -> dict:
+    """kth with sv2.noise and an authority public key that is not one: the
+    node must not start, rather than run with no Template Provider."""
+    started = time.monotonic()
+    logs = Path("/tmp/kth-refused")
+    shutil.rmtree(logs, ignore_errors=True)
+    logs.mkdir(parents=True)
+    logs.chmod(0o777)
+    try:
+        out = subprocess.run(["docker", "run", "--rm", "--network", "none", "--platform", "linux/amd64",
+                              "-v", f"{logs}:/out",
+                              "--entrypoint", "/usr/local/bin/kth", "knuth-e2e",
+                              "--log.debug_file", "/out/debug.log", "--log.error_file", "/out/error.log",
+                              "--init_run", "--network", "regtest", "--node.display", "daemon",
+                              "--db.directory", "/tmp/refused", "--net.outbound_connections", "0",
+                              "--net.inbound_connections", "0",
+                              "--sv2.enabled", "true", "--sv2.bind", "127.0.0.1", "--sv2.port", "0",
+                              "--sv2.noise", "true", "--sv2.authority_public_key", "not-an-authority-key"],
+                             capture_output=True, text=True, timeout=180)
+    except subprocess.TimeoutExpired:
+        return {"exit": None, "seconds": round(time.monotonic() - started, 1), "error": "still running after 180 s"}
+    text = out.stdout + out.stderr + "".join(
+        (logs / name).read_text(errors="replace") for name in ("debug.log", "error.log") if (logs / name).exists())
+    return {"exit": out.returncode, "seconds": round(time.monotonic() - started, 1),
+            "logged": "Cannot start the Stratum V2 Template Provider over Noise" in text,
+            "tail": text[-600:]}
 
 
 def pr803_outbound_proxy(s: dict) -> None:

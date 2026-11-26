@@ -25,25 +25,32 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #807 with master a0a5455d merged in, and the blockchain and C API
-        # changes dropped (test/807-merge at 70623e39). With sv2 on: the
-        # Stratum V2 suite and the suites the merge touches, and rows 21 and
-        # 23 in plaintext on master's Template Provider. Without it: the same
-        # suites in the default build.
-          - name: m807-merge-sv2
-            branch: test/807-merge
+        # #807 on master a0a5455d with the review's changes (test/807-noise-1 at
+        # d03b9f94). With sv2 and Noise on: the Noise ciphers' and Stratum V2
+        # suites, kth's node and infrastructure suites, and rows 21 to 23
+        # through SRI's noise_sv2 (the handshake, templates, a silent client
+        # after the handshake closed at the setup timeout, a start refused
+        # for an unusable authority key). With sv2 on and Noise left at its
+        # default: rows 21 and 23 in plaintext. Without sv2: the default
+        # build and its suites.
+          - name: n807-noise
+            branch: test/807-noise-1
             gcc: '16'
             options: -o sv2=True
-            targets: kth_node_sv2_test
-            suites: kth_node_sv2_test
-            blockchain: true
-            capi: true
+            targets: kth_infrastructure_sv2_test kth_node_sv2_test
+            suites: kth_infrastructure_sv2_test kth_node_sv2_test
+            infrastructure: true
             sv2: true
-          - name: m807-merge-default
-            branch: test/807-merge
+            noise: true
+          - name: n807-plaintext
+            branch: test/807-noise-1
             gcc: '16'
-            blockchain: true
-            capi: true
+            options: -o sv2=True
+            sv2: true
+          - name: n807-default
+            branch: test/807-noise-1
+            gcc: '16'
+            infrastructure: true
             e2e: false
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest

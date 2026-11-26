@@ -9,8 +9,10 @@
 //!     Each plaintext client connection on P gets its own Noise connection to
 //!     Q, and SV2 frames are relayed both ways, one Noise frame per SV2 frame
 //!     (sv2-spec 4.6). One JSON line per event goes to stdout.
-//!   sv2-noise-bridge --probe --connect 127.0.0.1:Q --authority KEY
-//!     One handshake: prints its outcome, exits 0 when it succeeds.
+//!   sv2-noise-bridge --probe --connect 127.0.0.1:Q --authority KEY [--hold S]
+//!     One handshake: prints its outcome, exits 0 when it succeeds. With
+//!     --hold, the connection then sends nothing for up to S seconds, and the
+//!     outcome says whether and when kth closed it.
 //!   sv2-noise-bridge --public-key-of FILE
 //!     Prints key-utils' encoding of the public key of a raw 32-byte secret.
 
@@ -20,7 +22,7 @@ use std::net::{Shutdown, TcpListener, TcpStream};
 use std::process::ExitCode;
 use std::str::FromStr;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use key_utils::{Secp256k1PublicKey, Secp256k1SecretKey};
 use noise_sv2::{Initiator, NoiseDecryptor, NoiseEncryptor, NoiseEngine};
@@ -160,14 +162,27 @@ fn main() -> ExitCode {
     };
 
     if args.iter().any(|a| a == "--probe") {
+        let hold = option("--hold").and_then(|value| value.parse::<u64>().ok());
         let outcome = TcpStream::connect(&target).map_err(|e| format!("connect: {e}"))
             .and_then(|mut kth| {
                 let _ = kth.set_read_timeout(Some(Duration::from_secs(10)));
-                handshake(&mut kth, &authority).map(|_| ())
+                handshake(&mut kth, &authority)?;
+                // A client that completes the handshake and then stays silent.
+                let Some(seconds) = hold else { return Ok(String::new()) };
+                let started = Instant::now();
+                let _ = kth.set_read_timeout(Some(Duration::from_secs(seconds)));
+                let mut byte = [0u8; 1];
+                let (closed, sent) = match kth.read(&mut byte) {
+                    Ok(0) => (true, false),
+                    Ok(_) => (false, true),
+                    Err(error) => (error.kind() == io::ErrorKind::ConnectionReset, false),
+                };
+                Ok(format!(",\"held\":{{\"closed\":{closed},\"sent_bytes\":{sent},\"seconds\":{:.1}}}",
+                    started.elapsed().as_secs_f64()))
             });
         return match outcome {
-            Ok(()) => {
-                println!("{{\"event\":\"probe\",\"ok\":true}}");
+            Ok(held) => {
+                println!("{{\"event\":\"probe\",\"ok\":true{held}}}");
                 ExitCode::SUCCESS
             }
             Err(error) => {
