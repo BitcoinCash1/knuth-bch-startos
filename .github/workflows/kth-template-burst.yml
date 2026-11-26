@@ -1,0 +1,281 @@
+name: kth templates while blocks come seconds apart
+
+# BCHN A mines on regtest in bursts; the follower (kth, or a second BCHN for
+# comparison) takes A's blocks over P2P, and BCH P2Pool takes its templates
+# from the follower with getblocktemplate, as the chipnet pool does with the
+# Start9's Knuth. scripts/template_burst_e2e.py counts what P2Pool and a probe
+# got: templates, refusals and the longest time without one. Then it compares
+# the follower's template with A's for a mempool of 1 sat/byte payments, on kth
+# with node.sigop_fee_satoshis at its default (0) and with 100.
+#
+# Rows: kth master (before), kth rpc/template-while-headers-ahead (after), and
+# BCHN, each on loopback and with 100 ms each way on the link to A (the delay
+# sits on TCP port 18444 alone: RPC and P2Pool's connections are untouched).
+# Runs when this file or the script changes, or by hand.
+on:
+  push:
+    paths: [.github/workflows/kth-template-burst.yml, scripts/template_burst_e2e.py]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  row:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: kth-master-lan
+            follower: kth
+            repo: k-nuth/kth
+            ref: 53ec7760dc34da7f2d4c9c708fadb7329aec2014
+            delay_ms: ""
+          - name: kth-master-wan
+            follower: kth
+            repo: k-nuth/kth
+            ref: 53ec7760dc34da7f2d4c9c708fadb7329aec2014
+            delay_ms: "100"
+          - name: kth-fix-lan
+            follower: kth
+            repo: CyberAshven/kth
+            ref: 4b6b267ba25ef8246f33c102325ae75f35004ed5
+            delay_ms: ""
+            node_tests: true
+          - name: kth-fix-wan
+            follower: kth
+            repo: CyberAshven/kth
+            ref: 4b6b267ba25ef8246f33c102325ae75f35004ed5
+            delay_ms: "100"
+          - name: bchn-lan
+            follower: bchn
+            delay_ms: ""
+          - name: bchn-wan
+            follower: bchn
+            delay_ms: "100"
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      HUB_IMAGE: kthnode/gcc16-ubuntu24.04@sha256:cde0d8a8b911ba290e4019fa4fac81723c7cae93cd864e509fd93a7c05d25dfe
+      CI_DEPS: ghcr.io/bitcoincash1/knuth-ci-deps
+      P2POOL_REF: e3cf4c8872cbbc2940f44b91d8824da3a0cb0c94
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Make room for the build
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        shell: bash
+      - name: Log in to GHCR
+        continue-on-error: true
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pick the toolchain image
+        if: matrix.follower == 'kth'
+        run: |
+          COPY="$CI_DEPS:toolchain-gcc16"
+          IMAGE="$HUB_IMAGE"
+          if docker pull --quiet --platform linux/amd64 "$COPY" \
+            && [ "$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.base.digest" }}' "$COPY")" = "${HUB_IMAGE#*@}" ]; then
+            IMAGE="$COPY"
+          else
+            echo "no copy of $HUB_IMAGE in $CI_DEPS; using Docker Hub's"
+            docker rmi "$COPY" >/dev/null 2>&1 || true
+          fi
+          echo "toolchain image: $IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+        shell: bash
+      # By commit, so master is the commit named and not wherever it moved.
+      - name: Fetch kth ${{ matrix.repo }} ${{ matrix.ref }}
+        if: matrix.follower == 'kth'
+        run: |
+          git init --quiet kth-src
+          git -C kth-src fetch --quiet --depth 1 "https://github.com/${{ matrix.repo }}.git" "${{ matrix.ref }}"
+          git -C kth-src checkout --quiet FETCH_HEAD
+          git -C kth-src log -1 --format='%H %s' | tee kth-commit.txt
+          if [ "$(git -C kth-src rev-parse HEAD)" != "${{ matrix.ref }}" ]; then echo "kth is not at ${{ matrix.ref }}"; exit 1; fi
+        shell: bash
+      - name: Fetch the kept Conan packages
+        if: matrix.follower == 'kth'
+        run: |
+          mkdir -p conan2
+          if HASH=$(cat kth-src/conan.lock kth-src/conanfile.py | sha256sum | cut -d' ' -f1); then
+            REF="$CI_DEPS:conan-gcc16-$HASH"
+            if docker pull --quiet "$REF" && id=$(docker create "$REF" /x); then
+              docker cp "$id:/kth-conan.tgz" conan2/kth-conan.tgz || rm -f conan2/kth-conan.tgz
+              docker rm "$id" >/dev/null || true
+            fi
+            docker rmi "$REF" >/dev/null 2>&1 || true
+          fi
+          if [ -f conan2/kth-conan.tgz ]; then
+            echo "Conan packages from $REF"
+          else
+            echo "no kept Conan packages for this lock file; using the actions cache and the registry"
+          fi
+        shell: bash
+      - name: Restore the Conan packages
+        if: matrix.follower == 'kth'
+        id: restore-conan
+        uses: actions/cache/restore@v6
+        with:
+          path: conan2
+          key: kth-conan2v2-gcc16-${{ hashFiles('kth-src/conan.lock', 'kth-src/conanfile.py') }}
+          restore-keys: |
+            kth-conan2v2-gcc16-
+      - name: Restore the compiler cache
+        if: matrix.follower == 'kth'
+        uses: actions/cache/restore@v6
+        with:
+          path: ccache
+          key: kth-tb-ccache-${{ matrix.name }}-${{ github.run_id }}
+          restore-keys: |
+            kth-tb-ccache-${{ matrix.name }}-
+            kth-tb-ccache-
+            kth-jd-ccache-
+      - name: Build kth in the kth toolchain
+        if: matrix.follower == 'kth'
+        run: |
+          TARGETS="node-exe"
+          if [ "${{ matrix.node_tests }}" = "true" ]; then TARGETS="$TARGETS kth_node_test"; fi
+          mkdir -p ccache conan2
+          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -v "$PWD/ccache:/ccache" \
+            -v "$PWD/conan2:/root/.conan2" -w /src \
+            -e TARGETS="$TARGETS" -e CCACHE_DIR=/ccache -e CCACHE_MAXSIZE=1200M -e CCACHE_BASEDIR=/src "$IMAGE" \
+            bash -euo pipefail -c '
+              LAUNCH=""
+              if command -v ccache >/dev/null || (apt-get update -qq && apt-get install -y -qq ccache >/dev/null); then
+                LAUNCH="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+                ccache -z
+              fi
+              pip install --no-cache-dir --upgrade "conan>=2.25,<3" "kthbuild>=4,<5"
+              conan profile detect --force
+              printf "core.net.http:max_retries=8\ncore.net.http:timeout=60\n" >> "$(conan config home)/global.conf"
+              conan remote add kth https://packages.kth.cash/api/ --force
+              if [ -f /root/.conan2/kth-conan.tgz ]; then
+                conan cache restore /root/.conan2/kth-conan.tgz >/dev/null \
+                  || echo "restoring the kept Conan packages failed; conan install uses the registry"
+                rm -f /root/.conan2/kth-conan.tgz
+              fi
+              RPC=True
+              if grep -q -F "\"rpc\": [\"jsonrpc\"" conanfile.py; then RPC=jsonrpc; fi
+              time conan install conanfile.py --version 1.5.2 -of build --build=missing \
+                -o currency=BCH -o rpc=$RPC -o tests=True \
+                -o "utxoz/*:with_tests=False" -o "utxoz/*:with_benchmarks=False" \
+                -o "utxoz/*:with_large_benchmarks=False" \
+                -s compiler.cppstd=23 -s build_type=Release
+              cmake --preset conan-release -DGLOBAL_BUILD=ON -DENABLE_TEST=ON -DCMAKE_BUILD_TYPE=Release $LAUNCH
+              time cmake --build --preset conan-release -j"$(nproc)" --target $TARGETS
+              if [ -n "$LAUNCH" ]; then ccache -s; fi
+              conan cache clean "*" --source --build --download --temp || true
+              chmod -R a+rwX /ccache /root/.conan2
+            '
+        shell: bash
+      - name: Save the compiler cache
+        if: always() && matrix.follower == 'kth'
+        uses: actions/cache/save@v6
+        with:
+          path: ccache
+          key: kth-tb-ccache-${{ matrix.name }}-${{ github.run_id }}
+      # The template tests by tag first, so their result reads on its own, then
+      # the whole suite. A failure lets the row run, and fails the job at the end.
+      - name: Run kth's node tests
+        id: node_tests
+        if: matrix.node_tests
+        continue-on-error: true
+        run: |
+          TEST=$(find kth-src/build -name kth_node_test -type f -perm -u+x | head -1)
+          if [ -z "$TEST" ]; then echo "missing kth_node_test under kth-src/build"; exit 1; fi
+          rc=0
+          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w "/src/$(dirname "${TEST#kth-src/}")" "$IMAGE" \
+            bash -c 'timeout --kill-after=30 900 ./kth_node_test "[chain_view]" --reporter compact; echo "chain_view exit $?"; timeout --kill-after=30 600 ./kth_node_test "[sv2 template_provider]" --reporter compact; echo "template_provider exit $?"' \
+            > node-tests-template.log 2>&1 || true
+          grep -E "exit|passed|failed" node-tests-template.log | tail -8
+          docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w "/src/$(dirname "${TEST#kth-src/}")" "$IMAGE" \
+            bash -c "timeout --kill-after=30 1500 ./kth_node_test --reporter compact" > node-tests.log 2>&1 || rc=$?
+          tail -5 node-tests.log
+          if grep -q "chain_view exit [^0]\|template_provider exit [^0]" node-tests-template.log; then rc=1; fi
+          echo "kth_node_test exit $rc"
+          exit $rc
+        shell: bash
+      - name: Fetch BCHN 29.2.0
+        run: |
+          TARBALL=bitcoin-cash-node-29.2.0-x86_64-linux-gnu.tar.gz
+          SHA256=23bbe9ff749136a9b832a2a59023ce76a5391322c1ea2f4f24b5b91f035081bc
+          if docker pull --quiet "$CI_DEPS:bchn-29.2.0" && id=$(docker create "$CI_DEPS:bchn-29.2.0" /x); then
+            docker cp "$id:/$TARBALL" . || true
+            docker rm "$id" >/dev/null || true
+          fi
+          if ! echo "$SHA256  $TARBALL" | sha256sum -c; then
+            echo "no good copy in $CI_DEPS; fetching BCHN's release"
+            rm -f "$TARBALL"
+            curl -fsSLO --retry 6 --retry-delay 10 --retry-all-errors "https://github.com/bitcoin-cash-node/bitcoin-cash-node/releases/download/v29.2.0/$TARBALL"
+            echo "$SHA256  $TARBALL" | sha256sum -c
+          fi
+          tar xzf "$TARBALL"
+          echo "$PWD/bitcoin-cash-node-29.2.0/bin" >> "$GITHUB_PATH"
+        shell: bash
+      - name: Fetch BCH P2Pool ${{ env.P2POOL_REF }}
+        run: |
+          git init --quiet p2pool
+          git -C p2pool fetch --quiet --depth 1 https://github.com/CyberAshven/BitcoinCash-p2poolv2.git "$P2POOL_REF"
+          git -C p2pool checkout --quiet FETCH_HEAD
+          git -C p2pool log -1 --format='%H %s' | tee p2pool-commit.txt
+        shell: bash
+      - name: Build BCH P2Pool
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential clang cmake git libbz2-dev liblz4-dev \
+            libsnappy-dev libssl-dev libzmq3-dev libzstd-dev pkg-config zlib1g-dev ca-certificates
+          cd p2pool
+          cargo build --release --locked -p p2poolv2_node
+        shell: bash
+      - name: Delay the link to BCHN A
+        if: matrix.delay_ms != ''
+        run: |
+          # On loopback, TCP port 18444 alone (A's P2P port), both ways.
+          sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" >/dev/null 2>&1 || true
+          sudo modprobe sch_netem
+          sudo tc qdisc add dev lo root handle 1: prio bands 4
+          sudo tc qdisc add dev lo parent 1:4 handle 40: netem delay ${{ matrix.delay_ms }}ms
+          sudo tc filter add dev lo protocol ip parent 1:0 prio 1 u32 match ip protocol 6 0xff match ip dport 18444 0xffff flowid 1:4
+          sudo tc filter add dev lo protocol ip parent 1:0 prio 1 u32 match ip protocol 6 0xff match ip sport 18444 0xffff flowid 1:4
+          sudo tc -s qdisc show dev lo
+        shell: bash
+      - name: Run the template burst check
+        run: |
+          export TB_FOLLOWER="${{ matrix.follower }}"
+          export TB_DELAY_MS="${{ matrix.delay_ms }}"
+          export P2POOL_BIN="$PWD/p2pool/target/release/p2poolv2"
+          if [ "$TB_FOLLOWER" = "kth" ]; then
+            export KTH_IMAGE="$IMAGE"
+            export KTH_SRC="$PWD/kth-src"
+            KTH_BIN=$(find "$PWD/kth-src/build" -name kth -type f -perm -u+x -path '*node-exe*' -print -quit)
+            if [ -z "$KTH_BIN" ]; then echo "missing kth node-exe binary under kth-src/build"; exit 1; fi
+            export KTH_BIN
+          fi
+          rc=0; python3 -u scripts/template_burst_e2e.py e2e-out || rc=$?
+          if [ -n "${{ matrix.delay_ms }}" ]; then sudo tc -s qdisc show dev lo | tee e2e-out/netem.txt; fi
+          exit $rc
+        shell: bash
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: template-burst-${{ matrix.name }}
+          path: |
+            kth-commit.txt
+            p2pool-commit.txt
+            node-tests.log
+            node-tests-template.log
+            e2e-out
+          if-no-files-found: warn
+      - name: Fail on kth's node tests
+        if: always() && steps.node_tests.outcome == 'failure'
+        run: |
+          echo "kth_node_test failed; see node-tests.log in the artifact"
+          exit 1
+        shell: bash
