@@ -9,9 +9,9 @@ name: kth rows from #773, build, tests and client checks
 # check of its row. It runs when this file changes, or by hand.
 on:
   push:
-    # k-nuth/kth master 53ec7760 merged into #808 (test/m1126-808 on the fork),
-    # with the Conan options it needs: every push of this file on this branch.
-    branches: [e2e/m1126-stack]
+    # k-nuth/kth#807 after k-nuth/kth master a0a5455d was merged into it
+    # (test/807-* on the fork): every push of this file on this branch.
+    branches: [e2e/807-noise]
     paths: [.github/workflows/kth-rows.yml]
   workflow_dispatch:
 
@@ -25,48 +25,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #808 (I2P through SAM) with master 53ec7760 merged in and I2P made
-        # the optional feature `i2p`: every suite with i2p and socks5 on, the
-        # I2P end-to-end row (BCHN over i2pd, a second kth inbound over I2P),
-        # the SOCKS5 relay row, the default build, and master as the baseline.
-          - name: m808-i2p
-            branch: test/m1126-808
+        # #807 with master a0a5455d merged in, and the blockchain and C API
+        # changes dropped (test/807-merge at 70623e39). With sv2 on: the
+        # Stratum V2 suite and the suites the merge touches, and rows 21 and
+        # 23 in plaintext on master's Template Provider. Without it: the same
+        # suites in the default build.
+          - name: m807-merge-sv2
+            branch: test/807-merge
             gcc: '16'
-            options: -o i2p=True -o socks5=True
-            targets: kth_network_i2p_test kth_node_i2p_test kth_network_socks5_test kth_node_socks5_test kth_blockchain_vmlimits_test kth_p2p_close_test kth_ws_config_test
-            suites: kth_network_i2p_test kth_node_i2p_test kth_network_socks5_test kth_node_socks5_test kth_blockchain_vmlimits_test kth_p2p_close_test kth_ws_config_test
-            domain: true
+            options: -o sv2=True
+            targets: kth_node_sv2_test
+            suites: kth_node_sv2_test
             blockchain: true
-            network: true
-            infrastructure: true
             capi: true
-            i2p: true
-          - name: m808-proxy
-            branch: test/m1126-808
+            sv2: true
+          - name: m807-merge-default
+            branch: test/807-merge
             gcc: '16'
-            options: -o i2p=True -o socks5=True
-            proxy: true
-          - name: m808-default
-            branch: test/m1126-808
-            gcc: '16'
-            targets: kth_blockchain_vmlimits_test kth_p2p_close_test kth_ws_config_test
-            suites: kth_blockchain_vmlimits_test kth_p2p_close_test kth_ws_config_test
-            domain: true
             blockchain: true
-            network: true
-            infrastructure: true
             capi: true
-          - name: master-53ec7760
-            branch: test/m1126-master
-            gcc: '16'
-            options: -o socks5=True
-            targets: kth_network_socks5_test kth_node_socks5_test kth_blockchain_vmlimits_test kth_p2p_close_test kth_ws_config_test
-            suites: kth_network_socks5_test kth_node_socks5_test kth_blockchain_vmlimits_test kth_p2p_close_test kth_ws_config_test
-            domain: true
-            blockchain: true
-            network: true
-            infrastructure: true
-            capi: true
+            e2e: false
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
