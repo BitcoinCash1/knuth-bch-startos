@@ -31,8 +31,11 @@ jobs:
           # 1004, 1010), and row 1016: kth against the bchd that serves type
           # 2 (gcash/bchd#785 head) before and after a reorganization, and
           # the Neutrino library's RPA search (gcash/neutrino#56 head).
+          # This run: k-nuth/kth master a0a5455d (#1080) merged in.
           - name: type2-index
             branch: node/input-prefix-filter-index
+            merge: a0a5455d72d3e7f643e50b1fba0f25976661bdcc
+            merge_tree: 995e9122cb625ef136d074e7506a9bdbb3f0f986
             gcc: '16'
             options: -o neutrino=True
             targets: kth_domain_neutrino_test kth_node_neutrino_test
@@ -87,8 +90,21 @@ jobs:
         shell: bash
       - name: Fetch kth ${{ matrix.branch }}
         run: |
-          git clone --depth 1 --branch "${{ matrix.branch }}" https://github.com/CyberAshven/kth.git kth-src
+          if [ -n "${{ matrix.merge }}" ]; then
+            # The branch with k-nuth/kth master merged in, before that merge is
+            # pushed: the same merge here, whose tree must be the one of the
+            # merge to be pushed.
+            git clone --quiet --depth 20 --branch "${{ matrix.branch }}" https://github.com/CyberAshven/kth.git kth-src
+            git -C kth-src fetch --quiet --depth 20 https://github.com/k-nuth/kth.git "${{ matrix.merge }}"
+            git -C kth-src -c user.name=e2e -c user.email=e2e@localhost merge --quiet --no-ff --no-edit FETCH_HEAD
+            echo "merged tree $(git -C kth-src rev-parse 'HEAD^{tree}'), expected ${{ matrix.merge_tree }}"
+            test "$(git -C kth-src rev-parse 'HEAD^{tree}')" = "${{ matrix.merge_tree }}"
+          else
+            git clone --depth 1 --branch "${{ matrix.branch }}" https://github.com/CyberAshven/kth.git kth-src
+          fi
           git -C kth-src log -1 --format='%H %s' | tee kth-commit.txt
+          git -C kth-src log -3 --format='%H %P %s' | tee -a kth-commit.txt
+          echo "tree $(git -C kth-src rev-parse 'HEAD^{tree}')" | tee -a kth-commit.txt
         shell: bash
       # The packages ci-deps.yml keeps for this lock file and compiler: the
       # build restores them into the Conan cache, and conan install then finds
