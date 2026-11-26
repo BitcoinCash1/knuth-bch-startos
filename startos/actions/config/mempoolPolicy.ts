@@ -26,7 +26,7 @@ const mempoolPolicySpec = InputSpec.of({
       i18n('Fee in satoshis charged per signature operation when evaluating transaction cost.'),
     warning: null,
     required: true,
-    default: 100,
+    default: 0,
     min: 0,
     max: 100000,
     integer: false,
@@ -100,7 +100,7 @@ export const mempoolPolicy = sdk.Action.withInput(
     const conf = await knuthConf.read().once()
     return {
       byteFeeSatoshis: conf?.['node.byte_fee_satoshis'] ?? 1,
-      sigopFeeSatoshis: conf?.['node.sigop_fee_satoshis'] ?? 100,
+      sigopFeeSatoshis: conf?.['node.sigop_fee_satoshis'] ?? 0,
       minimumOutputSatoshis: conf?.['node.minimum_output_satoshis'] ?? 546,
       relayTransactions: conf?.['node.relay_transactions'] ?? true,
       refreshTransactions: conf?.['node.refresh_transactions'] ?? true,

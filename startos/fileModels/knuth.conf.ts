@@ -102,9 +102,11 @@ export const shape = z.object({
   'node.relay_transactions': z.boolean().catch(true),
   'node.block_latency_seconds': iniNumber.catch(60),
   'node.notify_limit_hours': iniNumber.catch(24),
-  // kth takes these as FLOAT (satoshis per byte / per sigop).
+  // kth takes these as FLOAT (satoshis per byte / per sigop). Both defaults
+  // are kth's own for BCH: 1 sat/byte, and no fee per sigop (BCH bounds
+  // signature work with the SigChecks limits, as BCHN does).
   'node.byte_fee_satoshis': iniNumber.catch(1),
-  'node.sigop_fee_satoshis': iniNumber.catch(100),
+  'node.sigop_fee_satoshis': iniNumber.catch(0),
   'node.minimum_output_satoshis': iniNumber.catch(546),
   // Display mode: tui | log | daemon. Must stay "log" under StartOS — the TUI
   // expects a terminal and would break log capture.
