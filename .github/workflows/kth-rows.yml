@@ -26,7 +26,8 @@ jobs:
       matrix:
         include:
         # #807 on master a0a5455d with the review's changes (test/807-noise-1 at
-        # d03b9f94). With sv2 and Noise on: the Noise ciphers' and Stratum V2
+        # f988b1ae; the plaintext and default rows passed at d03b9f94 in run
+        # 45905086220). With sv2 and Noise on: the Noise ciphers' and Stratum V2
         # suites, kth's node and infrastructure suites, and rows 21 to 23
         # through SRI's noise_sv2 (the handshake, templates, a silent client
         # after the handshake closed at the setup timeout, a start refused
@@ -42,16 +43,15 @@ jobs:
             infrastructure: true
             sv2: true
             noise: true
+            e2e: true
+          # An unset e2e compares equal to false in the step conditions, so
+          # the run at d03b9f94 ran no end-to-end row: both are asked for here.
           - name: n807-plaintext
             branch: test/807-noise-1
             gcc: '16'
             options: -o sv2=True
             sv2: true
-          - name: n807-default
-            branch: test/807-noise-1
-            gcc: '16'
-            infrastructure: true
-            e2e: false
+            e2e: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
