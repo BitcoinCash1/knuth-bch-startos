@@ -1,0 +1,597 @@
+diff --git a/src/blockchain/src/validate/batch_validate.cpp b/src/blockchain/src/validate/batch_validate.cpp
+index e1f5d9df..ad0758b7 100644
+--- a/src/blockchain/src/validate/batch_validate.cpp
++++ b/src/blockchain/src/validate/batch_validate.cpp
+@@ -200,15 +200,20 @@ code validate_block_batch(
+         }
+     }
+ 
+-    // What each block can be judged on alone: its body, its size and whether a
+-    // transaction exceeds the size cap. No block's answer depends on another's,
+-    // so they are computed in parallel, one slot per block; they are read where
+-    // the walk in height order below used to compute them, so the block refused
+-    // and the error it is refused with stay the same.
++    // What each block can be judged on alone: its body, its size, whether a
++    // transaction exceeds the size cap, and its smallest transaction. No block's
++    // answer depends on another's, so they are computed in parallel, one slot
++    // per block; they are read where the walk in height order below used to
++    // compute them, so the block refused and the error it is refused with stay
++    // the same.
+     struct block_alone {
+         code body;
+         size_t size = 0;
+         bool oversized_tx = false;
++        // The smallest transaction and its size. The minimum it is held to
++        // follows the rules of the block's height, which the walk below derives.
++        size_t smallest_tx = 0;
++        size_t smallest_tx_size = std::numeric_limits<size_t>::max();
+     };
+     std::vector<block_alone> alone(blocks.size());
+     bool const judged_alone = fork_join_for(blocks.size(), [&](size_t i) {
+@@ -217,11 +222,18 @@ code validate_block_batch(
+         slot.body = block.check_body(txids[i]);
+         slot.size = block.serialized_size(0);
+ #if defined(KTH_CURRENCY_BCH)
+-        // Consensus per-transaction size cap, coinbase included and independent
+-        // of the block size limit.
+-        slot.oversized_tx = std::ranges::any_of(block.transactions(), [](transaction const& tx) {
+-            return tx.serialized_size(true) > max_tx_size;
+-        });
++        // Consensus per-transaction size bounds, coinbase included: the cap,
++        // independent of the block size limit, and the smallest transaction,
++        // for the minimum.
++        auto const& txs = block.transactions();
++        for (size_t t = 0; t < txs.size(); ++t) {
++            auto const tx_size = txs[t].serialized_size(true);
++            slot.oversized_tx = slot.oversized_tx || tx_size > max_tx_size;
++            if (tx_size < slot.smallest_tx_size) {
++                slot.smallest_tx = t;
++                slot.smallest_tx_size = tx_size;
++            }
++        }
+ #endif
+     });
+     if ( ! judged_alone) {
+@@ -415,6 +427,14 @@ code validate_block_batch(
+         if (alone[i].oversized_tx) {
+             return refuse(i, error::transaction_size_limit);
+         }
++        // The minimum transaction size, 100 bytes from Euclid (BCHN: Magnetic
++        // Anomaly) and 65 from Descartes (BCHN: Upgrade 9), holds for every
++        // transaction of the block, coinbase included. Blocks do not go through
++        // accept(), which holds the pool to it.
++        auto const& smallest = block.transactions()[alone[i].smallest_tx];
++        if (alone[i].smallest_tx_size < smallest.min_tx_size(block_flags[i])) {
++            return refuse(i, error::transaction_undersize);
++        }
+ #endif
+ 
+         for (auto const& tx : block.transactions()) {
+diff --git a/src/blockchain/test/batch_contextual_consensus.cpp b/src/blockchain/test/batch_contextual_consensus.cpp
+index 7af662bd..57bb8ef6 100644
+--- a/src/blockchain/test/batch_contextual_consensus.cpp
++++ b/src/blockchain/test/batch_contextual_consensus.cpp
+@@ -36,6 +36,10 @@ namespace {
+ // The block path must enforce contextual transaction rules independently of
+ // mempool admission. Mine real regtest blocks and sign every spend over its
+ // actual version and token data; never call accept() in place of the batch.
++//
++// Every coinbase is padded to the 100-byte minimum transaction size of Euclid
++// (BCHN: Magnetic Anomaly), so the same chain is valid with Descartes (BCHN:
++// Upgrade 9) on or off.
+ struct batch_chain {
+     std::vector<block_const_ptr> blocks;
+     uint32_t const base_time = uint32_t(zulu_time()) - 140 * 600;
+@@ -43,7 +47,8 @@ struct batch_chain {
+     void append(std::vector<chain::transaction> txs = {}, uint64_t fees = 0) {
+         auto const height = uint32_t(blocks.size()) + 1;
+         auto const prev = blocks.empty() ? chain::block::genesis_regtest().hash() : blocks.back()->hash();
+-        auto block = mine_block(prev, height, base_time + height * 600, 0, std::move(txs), fees);
++        auto block = mine_block(prev, height, base_time + height * 600, 0, std::move(txs), fees,
++            min_transaction_size_euclid);
+         blocks.push_back(std::make_shared<domain::message::block const>(std::move(block)));
+     }
+ 
+@@ -59,8 +64,46 @@ struct batch_chain {
+         auto const& cb = original.transactions().front();
+         auto outputs = chain::output::list(cb.outputs());
+         outputs[0] = chain::output(outputs[0].value(), locking.value_or(outputs[0].script()), std::move(token));
++        remine_tip_with(chain::transaction(version, cb.locktime(), chain::input::list(cb.inputs()),
++            std::move(outputs)));
++    }
++
++    // The tip coinbase replaced by one of exactly `size` bytes: the height,
++    // then a push of zeros, in its input script, and its value locked to
++    // OP_TRUE.
++    void replace_tip_coinbase_sized(size_t size) {
++        auto const& cb = blocks.back()->transactions().front();
++        auto const height_number = infrastructure::machine::number::from_int(int64_t(blocks.size()));
++        domain::machine::operation::list ops;
++        ops.emplace_back(height_number->data(), true);
++        auto const unpadded = chain::script(domain::machine::operation::list(ops)).serialized_size(false);
++        // 61 bytes around the input script: a 64-byte coinbase at this height
++        // has a 3-byte script.
++        REQUIRE(size >= 61 + unpadded);
++        if (auto const padding = size - 61 - unpadded; padding > 0) {
++            // A push of n bytes takes n + 1 of them.
++            ops.emplace_back(data_chunk(padding - 1, 0), false);
++        }
++        chain::input::list inputs;
++        inputs.emplace_back(cb.inputs().front().previous_output(), chain::script(std::move(ops)),
++            cb.inputs().front().sequence());
++        chain::output::list outputs;
++        outputs.emplace_back(cb.outputs().front().value(), op_true_script(), chain::token_data_opt{});
++        chain::transaction sized(cb.version(), cb.locktime(), std::move(inputs), std::move(outputs));
++        REQUIRE(sized.serialized_size(true) == size);
++        remine_tip_with(std::move(sized));
++    }
++
++    static chain::script op_true_script() {
++        using domain::machine::operation;
++        return chain::script(operation::list{operation(domain::machine::opcode::push_positive_1)});
++    }
++
++private:
++    void remine_tip_with(chain::transaction coinbase) {
++        auto const& original = *blocks.back();
+         chain::transaction::list txs(original.transactions());
+-        txs.front() = chain::transaction(version, cb.locktime(), chain::input::list(cb.inputs()), std::move(outputs));
++        txs.front() = std::move(coinbase);
+         chain::block candidate(original.header(), std::move(txs));
+         auto const root = candidate.generate_merkle_root();
+         for (uint64_t nonce = 0; nonce <= std::numeric_limits<uint32_t>::max(); ++nonce) {
+@@ -94,6 +137,60 @@ chain::transaction signed_spend(chain::transaction const& previous, chain::outpu
+     return chain::transaction(version, 0, std::move(signed_inputs), std::move(outputs));
+ }
+ 
++// A spend of `previous`'s output 0, locked to OP_TRUE, of exactly `size`
++// bytes: an empty input script and one output of no value, locked by OP_RETURN
++// and padding of OP_0. The whole input is the fee.
++chain::transaction sized_spend(chain::transaction const& previous, size_t size) {
++    using domain::machine::opcode;
++    using domain::machine::operation;
++    // 60 bytes around the output script.
++    REQUIRE(size >= 60);
++    operation::list ops;
++    if (size > 60) {
++        ops.emplace_back(opcode::return_);
++        for (size_t i = 61; i < size; ++i) ops.emplace_back(opcode::push_size_0);
++    }
++    chain::input::list inputs;
++    inputs.emplace_back(chain::output_point{previous.hash(), 0}, chain::script{}, 0xffffffff);
++    chain::output::list outputs;
++    outputs.emplace_back(0, chain::script(std::move(ops)), chain::token_data_opt{});
++    chain::transaction tx(2, 0, std::move(inputs), std::move(outputs));
++    REQUIRE(tx.serialized_size(true) == size);
++    return tx;
++}
++
++// The minimum transaction size by era. Regtest turns every height-based rule
++// on, so an era is the settings with the upgrades after it switched off. Every
++// upgrade from Euclid (BCHN: Magnetic Anomaly) on carries Euclid's flags, and
++// every one from Descartes (BCHN: Upgrade 9) on carries Descartes'.
++struct size_era {
++    char const* name;
++    bool euclid;
++    bool descartes;
++    size_t minimum;   // 0: none
++};
++
++constexpr size_era size_eras[]{
++    {"before Euclid (BCHN: Magnetic Anomaly)", false, false, 0},
++    {"Euclid (BCHN: Magnetic Anomaly) before Descartes (BCHN: Upgrade 9)", true, false, 100},
++    {"Descartes (BCHN: Upgrade 9)", true, true, 65},
++};
++
++blockchain::settings era_settings(size_era const& era) {
++    blockchain::settings settings(domain::config::network::regtest);
++    settings.bch_euclid = era.euclid;
++    settings.bch_pisano = era.euclid;
++    settings.bch_mersenne = era.euclid;
++    settings.bch_fermat = era.euclid;
++    settings.bch_euler = era.euclid;
++    settings.bch_gauss = era.euclid;
++    settings.bch_descartes = era.descartes;
++    settings.bch_lobachevski = era.descartes;
++    settings.bch_galois = era.descartes;
++    settings.bch_leibniz = era.descartes;
++    return settings;
++}
++
+ struct verdict {
+     code result;
+     blockchain::batch_rejection rejection;
+@@ -116,6 +213,7 @@ verdict validate(char const* tag, batch_chain const& batch, blockchain::settings
+         parent, fixture.chain().headers());
+     REQUIRE(state);
+     REQUIRE((*state)->is_enabled(domain::machine::script_flags::bch_tokens) == settings.bch_descartes);
++    REQUIRE((*state)->is_enabled(domain::machine::script_flags::bch_cleanstack) == settings.bch_euclid);
+ 
+     verdict answer{error::success, {}};
+     answer.result = blockchain::validate_block_batch(fixture.chain(), settings,
+@@ -498,4 +596,53 @@ TEST_CASE("batch contextual consensus: noncanonical token payloads are not parse
+         }
+     }
+ }
++TEST_CASE("batch contextual consensus: the minimum transaction size of Euclid and Descartes (BCHN: Magnetic Anomaly and Upgrade 9)",
++          "[batch_contextual_consensus][tx_min_size]") {
++    // Each era at its edge, and 60 bytes, the smallest transaction with an
++    // input and an output, where there is no minimum.
++    for (auto const& era : size_eras) {
++        for (size_t size : {60u, 64u, 65u, 99u, 100u}) {
++            DYNAMIC_SECTION(era.name << ", transaction of " << size << " bytes") {
++                auto const settings = era_settings(era);
++                batch_chain batch;
++                auto funding = signed_spend(batch.coinbase_one(),
++                    chain::output::list{chain::output(1'000'000, batch_chain::op_true_script(), chain::token_data_opt{})},
++                    settings.enabled_flags());
++                batch.append({funding}, batch.coinbase_one().outputs()[0].value() - 1'000'000);
++                batch.append({sized_spend(funding, size)}, 1'000'000);
++                auto const answer = validate("batch_tx_min_size", batch, settings);
++                if (size < era.minimum) {
++                    CHECK(answer.result == error::transaction_undersize);
++                    CHECK(answer.rejection.block == std::optional<size_t>{102});
++                } else {
++                    CHECK(answer.result == error::success);
++                    CHECK_FALSE(answer.rejection.block);
++                }
++            }
++        }
++    }
++}
++
++TEST_CASE("batch contextual consensus: the coinbase is held to the minimum transaction size",
++          "[batch_contextual_consensus][tx_min_size][coinbase]") {
++    // 63 bytes is the smallest coinbase at height 101: its height alone in the
++    // input script, one output locked to OP_TRUE.
++    for (auto const& era : size_eras) {
++        for (size_t size : {63u, 64u, 65u, 99u, 100u}) {
++            DYNAMIC_SECTION(era.name << ", coinbase of " << size << " bytes") {
++                auto const settings = era_settings(era);
++                batch_chain batch;
++                batch.replace_tip_coinbase_sized(size);
++                auto const answer = validate("batch_coinbase_min_size", batch, settings);
++                if (size < era.minimum) {
++                    CHECK(answer.result == error::transaction_undersize);
++                    CHECK(answer.rejection.block == std::optional<size_t>{100});
++                } else {
++                    CHECK(answer.result == error::success);
++                    CHECK_FALSE(answer.rejection.block);
++                }
++            }
++        }
++    }
++}
+ #endif // KTH_CURRENCY_BCH
+diff --git a/src/blockchain/test/batch_sigchecks_activation.cpp b/src/blockchain/test/batch_sigchecks_activation.cpp
+index 7c58a205..ba380a2e 100644
+--- a/src/blockchain/test/batch_sigchecks_activation.cpp
++++ b/src/blockchain/test/batch_sigchecks_activation.cpp
+@@ -265,7 +265,10 @@ std::vector<domain::message::block::const_ptr> chain_with_spends(
+             auto const bh = b.hash();
+             return std::lexicographical_compare(ah.rbegin(), ah.rend(), bh.rbegin(), bh.rend());
+         });
+-        auto mined = mine_block(prev, h, base + h * 600, 0, std::move(txs), fees);
++        // The pre-SigChecks settings keep Euclid (BCHN: Magnetic Anomaly)
++        // without Descartes (BCHN: Upgrade 9): a coinbase takes 100 bytes.
++        auto mined = mine_block(prev, h, base + h * 600, 0, std::move(txs), fees,
++            min_transaction_size_euclid);
+         prev = mined.hash();
+         blocks.push_back(std::make_shared<domain::message::block const>(std::move(mined)));
+     }
+diff --git a/src/blockchain/test/batch_structure.cpp b/src/blockchain/test/batch_structure.cpp
+index 26803f5e..6f7b54c0 100644
+--- a/src/blockchain/test/batch_structure.cpp
++++ b/src/blockchain/test/batch_structure.cpp
+@@ -77,6 +77,9 @@ std::vector<domain::message::block::const_ptr> build_chain(spec const& sp, uint3
+                 inputs.emplace_back(output_point{source.hash(), 0}, script{}, 0xffffffff);
+                 output::list outputs;
+                 domain::machine::operation::list ops;
++                // Four OP_NOP take the spend to 65 bytes, the minimum
++                // transaction size of Descartes (BCHN: Upgrade 9).
++                for (int nop = 0; nop < 4; ++nop) ops.emplace_back(domain::machine::opcode::nop);
+                 ops.emplace_back(domain::machine::opcode::push_positive_1);
+                 outputs.emplace_back(source.outputs().front().value(), script{std::move(ops)}, domain::chain::token_data_opt{});
+                 txs.emplace_back(1, 0, std::move(inputs), std::move(outputs));
+diff --git a/src/blockchain/test/regtest_miner.hpp b/src/blockchain/test/regtest_miner.hpp
+index bcced112..e2ab192e 100644
+--- a/src/blockchain/test/regtest_miner.hpp
++++ b/src/blockchain/test/regtest_miner.hpp
+@@ -5,6 +5,7 @@
+ #ifndef KTH_BLOCKCHAIN_TEST_REGTEST_MINER_HPP
+ #define KTH_BLOCKCHAIN_TEST_REGTEST_MINER_HPP
+ 
++#include <cstddef>
+ #include <cstdint>
+ #include <limits>
+ #include <stdexcept>
+@@ -76,15 +77,34 @@ inline domain::chain::script coinbase_script(uint32_t height, uint32_t salt) {
+     return domain::chain::script(std::move(ops));
+ }
+ 
+-inline domain::chain::transaction coinbase_tx(uint32_t height, uint32_t salt, uint64_t value) {
+-    domain::chain::input::list inputs;
+-    inputs.emplace_back(domain::chain::output_point{null_hash, domain::chain::point::null_index},
+-                        coinbase_script(height, salt), 0xffffffff);
+-
+-    domain::chain::output::list outputs;
+-    outputs.emplace_back(value, miner_script(), domain::chain::token_data_opt{});
++// `minimum_size` pads the input script with a push of zeros until the coinbase
++// has at least that many bytes, as a miner pads it to the minimum transaction
++// size: 100 bytes from Euclid (BCHN: Magnetic Anomaly) until Descartes (BCHN:
++// Upgrade 9), more than the 91 or 92 bytes of a coinbase built here.
++inline domain::chain::transaction coinbase_tx(uint32_t height, uint32_t salt, uint64_t value,
++                                              size_t minimum_size = 0) {
++    auto const build = [value](domain::chain::script const& input_script) {
++        domain::chain::input::list inputs;
++        inputs.emplace_back(domain::chain::output_point{null_hash, domain::chain::point::null_index},
++                            input_script, 0xffffffff);
++
++        domain::chain::output::list outputs;
++        outputs.emplace_back(value, miner_script(), domain::chain::token_data_opt{});
++
++        return domain::chain::transaction(1, 0, std::move(inputs), std::move(outputs));
++    };
++
++    auto const script = coinbase_script(height, salt);
++    auto coinbase = build(script);
++    auto const size = coinbase.serialized_size(true);
++    if (size >= minimum_size) {
++        return coinbase;
++    }
+ 
+-    return domain::chain::transaction(1, 0, std::move(inputs), std::move(outputs));
++    // A push of n bytes takes n + 1 of them below 76.
++    auto ops = script.operations();
++    ops.emplace_back(data_chunk(minimum_size - size - 1, 0), false);
++    return build(domain::chain::script(std::move(ops)));
+ }
+ 
+ // A P2PKH spend of `prev_tx`'s output `index`, paying `value` back to the same
+@@ -134,15 +154,16 @@ inline domain::chain::transaction spend_p2pkh(
+ }
+ 
+ // Mine a block on top of `prev`. `txs` are appended after the coinbase, and the
+-// coinbase claims the subsidy plus their fees.
++// coinbase claims the subsidy plus their fees. `minimum_coinbase_size` as in
++// coinbase_tx.
+ inline domain::chain::block mine_block(
+     hash_digest const& prev, uint32_t height, uint32_t timestamp, uint32_t salt,
+-    std::vector<domain::chain::transaction> txs, uint64_t fees) {
++    std::vector<domain::chain::transaction> txs, uint64_t fees, size_t minimum_coinbase_size = 0) {
+ 
+     domain::chain::transaction::list all;
+     all.reserve(txs.size() + 1);
+     all.push_back(coinbase_tx(height, salt,
+-        domain::chain::block::subsidy(height, /*retarget*/ false) + fees));
++        domain::chain::block::subsidy(height, /*retarget*/ false) + fees, minimum_coinbase_size));
+     for (auto& tx : txs) {
+         all.push_back(std::move(tx));
+     }
+diff --git a/src/blockchain/test/transaction_size_fixture.hpp b/src/blockchain/test/transaction_size_fixture.hpp
+index e65f5a27..d2abff91 100644
+--- a/src/blockchain/test/transaction_size_fixture.hpp
++++ b/src/blockchain/test/transaction_size_fixture.hpp
+@@ -20,7 +20,8 @@ inline transaction sized_transaction(size_t size, bool coinbase = false,
+                      input_script.value_or(script(operation::list{operation(data_chunk{0x51}, false)})),
+                      0xffffffff);
+     output::list outs;
+-    auto const count = (size - 70) / 34;
++    // Below 70 bytes there is no room for a payment output.
++    auto const count = size > 70 ? (size - 70) / 34 : 0;
+     for (size_t i = 0; i < count; ++i) {
+         outs.emplace_back(1000, test::miner_script(), std::nullopt);
+     }
+diff --git a/src/blockchain/test/validate_transaction.cpp b/src/blockchain/test/validate_transaction.cpp
+index 6a9d2046..017c37c6 100644
+--- a/src/blockchain/test/validate_transaction.cpp
++++ b/src/blockchain/test/validate_transaction.cpp
+@@ -5,6 +5,7 @@
+ // These limits and network defaults are BCH consensus and relay policy.
+ #if defined(KTH_CURRENCY_BCH)
+ #include <test_helpers.hpp>
++#include <limits>
+ #include <kth/blockchain.hpp>
+ #include <asio/co_spawn.hpp>
+ #include <asio/io_context.hpp>
+@@ -62,6 +63,38 @@ TEST_CASE("transaction consensus maximum is inclusive and independent of block s
+     }
+ }
+ 
++TEST_CASE("the pool refuses a transaction under the minimum size with the code blocks are refused with",
++          "[tx_size][tx_min_size]") {
++    // Regtest turns every height-based rule on, so the flags of an era are
++    // the settings with the upgrades after it switched off.
++    auto const flags = [](bool euclid, bool descartes) {
++        settings s{domain::config::network::regtest};
++        s.bch_euclid = s.bch_pisano = s.bch_mersenne = s.bch_fermat = s.bch_euler = s.bch_gauss = euclid;
++        s.bch_descartes = s.bch_lobachevski = s.bch_galois = s.bch_leibniz = descartes;
++        return s.enabled_flags();
++    };
++    // A transaction that passes the size rule goes on to its inputs, which
++    // are not known here.
++    auto const accept = [](size_t size, domain::script_flags_t active) {
++        return sized_transaction(size).accept(active, 1, 0, std::numeric_limits<size_t>::max(), false, true, false);
++    };
++    struct era {
++        bool euclid;
++        bool descartes;
++        size_t refused;
++        size_t accepted;
++    };
++    for (auto const& [euclid, descartes, refused, accepted] : {
++            era{true, true, 64, 65},       // Descartes (BCHN: Upgrade 9)
++            era{true, false, 99, 100}}) {  // Euclid (BCHN: Magnetic Anomaly)
++        CAPTURE(euclid, descartes);
++        CHECK(accept(refused, flags(euclid, descartes)) == error::transaction_undersize);
++        CHECK(accept(accepted, flags(euclid, descartes)) == error::missing_previous_output);
++    }
++    CHECK(accept(64, flags(false, false)) == error::missing_previous_output);
++    CHECK(error::make_error_code(error::transaction_undersize).message() == "transaction under the minimum size");
++}
++
+ TEST_CASE("Knuth standardness initially permits every consensus transaction size", "[tx_size]") {
+     settings s{domain::config::network::regtest};
+     for (auto const size : {99999u, 100000u, 100001u, 999999u, 1000000u, 1000001u}) {
+diff --git a/src/c-api/include/kth/capi/error.h b/src/c-api/include/kth/capi/error.h
+index 63c54a0b..960fc3a3 100644
+--- a/src/c-api/include/kth/capi/error.h
++++ b/src/c-api/include/kth/capi/error.h
+@@ -314,6 +314,10 @@ typedef enum kth_error_code {
+     // CHIP-2025-03 coinbase shape: version 1, locktime 0 and outputs >= 25 BCH.
+     // Appended last so no existing code is renumbered.
+     kth_ec_coinbase_shape,
++    // A transaction under the minimum transaction size: 100 bytes from Euclid
++    // (BCHN: Magnetic Anomaly), 65 from Descartes (BCHN: Upgrade 9). Appended
++    // last so no existing code is renumbered.
++    kth_ec_transaction_undersize,
+ 
+     // C-API boundary errors
+     kth_ec_out_of_memory = 10000,  // Allocation failed inside the C-API
+diff --git a/src/domain/src/chain/transaction.cpp b/src/domain/src/chain/transaction.cpp
+index 2709aefb..df425027 100644
+--- a/src/domain/src/chain/transaction.cpp
++++ b/src/domain/src/chain/transaction.cpp
+@@ -493,7 +493,7 @@ code transaction::accept(
+ 
+ #if defined(KTH_CURRENCY_BCH)
+     if (serialized_size(true) < min_tx_size(flags)) {
+-        return error::transaction_size_limit;
++        return error::transaction_undersize;
+     }
+ 
+     if (is_enabled(flags, kth::domain::machine::script_flags::bch_tokens)) {
+diff --git a/src/infrastructure/include/kth/infrastructure/error.hpp b/src/infrastructure/include/kth/infrastructure/error.hpp
+index b7506c5e..9bfa5dbf 100644
+--- a/src/infrastructure/include/kth/infrastructure/error.hpp
++++ b/src/infrastructure/include/kth/infrastructure/error.hpp
+@@ -344,6 +344,10 @@ enum error_code_t {
+     // CHIP-2025-03 coinbase shape: version 1, locktime 0 and outputs >= 25 BCH.
+     // Appended last so no existing code is renumbered.
+     coinbase_shape,
++    // A transaction under the minimum transaction size: 100 bytes from Euclid
++    // (BCHN: Magnetic Anomaly), 65 from Descartes (BCHN: Upgrade 9). Appended
++    // last so no existing code is renumbered.
++    transaction_undersize,
+ 
+     // Last error code.
+     last_error_code
+diff --git a/src/infrastructure/src/error.cpp b/src/infrastructure/src/error.cpp
+index f28678f4..17a8a7e9 100644
+--- a/src/infrastructure/src/error.cpp
++++ b/src/infrastructure/src/error.cpp
+@@ -126,6 +126,7 @@ std::string error_category_impl::message(int ev) const noexcept {
+         { error::coinbase_transaction, "coinbase transaction disallowed in memory pool" },
+         { error::transaction_internal_double_spend, "double spend internal to transaction" },
+         { error::transaction_size_limit, "transaction size limit exceeded" },
++        { error::transaction_undersize, "transaction under the minimum size" },
+         { error::transaction_legacy_sigop_limit, "too many transaction legacy signature operations" },
+ 
+ #if defined(KTH_CURRENCY_BCH)
+diff --git a/src/node/src/rpc/methods.cpp b/src/node/src/rpc/methods.cpp
+index 2da82ace..aa1af57a 100644
+--- a/src/node/src/rpc/methods.cpp
++++ b/src/node/src/rpc/methods.cpp
+@@ -407,6 +407,7 @@ std::optional<std::string> bip22_reject_reason(code const& ec, uint32_t version)
+         {error::coinbase_transaction, "bad-tx-coinbase"},
+         {error::transaction_internal_double_spend, "bad-txns-inputs-duplicate"},
+         {error::transaction_size_limit, "bad-txns-oversize"},
++        {error::transaction_undersize, "bad-txns-undersize"},
+         {error::transaction_non_final, "bad-txns-nonfinal"},
+         {error::unspent_duplicate, "bad-txns-BIP30"},
+         {error::missing_previous_output, "bad-txns-inputs-missingorspent"},
+diff --git a/src/node/test/local_block_admission.cpp b/src/node/test/local_block_admission.cpp
+index 293bf631..0842152d 100644
+--- a/src/node/test/local_block_admission.cpp
++++ b/src/node/test/local_block_admission.cpp
+@@ -218,6 +218,33 @@ domain::chain::block overclaiming_block(hash_digest const& prev, uint32_t height
+     return mine_with(prev, timestamp_at(height), std::move(txs));
+ }
+ 
++#if defined(KTH_WITH_RPC) && defined(KTH_CURRENCY_BCH)
++// A block whose coinbase is exactly `size` bytes: the height, then a push of
++// zeros, in its input script, and the subsidy locked to OP_TRUE.
++domain::chain::block coinbase_sized_block(hash_digest const& prev, uint32_t height, size_t size) {
++    using domain::machine::operation;
++    auto const height_number = infrastructure::machine::number::from_int(int64_t(height));
++    operation::list ops;
++    ops.emplace_back(height_number->data(), true);
++    auto const unpadded = domain::chain::script(operation::list(ops)).serialized_size(false);
++    // 61 bytes around the input script, which takes at least 2.
++    REQUIRE(size > 61 + unpadded);
++    // A push of n bytes takes n + 1 of them.
++    ops.emplace_back(data_chunk(size - 61 - unpadded - 1, 0), false);
++    domain::chain::input::list inputs;
++    inputs.emplace_back(domain::chain::output_point{null_hash, domain::chain::point::null_index},
++        domain::chain::script(std::move(ops)), 0xffffffff);
++    domain::chain::output::list outputs;
++    outputs.emplace_back(domain::chain::block::subsidy(height, false),
++        domain::chain::script(operation::list{operation(domain::machine::opcode::push_positive_1)}),
++        domain::chain::token_data_opt{});
++    domain::chain::transaction::list txs;
++    txs.emplace_back(1, 0, std::move(inputs), std::move(outputs));
++    REQUIRE(txs.front().serialized_size(true) == size);
++    return mine_with(prev, timestamp_at(height), std::move(txs));
++}
++#endif
++
+ // `valid`'s header over a different body: the merkle root does not match.
+ domain::chain::block wrong_body_for(domain::chain::block const& valid, uint32_t height) {
+     domain::chain::transaction::list txs;
+@@ -606,4 +633,44 @@ TEST_CASE("submitblock RPC publishes acceptance and returns standard duplicates"
+     REQUIRE(run.stop());
+ }
+ 
++#if defined(KTH_CURRENCY_BCH)
++// Regtest has Descartes (BCHN: Upgrade 9) on from the first block, so every
++// transaction of a block, the coinbase included, takes at least 65 bytes.
++TEST_CASE("submitblock RPC refuses a block holding a transaction under the minimum size and does not connect it",
++          "[local admission][rpc submitblock][tx_min_size]") {
++    running_node run("rpc_submitblock_undersize");
++    node::mining::job_store jobs(1, 60);
++    node::rpc::method_context context{run.chain(), jobs};
++    node::rpc::dispatcher dispatcher;
++    node::rpc::register_builtin_methods(dispatcher);
++    auto request = [&](domain::chain::block const& block) {
++        auto const body = std::string(R"({"method":"submitblock","params":[")")
++            + encode_base16(to_data_chunk(block)) + R"("],"id":9})";
++        ::asio::io_context io;
++        auto result = ::asio::co_spawn(io, dispatcher.handle(context, body), ::asio::use_future);
++        io.run_for(answer_limit);
++        REQUIRE(result.wait_for(std::chrono::seconds(0)) == std::future_status::ready);
++        return result.get();
++    };
++    auto const genesis = run.connected_tip();
++    auto const undersized = coinbase_sized_block(genesis, 1, 64);
++    CHECK(request(undersized) == node::rpc::build_success("9", R"("bad-txns-undersize")"));
++
++    // Nothing connected, and the header tip back on genesis.
++    CHECK(run.connected_tip() == genesis);
++    CHECK(run.connected_height() == 0u);
++    CHECK(run.built_height() == 0u);
++    CHECK(run.header_tip_height() == 0);
++    CHECK_FALSE(run.chain().get_header(1));
++    CHECK(request(undersized) == node::rpc::build_success("9", R"("duplicate-invalid")"));
++
++    // One byte more is a block like any other.
++    auto const smallest = coinbase_sized_block(genesis, 1, 65);
++    CHECK(request(smallest) == node::rpc::build_success("9", "null"));
++    CHECK(run.connected_tip() == smallest.hash());
++    CHECK(run.connected_height() == 1u);
++    REQUIRE(run.stop());
++}
++#endif
++
+ #endif
+diff --git a/src/node/test/rpc_dispatch.cpp b/src/node/test/rpc_dispatch.cpp
+index 6bc771e2..5cbbfcc1 100644
+--- a/src/node/test/rpc_dispatch.cpp
++++ b/src/node/test/rpc_dispatch.cpp
+@@ -2430,6 +2430,7 @@ TEST_CASE("submitblock RPC translates admission outcomes to BIP22", "[rpc dispat
+                  scenario{error::coinbase_maturity, block_validity::invalid, R"("bad-txns-premature-spend-of-coinbase")"},
+                  scenario{error::spend_exceeds_value, block_validity::invalid, R"("bad-txns-in-belowout")"},
+                  scenario{error::invalid_tx_version, block_validity::invalid, R"("bad-txns-version")"},
++                 scenario{error::transaction_undersize, block_validity::invalid, R"("bad-txns-undersize")"},
+ #if defined(KTH_CURRENCY_BCH)
+                  scenario{error::token_fungible_insufficient, block_validity::invalid, R"("bad-txns-token-in-belowout")"},
+                  scenario{error::token_input_created_pre_activation, block_validity::invalid, R"("bad-txns-vin-token-created-pre-activation")"},
