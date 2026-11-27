@@ -427,10 +427,14 @@ def kth_paths() -> tuple[str, Path, str]:
 
 def start_kth(phase: str, peer: int | None) -> None:
     """kth on /data/e2e, logging to files named after the phase. Its one
-    outbound peer is 127.0.0.1:`peer`, or none; it listens for none."""
+    outbound peer is 127.0.0.1:`peer`, or none; it listens for none. It runs
+    in a directory of the phase's own, where it keeps peers.dat and
+    banlist.dat: a peer remembered or banned in one phase is not dialed or
+    refused in the next (kth holds one connection per address, and every
+    peer here is 127.0.0.1)."""
     image, src, binary = kth_paths()
     relative = Path(binary).resolve().relative_to(src.resolve())
-    workdir = "/src/" + relative.parent.as_posix()
+    workdir = f"/data/cwd-{phase}"
     argv = [
         "--init_run", "--network", "regtest", "--node.display", "daemon",
         "--db.directory", "/data/e2e", "--db.db_mode", "full",
@@ -446,7 +450,7 @@ def start_kth(phase: str, peer: int | None) -> None:
     result = subprocess.run(
         ["docker", "run", "--detach", "--name", CONTAINER, "--network", "host", "--platform", "linux/amd64",
          "-v", f"{src.resolve()}:/src", "-v", f"{DATA}:/data", "-w", workdir,
-         "--entrypoint", "./" + relative.name, image, *argv],
+         "--entrypoint", "/src/" + relative.as_posix(), image, *argv],
         capture_output=True, text=True, timeout=60)
     if result.returncode != 0:
         fail(f"docker run of kth failed: {(result.stderr or result.stdout).strip()}")
