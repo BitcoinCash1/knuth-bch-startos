@@ -54,15 +54,21 @@ RUN conan profile detect --force \
 # ── Job Declaration build (TEST ONLY) ───────────────────────────────
 # TEST ONLY, Job Declaration client with failover (k-nuth/kth#832, #833, #834, #881), upstreams through Tor
 # and I2P (#993) and the latency limit by route (#1005) on chipnet against the BCH P2Pool pool.
+# CyberAshven/kth test/kth-chipnet-backend: that build with k-nuth/kth master a0a5455d and
+# net/i2p-sam (#808) merged in, and the fixes that make getblocktemplate and mining work
+# follow BCHN: proposal mode (BIP23), templates while the next blocks arrive, transactions
+# taken while blocks arrive and retried on the next tip, initialblockdownload latched as
+# BCHN does, and two block download fixes. Master puts Stratum V2, the SOCKS5 proxy and I2P
+# behind Conan options, so the JD build turns all three on.
 FROM --platform=linux/amd64 ${TOOLCHAIN_JD} AS kth-jd-build
 
-ARG JD_COMMIT=7856e9b8
+ARG JD_COMMIT=f9f48ecf93e33b66fecfe7c89342b7db5ecdd1cb
 ARG CURRENCY=BCH
 
 RUN pip install --no-cache-dir --upgrade "conan>=2.25,<3" "kthbuild>=4,<5"
 
 WORKDIR /src/kth
-RUN git clone --branch test/kth-jd-reconnect --single-branch https://github.com/CyberAshven/kth.git . \
+RUN git clone --branch test/kth-chipnet-backend --single-branch https://github.com/CyberAshven/kth.git . \
  && git checkout --detach ${JD_COMMIT}
 
 RUN conan profile detect --force \
@@ -70,6 +76,9 @@ RUN conan profile detect --force \
  && conan install conanfile.py --version 1.7.0 -of build --build=missing \
       -o "kth/*:currency=${CURRENCY}" \
       -o "kth/*:rpc=jsonrpc" \
+      -o "kth/*:sv2=True" \
+      -o "kth/*:socks5=True" \
+      -o "kth/*:i2p=True" \
       -o "kth/*:tests=False" \
       -o "utxoz/*:with_tests=False" \
       -o "utxoz/*:with_benchmarks=False" \

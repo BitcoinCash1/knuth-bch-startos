@@ -70,15 +70,18 @@ export function dustThresholdAfterUpdate(
 }
 
 export const current = VersionInfo.of({
-  version: '1.7.0:1.2',
+  version: '1.7.0:1.3',
   releaseNotes:
-    'TEST ONLY: package 1.7.0:1 with kth-jd built from CyberAshven/kth 7856e9b8 ' +
-    '(the 8582780e of 1.7.0:1.1 merged with k-nuth/kth#1005, which brings #993: ' +
-    'Job Declaration upstreams through Tor and I2P and a latency limit by route), ' +
-    'reported as 1.7.0, and Node Settings -> Coinbase Tag. ' +
-    'The Sigop Fee and the Dust Threshold default to 0, the BCH defaults of ' +
-    'Knuth itself, instead of 100 and 546. Updating sets a stored 100 sigop ' +
-    'fee and a stored 546 dust threshold to 0; any other value is kept.',
+    'TEST ONLY: the chipnet backend package. kth-jd is built from CyberAshven/kth ' +
+    'f9f48ecf (test/kth-chipnet-backend): the Job Declaration build of 1.7.0:1.2 ' +
+    '(7856e9b8) with k-nuth/kth master a0a5455d merged in and the fixes that make ' +
+    'getblocktemplate and mining work follow BCHN: block proposals (BIP23), templates ' +
+    'while the next blocks arrive, transactions taken while blocks arrive and tried again ' +
+    'on the next tip, initialblockdownload as BCHN reports it, and two block download ' +
+    'fixes. Reported as 1.7.0, with Node Settings -> Coinbase Tag. The Sigop Fee and the ' +
+    'Dust Threshold default to 0, the BCH defaults of Knuth itself, instead of 100 and ' +
+    '546; updating sets a stored 100 sigop fee and a stored 546 dust threshold to 0 and ' +
+    'keeps any other value.',
   migrations: {
     up: async ({ effects }) => {
       const conf = await knuthConf.read().once()
