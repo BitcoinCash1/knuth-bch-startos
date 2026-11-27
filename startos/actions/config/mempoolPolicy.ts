@@ -38,7 +38,7 @@ const mempoolPolicySpec = InputSpec.of({
       i18n('Outputs below this value are treated as dust and will not be relayed.'),
     warning: null,
     required: true,
-    default: 546,
+    default: 0,
     min: 0,
     max: 100000,
     integer: true,
@@ -101,7 +101,7 @@ export const mempoolPolicy = sdk.Action.withInput(
     return {
       byteFeeSatoshis: conf?.['node.byte_fee_satoshis'] ?? 1,
       sigopFeeSatoshis: conf?.['node.sigop_fee_satoshis'] ?? 0,
-      minimumOutputSatoshis: conf?.['node.minimum_output_satoshis'] ?? 546,
+      minimumOutputSatoshis: conf?.['node.minimum_output_satoshis'] ?? 0,
       relayTransactions: conf?.['node.relay_transactions'] ?? true,
       refreshTransactions: conf?.['node.refresh_transactions'] ?? true,
       reorgPoolLimit: conf?.['db.reorg_pool_limit'] ?? 100,

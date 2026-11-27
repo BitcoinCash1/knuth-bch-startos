@@ -107,7 +107,8 @@ export const shape = z.object({
   // signature work with the SigChecks limits, as BCHN does).
   'node.byte_fee_satoshis': iniNumber.catch(1),
   'node.sigop_fee_satoshis': iniNumber.catch(0),
-  'node.minimum_output_satoshis': iniNumber.catch(546),
+  // kth's own BCH default: no output value is refused as dust.
+  'node.minimum_output_satoshis': iniNumber.catch(0),
   // Display mode: tui | log | daemon. Must stay "log" under StartOS — the TUI
   // expects a terminal and would break log capture.
   'node.display': z.enum(['tui', 'log', 'daemon']).catch('log'),
