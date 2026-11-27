@@ -257,7 +257,7 @@ export const fullConfigSpec = sdk.InputSpec.of({
   p2poolChain: sdk.Value.text({
     name: i18n('P2Pool Chain Code'),
     description: i18n(
-      'For Job Declaration with a P2Pool v2 node: the 6-character chain line of its coinbase tag, the last part of its start-up log line "Coinbase tag: P2Poolv2 | ... | ... | xxxxxx". When set, every coinbase this node declares carries the P2Pool tag (P2Poolv2, the operator, the node "Knuth 1.7.0" and this chain code, as one data push after the block height) instead of the Coinbase Tag text. Empty keeps the Coinbase Tag.',
+      'For Job Declaration with a P2Pool v2 node: the 6-character chain line of its coinbase tag, the last part of its start-up log line "Coinbase tag: P2Poolv2 | ... | ... | xxxxxx". When set, every coinbase this node declares carries the P2Pool tag (P2Poolv2, the operator, the node "Knuth 1.7.0" and this chain code, as one data push after the block height) instead of the Coinbase Tag text. Empty keeps the Coinbase Tag. The code changes whenever the P2Pool share chain changes (a new genesis or new rules); update it then, or P2Pool refuses the declared jobs again.',
     ),
     required: false,
     default: null,
