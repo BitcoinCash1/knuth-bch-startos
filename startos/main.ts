@@ -74,7 +74,20 @@ export const main = sdk.setupMain(async ({ effects }) => {
     const sv2Mode = 'full-template'
     const sv2ResponseTimeoutSeconds = '10'
     // Node Settings -> Coinbase Tag (sv2.coinbase_tag); empty writes nothing.
-    const sv2CoinbaseTag = store?.coinbaseTag ?? ''
+    // With a P2Pool Chain Code, the P2Pool v2 tag instead: kth writes these
+    // bytes right after the height push, so they start with the length of one
+    // data push holding P2Poolv2 0x0F operator 0x0F node 0x0F chain. kth takes
+    // at most 40 bytes; the node line is dropped if the operator leaves no room.
+    const p2poolChain = store?.p2poolChain ?? ''
+    const p2poolTag = (operator: string, node: string) =>
+      ['P2Poolv2', operator, node, p2poolChain].join('\x0f')
+    let p2poolBody = p2poolTag(store?.p2poolOperator ?? '', 'Knuth 1.7.0')
+    if (p2poolBody.length > 39) {
+      p2poolBody = p2poolTag(store?.p2poolOperator ?? '', '')
+    }
+    const sv2CoinbaseTag = p2poolChain
+      ? String.fromCharCode(p2poolBody.length) + p2poolBody
+      : (store?.coinbaseTag ?? '')
 
     knuthBinary = jdBinary
     knuthArgs.push(

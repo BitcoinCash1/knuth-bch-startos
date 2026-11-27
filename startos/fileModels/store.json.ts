@@ -13,6 +13,9 @@ export const shape = z.object({
   torEnabled: z.boolean().catch(false),
   // TEST ONLY default: the chipnet JD node's own tag.
   coinbaseTag: z.string().catch('/CyberAshven Knuth/'),
+  // P2Pool v2 tag (docs/stratum.md of P2Pool, The coinbase tag): chain code and operator line.
+  p2poolChain: z.string().catch(''),
+  p2poolOperator: z.string().catch(''),
   rpcEnabled: z.boolean().catch(false),
   rpcUser: z.string().catch(''),
   rpcPassword: z.string().catch(''),

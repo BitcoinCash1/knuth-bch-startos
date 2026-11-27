@@ -70,7 +70,7 @@ export function dustThresholdAfterUpdate(
 }
 
 export const current = VersionInfo.of({
-  version: '1.7.0:1.4',
+  version: '1.7.0:1.5',
   releaseNotes:
     'TEST ONLY: the chipnet backend package. kth-jd is built from CyberAshven/kth ' +
     '861b7ffb (test/kth-chipnet-backend): the Job Declaration build of 1.7.0:1.2 ' +
@@ -78,7 +78,9 @@ export const current = VersionInfo.of({
     'getblocktemplate and mining work follow BCHN: block proposals (BIP23), templates ' +
     'while the next blocks arrive, transactions taken while blocks arrive and tried again ' +
     'on the next tip, initialblockdownload as BCHN reports it, two block download ' +
-    'fixes, and the minimum transaction size applied to the transactions of a block. Reported as 1.7.0, with Node Settings -> Coinbase Tag. The Sigop Fee and the ' +
+    'fixes, and the minimum transaction size applied to the transactions of a block. ' +
+    'Node Settings -> P2Pool Chain Code and P2Pool Operator write the P2Pool v2 coinbase ' +
+    'tag into every declared job, which P2Pool nodes with the tag check require. Reported as 1.7.0, with Node Settings -> Coinbase Tag. The Sigop Fee and the ' +
     'Dust Threshold default to 0, the BCH defaults of Knuth itself, instead of 100 and ' +
     '546; updating sets a stored 100 sigop fee and a stored 546 dust threshold to 0 and ' +
     'keeps any other value.',

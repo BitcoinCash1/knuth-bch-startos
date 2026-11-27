@@ -35,6 +35,8 @@ export const configure = sdk.Action.withInput(
       utxozEnabled: store?.utxozEnabled ?? true,
       torEnabled: store?.torEnabled ?? false,
       coinbaseTag: store?.coinbaseTag || null,
+      p2poolChain: store?.p2poolChain || null,
+      p2poolOperator: store?.p2poolOperator || null,
     }
   },
 
@@ -71,6 +73,8 @@ export const configure = sdk.Action.withInput(
       utxozEnabled: input.utxozEnabled ?? true,
       torEnabled: input.torEnabled ?? false,
       coinbaseTag: input.coinbaseTag ?? '',
+      p2poolChain: input.p2poolChain ?? '',
+      p2poolOperator: input.p2poolOperator ?? '',
     })
 
     // rpcEnabled/ipcEnabled/utxozEnabled/torEnabled live in store.json, which

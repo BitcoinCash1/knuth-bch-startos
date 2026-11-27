@@ -254,4 +254,33 @@ export const fullConfigSpec = sdk.InputSpec.of({
       },
     ],
   }),
+  p2poolChain: sdk.Value.text({
+    name: i18n('P2Pool Chain Code'),
+    description: i18n(
+      'For Job Declaration with a P2Pool v2 node: the 6-character chain line of its coinbase tag, the last part of its start-up log line "Coinbase tag: P2Poolv2 | ... | ... | xxxxxx". When set, every coinbase this node declares carries the P2Pool tag (P2Poolv2, the operator, the node "Knuth 1.7.0" and this chain code, as one data push after the block height) instead of the Coinbase Tag text. Empty keeps the Coinbase Tag.',
+    ),
+    required: false,
+    default: null,
+    patterns: [
+      {
+        regex: '^[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{6}$',
+        description: i18n('Six bech32 characters, as in the P2Pool log.'),
+      },
+    ],
+  }),
+  p2poolOperator: sdk.Value.text({
+    name: i18n('P2Pool Operator'),
+    description: i18n(
+      'The operator line of the P2Pool tag, for example your name. Used only with a P2Pool Chain Code. At most 22 characters; may be empty.',
+    ),
+    required: false,
+    default: null,
+    maxLength: 22,
+    patterns: [
+      {
+        regex: '^[ -~]*$',
+        description: i18n('Printable ASCII only: letters, digits, spaces and symbols.'),
+      },
+    ],
+  }),
 })
