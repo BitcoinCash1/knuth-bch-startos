@@ -20,7 +20,7 @@ ARG TOOLCHAIN=kthnode/gcc16-ubuntu24.04@sha256:cde0d8a8b911ba290e4019fa4fac81723
 FROM --platform=linux/amd64 ${TOOLCHAIN} AS kth-build
 
 # kth release version WITHOUT the leading "v" (conan wants 1.3.0, not v1.3.0).
-ARG KNUTH_VERSION=1.7.0
+ARG KNUTH_VERSION=1.8.0
 ARG CURRENCY=BCH
 
 # kthbuild is required to load the kth conan recipe. Conan is upgraded the same
