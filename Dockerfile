@@ -62,7 +62,7 @@ RUN conan profile detect --force \
 # behind Conan options, so the JD build turns all three on.
 FROM --platform=linux/amd64 ${TOOLCHAIN_JD} AS kth-jd-build
 
-ARG JD_COMMIT=f9f48ecf93e33b66fecfe7c89342b7db5ecdd1cb
+ARG JD_COMMIT=861b7ffbf180b460dea4d9c1477400934596d6d4
 ARG CURRENCY=BCH
 
 RUN pip install --no-cache-dir --upgrade "conan>=2.25,<3" "kthbuild>=4,<5"
