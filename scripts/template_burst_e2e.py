@@ -253,6 +253,46 @@ def kth_log_text() -> str:
     return "\n".join(read_text(path) for path in sorted(DATA.glob("kth-*.log")))
 
 
+# kth's own lines (CyberAshven/kth fix/sync-*), as the debug log writes them:
+# a peer is "<address> <user agent>". A is the outbound peer on BCHN_P2P;
+# P2Pool's listener (e3cf4c88, node_p2p_listener.rs) advertises no services
+# and calls itself /P2Poolv2:<version>/.
+KTH_CLAIM = re.compile(r"\[block_download\] Peer (\S+)(.*?) claiming chunk \d+ \(blocks (\d+)-(\d+)\)")
+KTH_STIMULUS = re.compile(r"\[sync_coordinator\] Header stimulus \d+ \(.*?\) to (\S+)(.*?) from height")
+KTH_DISCONNECTED = re.compile(r"\[peer_provider\] Peer disconnected: (\S+)(.*?) \(nonce=")
+KTH_NEW_PEER = re.compile(r"\[peer_provider\] New peer: (\S+)(.*?) \(nonce=")
+KTH_CLOSED = re.compile(r"\[block_download\] Peer (\S+)(.*?)(?:sent no block|did not finish|sent a block).*closing the session")
+
+
+def summarize_kth_peers(label: str) -> dict:
+    """What kth's debug log says about whom it asked for what: chunk claims
+    and header requests by peer, peers that came and went, and sessions the
+    block download closed. "a" is BCHN A; "no_services" is a peer whose user
+    agent is P2Pool's, which advertises no services."""
+    text = read_text(DATA / f"kth-{label}-debug.log")
+    a_suffix = f":{BCHN_P2P}"
+
+    def who(address: str, rest: str) -> str:
+        if address.endswith(a_suffix):
+            return "a"
+        if "P2Poolv2" in rest:
+            return "no_services"
+        return "other"
+
+    record: dict = {"log_bytes": len(text)}
+    for name, pattern in (("chunk_claims", KTH_CLAIM), ("header_requests", KTH_STIMULUS),
+                          ("peers_connected", KTH_NEW_PEER), ("peers_disconnected", KTH_DISCONNECTED),
+                          ("sessions_closed_by_download", KTH_CLOSED)):
+        counts = {"a": 0, "no_services": 0, "other": 0}
+        for match in pattern.finditer(text):
+            counts[who(match.group(1), match.group(2))] += 1
+        record[name] = counts
+    record["no_body_range_in_flight"] = text.count("the previous range is still in flight")
+    record["excluded_serving_no_blocks"] = text.count("from block download: it serves no blocks")
+    record["recent_blocks_only"] = text.count("serves only recent blocks: chunks from height")
+    return record
+
+
 def p2pool_log_text() -> str:
     parts = [read_text(OUT / "p2pool-console.log")]
     if OUT.is_dir():
@@ -564,6 +604,23 @@ def summarize_probe(window: tuple[float, float], a_hashes: dict[int, str]) -> di
         if run_start is None:
             run_start = p["t"]
         streak = max(streak, p["answered"] - run_start)
+    # The longest stretch the follower held headers past its blocks: from the
+    # first probe that read them ahead to the first that read them level (or
+    # the end of the window, for a follower that never caught up again).
+    ahead_longest = 0.0
+    ahead_start = None
+    for p in inside:
+        if p["blocks_before"] is None or p["headers_before"] is None:
+            continue
+        if p["headers_before"] > p["blocks_before"]:
+            if ahead_start is None:
+                ahead_start = p["t"]
+            continue
+        if ahead_start is not None:
+            ahead_longest = max(ahead_longest, p["t"] - ahead_start)
+            ahead_start = None
+    if ahead_start is not None:
+        ahead_longest = max(ahead_longest, end - ahead_start)
     return {
         "requests": len(inside),
         "served": len(served),
@@ -574,6 +631,7 @@ def summarize_probe(window: tuple[float, float], a_hashes: dict[int, str]) -> di
         "requests_with_headers_ahead": len(ahead),
         "served_with_headers_ahead": len(served_ahead),
         "max_headers_ahead": max(gaps) if gaps else 0,
+        "longest_headers_ahead_s": round(ahead_longest, 3),
         "templates_on_unconnected_blocks": len(unconnected),
         "unconnected_examples": unconnected[:5],
         # What a client reading getblockchaininfo saw: initialblockdownload
@@ -909,6 +967,12 @@ def run() -> None:
     except SystemExit as error:
         EVIDENCE["heights"]["follower_not_caught_up"] = str(error)
     EVIDENCE["heights"]["follower_caught_up_after_s"] = caught_up
+    # Where each one stands once the follower was given its two minutes.
+    EVIDENCE["heights"]["bchn_final"] = int(cli("getblockcount"))
+    final, _ = call(follower(), "getblockchaininfo", timeout=10)
+    if isinstance(final, dict):
+        EVIDENCE["heights"]["follower_final_blocks"] = final.get("blocks")
+        EVIDENCE["heights"]["follower_final_headers"] = final.get("headers")
     EVIDENCE["phases"] = {
         "quiet": {"start": t0, "end": t1, "blocks": quiet_blocks},
         "burst": {"start": t1, "end": t2, **bursts},
@@ -932,6 +996,7 @@ def run() -> None:
     progress(f"probe: {burst_probe['served']} served, {burst_probe['refused']} refused, "
              f"longest without a template {burst_probe['longest_without_template_s']}s, "
              f"max headers ahead {burst_probe['max_headers_ahead']}, "
+             f"longest with headers ahead {burst_probe['longest_headers_ahead_s']}s, "
              f"served with headers ahead {burst_probe['served_with_headers_ahead']}, "
              f"on unconnected blocks {burst_probe['templates_on_unconnected_blocks']}")
     progress(f"P2Pool: {burst_pool['fetches']} fetches, {burst_pool['failed_fetches']} failed, "
@@ -969,6 +1034,10 @@ def cleanup() -> None:
         ("p2pool", lambda: stop_process(P2POOL)),
         ("kth", lambda: stop_kth() if FOLLOWER == "kth" and shutil.which("docker") else None),
         ("kth logs", lambda: [shutil.copy(path, OUT / path.name) for path in DATA.glob("kth-*.log")]),
+        # The run the bursts went through, read once kth has stopped and
+        # written all of it.
+        ("kth peers", lambda: EVIDENCE.__setitem__("kth_peers", summarize_kth_peers("default"))
+            if FOLLOWER == "kth" else None),
         ("bitcoind", lambda: [subprocess.run(
             ["bitcoin-cli", "-regtest", f"-datadir={d}", f"-rpcuser={AUTH}", f"-rpcpassword={AUTH}",
              f"-rpcport={p}", "stop"], capture_output=True, timeout=30)
