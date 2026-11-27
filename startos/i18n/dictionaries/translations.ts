@@ -192,7 +192,7 @@ export default {
     192: "For Job Declaration with a P2Pool v2 node: the 6-character chain line of its coinbase tag, the last part of its start-up log line \"Coinbase tag: P2Poolv2 | ... | ... | xxxxxx\". When set, every coinbase this node declares carries the P2Pool tag (P2Poolv2, the operator, the node \"Knuth 1.7.0\" and this chain code, as one data push after the block height) instead of the Coinbase Tag text. Empty keeps the Coinbase Tag. The code changes whenever the P2Pool share chain changes (a new genesis or new rules); update it then, or P2Pool refuses the declared jobs again.",
     193: "Six bech32 characters, as in the P2Pool log.",
     194: "P2Pool Operator",
-    195: "The operator line of the P2Pool tag, for example your name. Used only with a P2Pool Chain Code. At most 22 characters; may be empty.",
+    195: "The operator line of the P2Pool tag, for example your name. Used only with a P2Pool Chain Code. At most 11 characters: the room the 40-byte tag leaves after the node name, which is always kept. May be empty.",
   },
   de_DE: {
     0: 'Knuth wird gestartet!',
@@ -385,7 +385,7 @@ export default {
     192: "For Job Declaration with a P2Pool v2 node: the 6-character chain line of its coinbase tag, the last part of its start-up log line \"Coinbase tag: P2Poolv2 | ... | ... | xxxxxx\". When set, every coinbase this node declares carries the P2Pool tag (P2Poolv2, the operator, the node \"Knuth 1.7.0\" and this chain code, as one data push after the block height) instead of the Coinbase Tag text. Empty keeps the Coinbase Tag. The code changes whenever the P2Pool share chain changes (a new genesis or new rules); update it then, or P2Pool refuses the declared jobs again.",
     193: "Six bech32 characters, as in the P2Pool log.",
     194: "P2Pool Operator",
-    195: "The operator line of the P2Pool tag, for example your name. Used only with a P2Pool Chain Code. At most 22 characters; may be empty.",
+    195: "The operator line of the P2Pool tag, for example your name. Used only with a P2Pool Chain Code. At most 11 characters: the room the 40-byte tag leaves after the node name, which is always kept. May be empty.",
   },
   pl_PL: {
     0: 'Uruchamianie Knuth!',
@@ -578,7 +578,7 @@ export default {
     192: "For Job Declaration with a P2Pool v2 node: the 6-character chain line of its coinbase tag, the last part of its start-up log line \"Coinbase tag: P2Poolv2 | ... | ... | xxxxxx\". When set, every coinbase this node declares carries the P2Pool tag (P2Poolv2, the operator, the node \"Knuth 1.7.0\" and this chain code, as one data push after the block height) instead of the Coinbase Tag text. Empty keeps the Coinbase Tag. The code changes whenever the P2Pool share chain changes (a new genesis or new rules); update it then, or P2Pool refuses the declared jobs again.",
     193: "Six bech32 characters, as in the P2Pool log.",
     194: "P2Pool Operator",
-    195: "The operator line of the P2Pool tag, for example your name. Used only with a P2Pool Chain Code. At most 22 characters; may be empty.",
+    195: "The operator line of the P2Pool tag, for example your name. Used only with a P2Pool Chain Code. At most 11 characters: the room the 40-byte tag leaves after the node name, which is always kept. May be empty.",
   },
   fr_FR: {
     0: 'Démarrage de Knuth !',
@@ -771,6 +771,6 @@ export default {
     192: "For Job Declaration with a P2Pool v2 node: the 6-character chain line of its coinbase tag, the last part of its start-up log line \"Coinbase tag: P2Poolv2 | ... | ... | xxxxxx\". When set, every coinbase this node declares carries the P2Pool tag (P2Poolv2, the operator, the node \"Knuth 1.7.0\" and this chain code, as one data push after the block height) instead of the Coinbase Tag text. Empty keeps the Coinbase Tag. The code changes whenever the P2Pool share chain changes (a new genesis or new rules); update it then, or P2Pool refuses the declared jobs again.",
     193: "Six bech32 characters, as in the P2Pool log.",
     194: "P2Pool Operator",
-    195: "The operator line of the P2Pool tag, for example your name. Used only with a P2Pool Chain Code. At most 22 characters; may be empty.",
+    195: "The operator line of the P2Pool tag, for example your name. Used only with a P2Pool Chain Code. At most 11 characters: the room the 40-byte tag leaves after the node name, which is always kept. May be empty.",
   },
 } satisfies Record<string, LangDict>

@@ -70,7 +70,7 @@ export function dustThresholdAfterUpdate(
 }
 
 export const current = VersionInfo.of({
-  version: '1.7.0:1.5',
+  version: '1.7.0:1.6',
   releaseNotes:
     'TEST ONLY: the chipnet backend package. kth-jd is built from CyberAshven/kth ' +
     '861b7ffb (test/kth-chipnet-backend): the Job Declaration build of 1.7.0:1.2 ' +
