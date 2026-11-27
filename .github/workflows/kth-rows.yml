@@ -25,33 +25,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # #807 on master a0a5455d with the review's changes (test/807-noise-1 at
-        # f988b1ae; the plaintext and default rows passed at d03b9f94 in run
-        # 45905086220). With sv2 and Noise on: the Noise ciphers' and Stratum V2
-        # suites, kth's node and infrastructure suites, and rows 21 to 23
-        # through SRI's noise_sv2 (the handshake, templates, a silent client
-        # after the handshake closed at the setup timeout, a start refused
-        # for an unusable authority key). With sv2 on and Noise left at its
-        # default: rows 21 and 23 in plaintext. Without sv2: the default
-        # build and its suites.
-          - name: n807-noise
-            branch: test/807-noise-1
+        # The coinbase tag written as one data push (#1012 fix 454a427b), on the
+        # chipnet backend build test/kth-chipnet-backend 5a1df475: kth_node_sv2_test.
+          - name: ctag-push
+            branch: test/kth-chipnet-backend
             gcc: '16'
-            options: -o sv2=True
-            targets: kth_infrastructure_sv2_test kth_node_sv2_test
-            suites: kth_infrastructure_sv2_test kth_node_sv2_test
-            infrastructure: true
+            options: -o sv2=True -o socks5=True -o i2p=True
+            targets: kth_node_sv2_test
+            suites: kth_node_sv2_test
             sv2: true
-            noise: true
-            e2e: true
-          # An unset e2e compares equal to false in the step conditions, so
-          # the run at d03b9f94 ran no end-to-end row: both are asked for here.
-          - name: n807-plaintext
-            branch: test/807-noise-1
-            gcc: '16'
-            options: -o sv2=True
-            sv2: true
-            e2e: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
