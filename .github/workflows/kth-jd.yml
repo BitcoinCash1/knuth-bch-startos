@@ -8,6 +8,9 @@ name: kth SV2 job declaration against BCH P2Pool
 # Build that kth with kth's toolchain, build BCH P2Pool, and run the row.
 # A row with proposals set builds kth alone and compares its getblocktemplate
 # proposals (BIP23) with BCHN's on one regtest chain (scripts/proposal_e2e.py).
+# A row with ref set fetches that kth commit and checks it. Since k-nuth/kth
+# master put Stratum V2, the SOCKS5 proxy and I2P behind Conan options, the
+# build turns on each option the recipe has.
 # Runs when this file changes, or by hand.
 on:
   push:
@@ -24,47 +27,30 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # BIP23 proposals on kth rpc/getblocktemplate-proposal (k-nuth/kth
-          # master 53ec7760 and the change): scripts/proposal_e2e.py sends the
-          # same proposals to kth and to BCHN 29.2.0 on one regtest chain and
-          # compares the answers one by one; kth's blockchain and node test
-          # suites run on the same build. No P2Pool and no mining device.
-          # Run 45772050418 (attempt 2): both suites passed; the rows agreed
-          # but most were time-too-old, as the script stamped blocks with the
-          # clock while the regtest tip's median time past ran ahead of it.
-          - name: proposals-vs-bchn
-            branch: rpc/getblocktemplate-proposal
+          # The chipnet backend package build, CyberAshven/kth
+          # test/kth-chipnet-backend: the Start9 JD build 7856e9b8 with k-nuth/kth
+          # master a0a5455d, net/i2p-sam (#808) and the template, relay,
+          # initialblockdownload, proposal and block download fixes merged in.
+          # Row 25w with P2Pool e3cf4c88 on this kth as its own node: every
+          # Full-Template job kth declares is checked by P2Pool with a proposal
+          # to kth, and must be accepted (as run 45857575663 on a73cde56).
+          # kth's node, blockchain, SV2, SOCKS5 and I2P test suites run on the
+          # same build.
+          - name: chipnet-backend-pool-on-kth
+            branch: test/kth-chipnet-backend
+            ref: f9f48ecf93e33b66fecfe7c89342b7db5ecdd1cb
+            row: "25w"
+            p2pool: e3cf4c8872cbbc2940f44b91d8824da3a0cb0c94
+            pool_node: kth
+            blockchain: true
+            node_tests: true
+            suites: "kth_node_sv2_test kth_node_socks5_test kth_node_i2p_test kth_network_socks5_test kth_network_i2p_test"
+          # The same 21 proposals as run 45857575663, to kth and to BCHN 29.2.0
+          # on one regtest chain, on this build.
+          - name: chipnet-backend-proposals
+            branch: test/kth-chipnet-backend
+            ref: f9f48ecf93e33b66fecfe7c89342b7db5ecdd1cb
             proposals: true
-            blockchain: true
-            node_tests: true
-          # Row 25w with P2Pool's own node set to kth instead of BCHN
-          # (KTH_JD_POOL_NODE=kth), so P2Pool e3cf4c88 checks every
-          # Full-Template job kth declares with a proposal to kth. Before:
-          # the Start9 JD build test/kth-jd-reconnect (7856e9b8), whose
-          # getblocktemplate is master's and refuses proposals; P2Pool must
-          # refuse every declaration as invalid-template for 300 s
-          # (KTH_JD_EXPECT=refused). After: the same build with the change
-          # (test/kth-jd-proposal); P2Pool must accept the declarations,
-          # count a share and pay a PPLNS block, with no invalid-template
-          # refusal. kth's blockchain and node tests run on the after build.
-          # Run 45772050418: before passed (5 declarations refused, P2Pool's
-          # node answering -32602 "only template mode is supported"); after
-          # (attempt 2) mined: 9 declarations accepted, 6 shares, PPLNS block
-          # 109, no invalid-template; its one blockchain test failure was the
-          # genesis duplicate on a base without #1011, fixed in a73cde56.
-          - name: pool-on-kth-before
-            branch: test/kth-jd-reconnect
-            row: "25w"
-            p2pool: e3cf4c8872cbbc2940f44b91d8824da3a0cb0c94
-            pool_node: kth
-            expect: refused
-          - name: pool-on-kth-after
-            branch: test/kth-jd-proposal
-            row: "25w"
-            p2pool: e3cf4c8872cbbc2940f44b91d8824da3a0cb0c94
-            pool_node: kth
-            blockchain: true
-            node_tests: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -104,9 +90,16 @@ jobs:
           echo "toolchain image: $IMAGE"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
         shell: bash
-      - name: Fetch kth ${{ matrix.branch }}
+      - name: Fetch kth ${{ matrix.branch }} ${{ matrix.ref }}
         run: |
-          git clone --depth 1 --branch "${{ matrix.branch }}" https://github.com/CyberAshven/kth.git kth-src
+          if [ -n "${{ matrix.ref }}" ]; then
+            git init --quiet kth-src
+            git -C kth-src fetch --quiet --depth 1 https://github.com/CyberAshven/kth.git "${{ matrix.ref }}"
+            git -C kth-src checkout --quiet FETCH_HEAD
+            if [ "$(git -C kth-src rev-parse HEAD)" != "${{ matrix.ref }}" ]; then echo "kth is not at ${{ matrix.ref }}"; exit 1; fi
+          else
+            git clone --depth 1 --branch "${{ matrix.branch }}" https://github.com/CyberAshven/kth.git kth-src
+          fi
           git -C kth-src log -1 --format='%H %s' | tee kth-commit.txt
         shell: bash
       # The packages ci-deps.yml keeps for this lock file and compiler: the
@@ -148,6 +141,7 @@ jobs:
           restore-keys: |
             kth-jd-ccache-${{ matrix.name }}-
             kth-jd-ccache-
+            kth-tb-ccache-
       - name: Build kth and its tests in the kth toolchain
         run: |
           TARGETS="kth_node_test node-exe"
@@ -155,6 +149,7 @@ jobs:
           if [ "${{ matrix.blockchain }}" = "true" ]; then TARGETS="$TARGETS kth_blockchain_test"; fi
           if [ "${{ matrix.network }}" = "true" ]; then TARGETS="$TARGETS kth_network_test"; fi
           if [ "${{ matrix.infrastructure }}" = "true" ]; then TARGETS="$TARGETS kth_infrastructure_test"; fi
+          TARGETS="$TARGETS ${{ matrix.suites }}"
           mkdir -p ccache conan2
           docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -v "$PWD/ccache:/ccache" \
             -v "$PWD/conan2:/root/.conan2" -w /src \
@@ -180,8 +175,15 @@ jobs:
               # branches still take True.
               RPC=True
               if grep -q -F "\"rpc\": [\"jsonrpc\"" conanfile.py; then RPC=jsonrpc; fi
+              # Optional features k-nuth/kth master put behind Conan options:
+              # each one this recipe has is turned on.
+              FEATURES=""
+              for option in sv2 socks5 i2p; do
+                if grep -q -E "^ *\"$option\": \[True, False\]" conanfile.py; then FEATURES="$FEATURES -o $option=True"; fi
+              done
+              echo "optional features:${FEATURES:- none}"
               time conan install conanfile.py --version 1.5.2 -of build --build=missing \
-                -o currency=BCH -o rpc=$RPC -o tests=True \
+                -o currency=BCH -o rpc=$RPC -o tests=True $FEATURES \
                 -o "utxoz/*:with_tests=False" -o "utxoz/*:with_benchmarks=False" \
                 -o "utxoz/*:with_large_benchmarks=False" \
                 -s compiler.cppstd=23 -s build_type=Release
@@ -221,6 +223,25 @@ jobs:
           docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w "/src/$(dirname "${TEST#kth-src/}")" "$IMAGE"             bash -c "timeout --kill-after=30 1800 ./kth_blockchain_test --reporter compact" > blockchain-tests.log 2>&1 || rc=$?
           tail -5 blockchain-tests.log
           echo "kth_blockchain_test exit $rc"
+          exit $rc
+        shell: bash
+      # The feature suites the row names (kth_node_sv2_test and the like),
+      # each on its own. A failure lets the row run, and fails the job at the end.
+      - name: Run kth's feature test suites
+        id: suite_tests
+        if: matrix.suites
+        continue-on-error: true
+        run: |
+          rc=0
+          : > suite-tests.log
+          for suite in ${{ matrix.suites }}; do
+            TEST=$(find kth-src/build -name "$suite" -type f -perm -u+x | head -1)
+            if [ -z "$TEST" ]; then echo "missing $suite under kth-src/build" | tee -a suite-tests.log; rc=1; continue; fi
+            src=0
+            docker run --rm --platform linux/amd64 -v "$PWD/kth-src:/src" -w "/src/$(dirname "${TEST#kth-src/}")" "$IMAGE"               bash -c "timeout --kill-after=30 1200 ./$suite --reporter compact" > "$suite.log" 2>&1 || src=$?
+            echo "$suite exit $src: $(tail -1 "$suite.log")" | tee -a suite-tests.log
+            if [ "$src" != 0 ]; then rc=1; fi
+          done
           exit $rc
         shell: bash
       - name: Save the Conan packages
@@ -399,6 +420,8 @@ jobs:
             p2pool-tests.log
             node-tests.log
             blockchain-tests.log
+            suite-tests.log
+            kth_node_*_test.log
             e2e-out
           if-no-files-found: error
       - name: Fail on kth's node tests
@@ -411,6 +434,12 @@ jobs:
         if: always() && steps.blockchain_tests.outcome == 'failure'
         run: |
           echo "kth_blockchain_test failed; see blockchain-tests.log in the artifact"
+          exit 1
+        shell: bash
+      - name: Fail on kth's feature test suites
+        if: always() && steps.suite_tests.outcome == 'failure'
+        run: |
+          echo "a kth feature test suite failed; see suite-tests.log in the artifact"
           exit 1
         shell: bash
       - name: Fail on BCH P2Pool's SV2 unit tests
