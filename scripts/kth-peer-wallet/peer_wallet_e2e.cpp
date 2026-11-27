@@ -143,7 +143,7 @@ int main(int argc, char** argv) {
         auto const now = service.current();
         if (now.synced && now.tip == now.header_height) {
             auto const header = ask(service, service.header(now.header_height));
-            if (header && header->hash() == *wanted) {
+            if (header && chain::hash(*header) == *wanted) {
                 reached = true;
                 break;
             }

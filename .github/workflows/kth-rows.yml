@@ -28,39 +28,9 @@ jobs:
           # The peer path of wallet support without filter type 1. Branches
           # not pushed yet come from scripts/kth-peer-path.bundle (bundle:
           # true), on top of what the fork and k-nuth/kth master hold.
-          - name: r7-filter-files
-            branch: restack/7-filter-files
-            bundle: true
-            gcc: '16'
-            options: -o neutrino=True -o wallet=True
-            targets: kth_node_wallet_test
-            suites: kth_node_wallet_test
-            e2e: false
-          - name: r8-scan
-            branch: restack/8-scan
-            bundle: true
-            gcc: '16'
-            options: -o neutrino=True -o wallet=True
-            targets: kth_domain_neutrino_test kth_node_wallet_test
-            suites: kth_domain_neutrino_test kth_node_wallet_test
-            e2e: false
-          - name: r9-block-checks
-            branch: restack/9-block-checks
-            bundle: true
-            gcc: '16'
-            options: -o neutrino=True -o wallet=True
-            targets: kth_domain_neutrino_test kth_node_wallet_test
-            suites: kth_domain_neutrino_test kth_node_wallet_test
-            e2e: false
-          - name: r10-peers
-            branch: restack/10-peers
-            bundle: true
-            gcc: '16'
-            options: -o neutrino=True -o wallet=True
-            targets: kth_domain_neutrino_test kth_node_neutrino_test kth_node_wallet_test
-            suites: kth_domain_neutrino_test kth_node_neutrino_test kth_node_wallet_test
-            e2e: false
-          # End to end: restack/10 with the type 2 serving of
+          # r7 to r10 green at the heads this bundle carries (runs
+          # 45866763695 and 45899614948): not run again.
+          # End to end: restack/11 with the type 2 serving of
           # node/input-prefix-filter-index and the node's Electrum listener of
           # restack/3 merged in (TEST ONLY tree e2e/peer-path-node, in the
           # bundle), and the harness's peer wallet driver built in it. kth
