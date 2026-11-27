@@ -241,9 +241,13 @@ def txid_of(raw_hex: str) -> str:
 
 # ---- node calls -------------------------------------------------------------
 
-def node_row(call_name: str, use: str, kth, bchn, ok: bool, note: str = "") -> None:
+def node_row(call_name: str, use: str, kth, bchn, ok: bool, note: str = "",
+             informational: bool = False) -> None:
+    # An informational row is recorded, and never counted as a failure: the
+    # call is asked directly, and Rostrum itself runs without it.
     RESULTS["node_calls"].append({"call": call_name, "rostrum": use, "kth": kth, "bchn": bchn,
-                                  "verdict": "OK" if ok else "GAP", "note": note})
+                                  "verdict": "OK" if ok else ("INFO" if informational else "GAP"),
+                                  "note": note})
 
 
 def answered(pair) -> bool:
@@ -253,12 +257,14 @@ def answered(pair) -> bool:
 def node_calls(s: dict) -> None:
     both = lambda method, params=None: {n: call(NODES[n], method, params) for n in NODES}
 
+    # k-nuth/kth#1086 (ping) was closed: Rostrum syncs and answers every
+    # Electrum call below on kth without it, so these two rows only record it.
     r = both("ping")
     node_row("ping (params null)", "the RPC pool's connection check (manager.rs is_valid)",
-             r["kth"], r["bchn"], answered(r["kth"]) and r["kth"][0] is None)
+             r["kth"], r["bchn"], answered(r["kth"]) and r["kth"][0] is None, informational=True)
     r = both("ping", [])
     node_row("ping []", "the same call with an empty array, to tell the method from its params",
-             r["kth"], r["bchn"], answered(r["kth"]) and r["kth"][0] is None)
+             r["kth"], r["bchn"], answered(r["kth"]) and r["kth"][0] is None, informational=True)
 
     r = both("getnetworkinfo")
     k = r["kth"][0] if answered(r["kth"]) else None
@@ -630,7 +636,7 @@ def report() -> str:
               "|---|---|---|---|"]
     for r in RESULTS["follow"]:
         lines.append(f"| {r['check']} | **{r['verdict']}** | {cell(r['kth'])} | {cell(r['bchn'])} |")
-    failed = [r["call"] for r in RESULTS["node_calls"] if r["verdict"] != "OK"]
+    failed = [r["call"] for r in RESULTS["node_calls"] if r["verdict"] not in ("OK", "INFO")]
     failed += [r["method"] for r in RESULTS["electrum"] if r["verdict"] != "OK"]
     failed += [r["check"] for r in RESULTS["follow"] if r["verdict"] != "OK"]
     lines += ["", f"## {len(failed)} failed", ""] + [f"- {f}" for f in failed]
@@ -641,7 +647,7 @@ def passed() -> bool:
     rostrum = RESULTS["rostrum"]
     return bool(RESULTS["electrum"]) and bool(RESULTS["follow"]) and \
         all(rostrum.get(n, {}).get("height") is not None for n in NODES) and \
-        all(r["verdict"] == "OK" for key in ("node_calls", "electrum", "follow") for r in RESULTS[key])
+        all(r["verdict"] in ("OK", "INFO") for key in ("node_calls", "electrum", "follow") for r in RESULTS[key])
 
 
 def main() -> None:

@@ -12,8 +12,8 @@ name: kth rows from #773, build, tests and client checks
 # changes, or by hand.
 on:
   push:
-    # The CodeRabbit finding on k-nuth/kth#1083 (the null token), with
-    # k-nuth/kth master a0a5455d: every push of this branch.
+    # The CodeRabbit finding on k-nuth/kth#1083 (the null token) and #805,
+    # with k-nuth/kth master a0a5455d: every push of this branch.
     branches: [e2e/coderabbit-1127]
   workflow_dispatch:
 
@@ -27,33 +27,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        # Earlier runs on e2e/rostrum: 44744727224 and 45693298461. This run,
-        # on k-nuth/kth master a0a5455d (#1080): the CodeRabbit finding on
-        # #1083, "params":nope taken for null. null-token-before is #1083 at
-        # 58f15602 with only the new test cases (nope, nul, nullx, and " null "
-        # in uptime), and must fail on them; null-token is the fix 6ba06e20
-        # with every suite; rostrum-all-3 is that master with #1081-#1085
-        # (#1083 with the fix), with Rostrum and the client rows.
-          - name: null-token-before
-            branch: test/1083-null-token-before
+        # Run 45901710783 on k-nuth/kth master a0a5455d: null-token-before
+        # (#1083 at 58f15602 with only the new cases) failed on nope, nul and
+        # nullx for both methods, as it must; null-token (the fix 6ba06e20)
+        # passed every suite; rostrum-all-3 passed its suites and every
+        # Rostrum check but the two ping rows, which k-nuth/kth#1086 (closed)
+        # was for and which are now only recorded. This run: rostrum-all-3
+        # again with its node suite, and shv-805, #805 with that master merged
+        # in, with every suite and the SHV rows (before: 43100813570).
+          - name: rostrum-all-3
+            branch: test/rostrum-all-3
             gcc: '16'
-            no_e2e: true
-            expect_failure: true
-          - name: null-token
-            branch: test/1083-null-token
+            rostrum: true
+          - name: shv-805
+            branch: test/shv-805-ma0a5455d
             gcc: '16'
             domain: true
             capi: true
             blockchain: true
             network: true
             infrastructure: true
-            no_e2e: true
-          - name: rostrum-all-3
-            branch: test/rostrum-all-3
-            gcc: '16'
-            blockchain: true
-            network: true
-            rostrum: true
+            shv: true
     name: kth ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 330
