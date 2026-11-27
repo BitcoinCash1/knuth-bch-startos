@@ -1,5 +1,5 @@
 diff --git a/src/blockchain/src/validate/batch_validate.cpp b/src/blockchain/src/validate/batch_validate.cpp
-index e1f5d9df..ad0758b7 100644
+index e1f5d9df..408f824c 100644
 --- a/src/blockchain/src/validate/batch_validate.cpp
 +++ b/src/blockchain/src/validate/batch_validate.cpp
 @@ -200,15 +200,20 @@ code validate_block_batch(
@@ -52,7 +52,7 @@ index e1f5d9df..ad0758b7 100644
  #endif
      });
      if ( ! judged_alone) {
-@@ -415,6 +427,14 @@ code validate_block_batch(
+@@ -415,6 +427,21 @@ code validate_block_batch(
          if (alone[i].oversized_tx) {
              return refuse(i, error::transaction_size_limit);
          }
@@ -60,15 +60,22 @@ index e1f5d9df..ad0758b7 100644
 +        // Anomaly) and 65 from Descartes (BCHN: Upgrade 9), holds for every
 +        // transaction of the block, coinbase included. Blocks do not go through
 +        // accept(), which holds the pool to it.
++        //
++        // No minimum below the Euclid height, read from the height as for
++        // canonical ordering above: on testnet4, scalenet and chipnet the
++        // flags carry Euclid's bch_cleanstack from height 0 (Pisano and
++        // Fermat, whose flags include it, are active from 0 there), while the
++        // minimum starts at height 4001 on those networks.
 +        auto const& smallest = block.transactions()[alone[i].smallest_tx];
-+        if (alone[i].smallest_tx_size < smallest.min_tx_size(block_flags[i])) {
++        if (state->is_euclid_enabled()
++            && alone[i].smallest_tx_size < smallest.min_tx_size(block_flags[i])) {
 +            return refuse(i, error::transaction_undersize);
 +        }
  #endif
  
          for (auto const& tx : block.transactions()) {
 diff --git a/src/blockchain/test/batch_contextual_consensus.cpp b/src/blockchain/test/batch_contextual_consensus.cpp
-index 7af662bd..57bb8ef6 100644
+index 7af662bd..a0e1fccf 100644
 --- a/src/blockchain/test/batch_contextual_consensus.cpp
 +++ b/src/blockchain/test/batch_contextual_consensus.cpp
 @@ -36,6 +36,10 @@ namespace {
@@ -209,7 +216,7 @@ index 7af662bd..57bb8ef6 100644
  
      verdict answer{error::success, {}};
      answer.result = blockchain::validate_block_batch(fixture.chain(), settings,
-@@ -498,4 +596,53 @@ TEST_CASE("batch contextual consensus: noncanonical token payloads are not parse
+@@ -498,4 +596,82 @@ TEST_CASE("batch contextual consensus: noncanonical token payloads are not parse
          }
      }
  }
@@ -261,6 +268,35 @@ index 7af662bd..57bb8ef6 100644
 +            }
 +        }
 +    }
++}
++
++TEST_CASE("batch contextual consensus: on chipnet the minimum transaction size starts at the Euclid height (BCHN: Magnetic Anomaly)",
++          "[batch_contextual_consensus][tx_min_size][chipnet]") {
++    // Regtest blocks judged by the rules of chipnet heights 1 to 3, as the
++    // faster blocks tests judge them. Their coinbases take 91 bytes, under the
++    // 100 bytes chipnet holds transactions to from height 4001 only, although
++    // its flags carry bch_cleanstack from height 0.
++    chain_fixture fixture("batch_min_size_chipnet");
++    REQUIRE(fixture.created());
++    REQUIRE(fixture.start());
++    blockchain::settings settings(domain::config::network::chipnet);
++    settings.retarget = false;
++    std::vector<block_const_ptr> blocks;
++    auto prev = chain::block::genesis_regtest().hash();
++    for (uint32_t h = 1; h <= 3; ++h) {
++        auto block = mine_block(prev, h, 1'700'000'000 + h * 600, 0, {}, 0);
++        REQUIRE(block.transactions().front().serialized_size(true) < min_transaction_size_euclid);
++        prev = block.hash();
++        blocks.push_back(std::make_shared<domain::message::block const>(std::move(block)));
++    }
++    domain::message::header::list headers;
++    for (auto const& block : blocks) headers.push_back(block->header());
++    auto const added = fixture.organizer().add_headers(headers);
++    REQUIRE((added.headers_added == blocks.size() || added.error == error::stale_chain));
++    blockchain::batch_rejection rejection;
++    CHECK(blockchain::validate_block_batch(fixture.chain(), settings, domain::config::network::chipnet,
++        blocks, 1, rejection) == error::success);
++    CHECK_FALSE(rejection.block);
 +}
  #endif // KTH_CURRENCY_BCH
 diff --git a/src/blockchain/test/batch_sigchecks_activation.cpp b/src/blockchain/test/batch_sigchecks_activation.cpp
@@ -501,7 +537,7 @@ index 2da82ace..aa1af57a 100644
          {error::unspent_duplicate, "bad-txns-BIP30"},
          {error::missing_previous_output, "bad-txns-inputs-missingorspent"},
 diff --git a/src/node/test/local_block_admission.cpp b/src/node/test/local_block_admission.cpp
-index 293bf631..0842152d 100644
+index 293bf631..61f72ab2 100644
 --- a/src/node/test/local_block_admission.cpp
 +++ b/src/node/test/local_block_admission.cpp
 @@ -218,6 +218,33 @@ domain::chain::block overclaiming_block(hash_digest const& prev, uint32_t height
@@ -538,7 +574,7 @@ index 293bf631..0842152d 100644
  // `valid`'s header over a different body: the merkle root does not match.
  domain::chain::block wrong_body_for(domain::chain::block const& valid, uint32_t height) {
      domain::chain::transaction::list txs;
-@@ -606,4 +633,44 @@ TEST_CASE("submitblock RPC publishes acceptance and returns standard duplicates"
+@@ -606,4 +633,46 @@ TEST_CASE("submitblock RPC publishes acceptance and returns standard duplicates"
      REQUIRE(run.stop());
  }
  
@@ -565,10 +601,12 @@ index 293bf631..0842152d 100644
 +    auto const undersized = coinbase_sized_block(genesis, 1, 64);
 +    CHECK(request(undersized) == node::rpc::build_success("9", R"("bad-txns-undersize")"));
 +
-+    // Nothing connected, and the header tip back on genesis.
++    // Nothing connected, and the header tip back on genesis. On a chain where
++    // nothing ever was, the built-height marker has not been written at all.
 +    CHECK(run.connected_tip() == genesis);
 +    CHECK(run.connected_height() == 0u);
-+    CHECK(run.built_height() == 0u);
++    auto const built = run.chain().get_utxo_built_height();
++    CHECK(( ! built || *built == 0));
 +    CHECK(run.header_tip_height() == 0);
 +    CHECK_FALSE(run.chain().get_header(1));
 +    CHECK(request(undersized) == node::rpc::build_success("9", R"("duplicate-invalid")"));
