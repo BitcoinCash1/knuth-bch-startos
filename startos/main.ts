@@ -74,18 +74,17 @@ export const main = sdk.setupMain(async ({ effects }) => {
     const sv2Mode = 'full-template'
     const sv2ResponseTimeoutSeconds = '10'
     // Node Settings -> Coinbase Tag (sv2.coinbase_tag); empty writes nothing.
-    // With a P2Pool Chain Code, the P2Pool v2 tag instead: kth writes these
-    // bytes right after the height push, so they start with the length of one
-    // data push holding P2Poolv2 0x0F operator 0x0F node 0x0F chain. kth takes
-    // at most 40 bytes. The node line is always kept; the operator line gets
-    // the room left (11 characters with 'Knuth 1.7.0') and is cut to it.
+    // With a P2Pool Chain Code, the P2Pool v2 tag instead: P2Poolv2 0x0F
+    // operator 0x0F node 0x0F chain. kth writes the tag as one data push right
+    // after the height and takes at most 40 bytes of it. The node line is
+    // always kept; the operator line gets the room left (12 characters with
+    // 'Knuth 1.7.0') and is cut to it.
     const p2poolChain = store?.p2poolChain ?? ''
     const p2poolNode = 'Knuth 1.7.0'
-    const p2poolRoom = 39 - ['P2Poolv2', '', p2poolNode, p2poolChain].join('\x0f').length
+    const p2poolRoom = 40 - ['P2Poolv2', '', p2poolNode, p2poolChain].join('\x0f').length
     const p2poolOperator = (store?.p2poolOperator ?? '').slice(0, Math.max(0, p2poolRoom))
-    const p2poolBody = ['P2Poolv2', p2poolOperator, p2poolNode, p2poolChain].join('\x0f')
     const sv2CoinbaseTag = p2poolChain
-      ? String.fromCharCode(p2poolBody.length) + p2poolBody
+      ? ['P2Poolv2', p2poolOperator, p2poolNode, p2poolChain].join('\x0f')
       : (store?.coinbaseTag ?? '')
 
     knuthBinary = jdBinary

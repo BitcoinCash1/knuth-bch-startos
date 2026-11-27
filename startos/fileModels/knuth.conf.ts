@@ -271,11 +271,11 @@ export const fullConfigSpec = sdk.InputSpec.of({
   p2poolOperator: sdk.Value.text({
     name: i18n('P2Pool Operator'),
     description: i18n(
-      'The operator line of the P2Pool tag, for example your name. Used only with a P2Pool Chain Code. At most 11 characters: the room the 40-byte tag leaves after the node name, which is always kept. May be empty.',
+      'The operator line of the P2Pool tag, for example your name. Used only with a P2Pool Chain Code. At most 12 characters: the room the 40-byte tag leaves after the node name, which is always kept. May be empty.',
     ),
     required: false,
     default: null,
-    maxLength: 11,
+    maxLength: 12,
     patterns: [
       {
         regex: '^[ -~]*$',
