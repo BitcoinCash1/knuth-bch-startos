@@ -57,6 +57,11 @@ SCRIPT_FILTERS = FILTERS and os.environ.get("KTH_SCRIPT_FILTERS") == "1"
 # KTH_RPA_FILTERS=1, with KTH_FILTERS=1: the branch serves the input prefix
 # filter (filter type 2) for wallets of reusable payment addresses (row 1010).
 RPA_FILTERS = FILTERS and os.environ.get("KTH_RPA_FILTERS") == "1"
+# KTH_RPA_HEADERS=1, with KTH_RPA_FILTERS=1: kth also serves the filter headers
+# of type 2 (node.input_prefix_filter_headers), from records it keeps. Without
+# it, kth builds each type 2 filter when asked, keeps nothing for it, and
+# answers no getcfheaders or getcfcheckpt for type 2.
+RPA_HEADERS = RPA_FILTERS and os.environ.get("KTH_RPA_HEADERS") == "1"
 # The first filter type the branch does not serve.
 UNSERVED_TYPE = b"\x03" if RPA_FILTERS else b"\x02" if SCRIPT_FILTERS else b"\x01"
 # KTH_BLOOM=1 (bloom filters, BIP37): kth runs with node.bloom_filters and
@@ -219,6 +224,7 @@ def start_kth() -> None:
                     *(["--node.mmr_index", "true"] if SHV else []),
                     *(["--node.compact_filters", "true"] if FILTERS else []),
                     *(["--node.input_prefix_filters", "true"] if RPA_FILTERS else []),
+                    *(["--node.input_prefix_filter_headers", "true"] if RPA_HEADERS else []),
                     *(["--node.wallet_electrum", f"127.0.0.1:{NODE_WALLET_PORT}"] if WALLET_BIN or NODE_WALLET else []),
                     *(["--node.bloom_filters", "true"] if BLOOM else []),
                     "--net.outbound_connections", "1",
@@ -4021,7 +4027,7 @@ def rpa_wallet_filters(s: dict) -> None:
         peer = LightPeer(KTH_P2P_PORT)
         # The checkpoints, asked again while kth's pass has not reached the tip.
         checkpoints = None
-        for _ in range(10):
+        for _ in range(10 if RPA_HEADERS else 0):
             peer.send(b"getcfcheckpt", b"\x02" + hashes[tip])
             reply = peer.collect((b"cfcheckpt",), 1, quiet=30.0, limit=60.0)
             if reply:
@@ -4037,7 +4043,7 @@ def rpa_wallet_filters(s: dict) -> None:
         headers: list[bytes] = []
         chained = True
         start = 0
-        while start <= tip:
+        while RPA_HEADERS and start <= tip:
             stop = min(tip, start + 1999)
             peer.send(b"getcfheaders", b"\x02" + struct.pack("<I", start) + hashes[stop])
             reply = peer.collect((b"cfheaders",), 1, quiet=120.0, limit=600.0)
@@ -4054,10 +4060,17 @@ def rpa_wallet_filters(s: dict) -> None:
                 filter_hashes.append(filter_hash)
                 headers.append(header)
             start = stop + 1
-        checkpoints_ok = (chained and checkpoints is not None and len(filter_hashes) == tip + 1
-                          and len(checkpoints) == tip // 1000
-                          and all(checkpoints[i] == headers[(i + 1) * 1000] for i in range(len(checkpoints))))
-        seen["filter headers chain from zeros to the checkpoints"] = checkpoints_ok
+        if RPA_HEADERS:
+            checkpoints_ok = (chained and checkpoints is not None and len(filter_hashes) == tip + 1
+                              and len(checkpoints) == tip // 1000
+                              and all(checkpoints[i] == headers[(i + 1) * 1000] for i in range(len(checkpoints))))
+            seen["filter headers chain from zeros to the checkpoints"] = checkpoints_ok
+        else:
+            # Built when asked and nothing kept: no filter headers of type 2.
+            peer.send(b"getcfcheckpt", b"\x02" + hashes[tip])
+            peer.send(b"getcfheaders", b"\x02" + struct.pack("<I", 0) + hashes[min(tip, 1999)])
+            checkpoints_ok = not peer.collect((b"cfcheckpt", b"cfheaders"), None, quiet=10.0, limit=20.0)
+            seen["no type 2 cfcheckpt or cfheaders"] = checkpoints_ok
 
         # Every filter of the chain, 1,000 a request.
         served: dict[int, list[int]] = {}
@@ -4075,7 +4088,8 @@ def rpa_wallet_filters(s: dict) -> None:
                 size, o = read_compact(body, 33)
                 data = body[o:o + size]
                 good = (body[0] == 2 and body[1:33] == hashes[height] and o + size == len(body) and chained
-                        and sha256d(data) == filter_hashes[height] and data == rpa_encode(reference[height]))
+                        and (not RPA_HEADERS or sha256d(data) == filter_hashes[height])
+                        and data == rpa_encode(reference[height]))
                 try:
                     good = good and rpa_decode(data) == reference[height]
                 except ValueError:
@@ -4143,13 +4157,7 @@ def rpa_wallet_filters(s: dict) -> None:
         answers = len(peer.collect((b"cfilter",), 1, quiet=30.0, limit=60.0)) == 1
         seen["answers after them"] = answers
 
-        # The index keeps the filter hash and the filter header of every
-        # block for type 2 too, in a file of their own.
-        stored = subprocess.run(["docker", "exec", "kth", "sh", "-c",
-                                 "wc -c < /data/e2e/input_prefix_filter_headers"],
-                                capture_output=True, text=True).stdout.strip()
-        seen["filter header file bytes"] = stored
-        file_ok = stored.isdigit() and int(stored) == 48 + 64 * (tip + 1)
+        file_ok, seen["type 2 data kept"] = rpa_kept(tip)
 
         ok = bool(seen["kth at the tip"] and checkpoints_ok and filters_ok and scans_ok and thirty_ok
                   and download_ok and silent and answers and file_ok)
@@ -4197,17 +4205,42 @@ def wait_best(ask, best: str, seconds: int) -> bool:
     return False
 
 
-def rpa_served(port: int, hashes: list[bytes], tip: int) -> dict:
+def rpa_kept(tip: int) -> tuple[bool, dict]:
+    """What kth keeps for type 2 in its database directory: the filter hash
+    and header of every block in input_prefix_filter_headers, 48 + 64 bytes a
+    block, with the filter headers served; nothing without."""
+    listing = subprocess.run(["docker", "exec", "kth", "sh", "-c", "ls /data/e2e"],
+                             capture_output=True, text=True).stdout.split()
+    kept = [name for name in listing if "input_prefix" in name or "filter" in name]
+    stored = subprocess.run(["docker", "exec", "kth", "sh", "-c",
+                             "wc -c < /data/e2e/input_prefix_filter_headers 2>/dev/null"],
+                            capture_output=True, text=True).stdout.strip()
+    if RPA_HEADERS:
+        ok = stored.isdigit() and int(stored) == 48 + 64 * (tip + 1)
+    else:
+        ok = "input_prefix_filter_headers" not in listing and not any("input_prefix" in name for name in listing)
+    return ok, {"filter files": kept, "input_prefix_filter_headers bytes": stored or None}
+
+
+def rpa_served(port: int, hashes: list[bytes], tip: int, headers: bool = True) -> dict:
     """What one node serves of filter type 2 over P2P, for the blocks 0 to tip
     named by `hashes`: the checkpoints (getcfcheckpt), every filter hash with
     the filter header before each range (getcfheaders, 2,000 a request) and
     every filter (getcfilters, 1,000 a request). A request the node does not
-    answer is asked again a few times, while its index reaches the tip."""
+    answer is asked again a few times, while its index reaches the tip.
+    Without `headers` the node is not to answer getcfcheckpt or getcfheaders
+    for type 2, which is checked, and the filter hashes are those of its
+    filters, as a wallet takes them."""
     peer = LightPeer(port)
     view: dict = {"services": peer.services, "checkpoints": None, "previous": {}, "filter_hashes": [],
-                  "filters": {}}
+                  "filters": {}, "headers": headers}
     try:
-        for _ in range(10):
+        if not headers:
+            peer.send(b"getcfcheckpt", b"\x02" + hashes[tip])
+            peer.send(b"getcfheaders", b"\x02" + struct.pack("<I", 0) + hashes[min(tip, 1999)])
+            view["no cfcheckpt or cfheaders"] = not peer.collect((b"cfcheckpt", b"cfheaders"), None,
+                                                                quiet=10.0, limit=20.0)
+        for _ in range(10 if headers else 0):
             peer.send(b"getcfcheckpt", b"\x02" + hashes[tip])
             reply = peer.collect((b"cfcheckpt",), 1, quiet=20.0, limit=30.0)
             if reply:
@@ -4218,7 +4251,7 @@ def rpa_served(port: int, hashes: list[bytes], tip: int) -> dict:
                 break
             time.sleep(3)
         start = 0
-        while start <= tip:
+        while headers and start <= tip:
             stop = min(tip, start + 1999)
             body = b""
             for _ in range(10):
@@ -4247,7 +4280,79 @@ def rpa_served(port: int, hashes: list[bytes], tip: int) -> dict:
             start = stop + 1
     finally:
         peer.close()
+    if not headers:
+        view["filter_hashes"] = [sha256d(view["filters"][hashes[h]]) if hashes[h] in view["filters"] else b""
+                                 for h in range(tip + 1)]
     return view
+
+
+def rpa_cost(hashes: list[bytes], tip: int) -> dict:
+    """What a getcfilters of 1,000 blocks costs kth: one block read a filter,
+    timed from the request to the last cfilter, for type 2 and type 0, beside
+    a getdata of the same blocks; three times each."""
+    start = tip - 999
+    out: dict = {"blocks": f"{start}..{tip}"}
+    blocks = [call(BCHN, "getblock", hashes[h][::-1].hex(), 1)[0] for h in range(start, tip + 1)]
+    out["block bytes"] = sum(b["size"] for b in blocks)
+    out["transactions"] = sum(len(b["tx"]) for b in blocks)
+    for label, command, payload, wanted in (
+            ("type 2 getcfilters", b"getcfilters", b"\x02" + struct.pack("<I", start) + hashes[tip], b"cfilter"),
+            ("type 0 getcfilters", b"getcfilters", b"\x00" + struct.pack("<I", start) + hashes[tip], b"cfilter"),
+            ("getdata of the blocks", b"getdata",
+             compact_size(1000) + b"".join(struct.pack("<I", 2) + hashes[h] for h in range(start, tip + 1)),
+             b"block")):
+        times, received = [], 0
+        for _ in range(3):
+            peer = LightPeer(KTH_P2P_PORT)
+            try:
+                started = time.monotonic()
+                peer.send(command, payload)
+                got = peer.collect((wanted,), 1000, quiet=30.0, limit=600.0)
+                elapsed = time.monotonic() - started
+            finally:
+                peer.close()
+            times.append(round(elapsed * 1000) if len(got) == 1000 else None)
+            received = sum(len(body) for _, body in got)
+        out[label] = {"ms": times, "bytes received": received}
+    return out
+
+
+def rpa_peer_bound(hashes: list[bytes], tip: int) -> dict:
+    """A peer that asks for type 2 filters faster than it reads them: kth
+    answers its requests one at a time, sends each filter through the data
+    queue of the peer, two deep, and drops a peer with 16 requests waiting. A
+    second peer is served meanwhile."""
+    start = tip - 999
+    peer = LightPeer(KTH_P2P_PORT)
+    closed, received = False, 0
+    try:
+        for _ in range(40):
+            peer.send(b"getcfilters", b"\x02" + struct.pack("<I", start) + hashes[tip])
+        time.sleep(5)
+        end = time.time() + 180
+        while time.time() < end:
+            ready, _, _ = select.select([peer.sock], [], [], 10)
+            if not ready:
+                break
+            try:
+                chunk = peer.sock.recv(65536)
+            except OSError:
+                closed = True
+                break
+            if not chunk:
+                closed = True
+                break
+            received += len(chunk)
+    finally:
+        peer.close()
+    other = LightPeer(KTH_P2P_PORT)
+    try:
+        other.send(b"getcfilters", b"\x02" + struct.pack("<I", tip) + hashes[tip])
+        served = len(other.collect((b"cfilter",), 1, quiet=30.0, limit=60.0)) == 1
+    finally:
+        other.close()
+    return {"requests sent at once": 40, "disconnected": closed, "bytes received before": received,
+            "another peer served after": served}
 
 
 def rpa_chain_now() -> tuple[int, list[bytes], list[list[int]]]:
@@ -4272,15 +4377,24 @@ def rpa_views_agree(views: dict, hashes: list[bytes], reference: list[list[int]]
             header = sha256d(filter_hash + header)
             chained.append(header)
         headers[name] = chained
-        complete = (len(view["filter_hashes"]) == tip + 1 and len(view["filters"]) == tip + 1
-                    and view["checkpoints"] is not None)
-        previous_ok = complete and all(previous == (chained[start - 1] if start else bytes(32))
-                                       for start, previous in view["previous"].items())
-        checkpoints_ok = complete and view["checkpoints"] == [chained[(i + 1) * 1000] for i in range(tip // 1000)]
+        if view["headers"]:
+            complete = (len(view["filter_hashes"]) == tip + 1 and len(view["filters"]) == tip + 1
+                        and view["checkpoints"] is not None)
+            previous_ok = complete and all(previous == (chained[start - 1] if start else bytes(32))
+                                           for start, previous in view["previous"].items())
+            checkpoints_ok = complete and view["checkpoints"] == [chained[(i + 1) * 1000]
+                                                                  for i in range(tip // 1000)]
+        else:
+            # The filter hashes are those of the filters; no filter headers
+            # are served to check.
+            complete = len(view["filters"]) == tip + 1
+            previous_ok = complete
+            checkpoints_ok = complete and bool(view.get("no cfcheckpt or cfheaders"))
         filters_ok = complete and all(
             view["filters"].get(hashes[h]) == rpa_encode(reference[h])
             and sha256d(view["filters"][hashes[h]]) == view["filter_hashes"][h] for h in range(tip + 1))
         found[name] = {"NODE_CF": view["services"] is not None and bool(view["services"] & NODE_CF),
+                       "filter headers served": view["headers"],
                        "filters": len(view["filters"]), "filter hashes": len(view["filter_hashes"]),
                        "checkpoints": None if view["checkpoints"] is None else len(view["checkpoints"]),
                        "headers before each range chain": previous_ok,
@@ -4293,7 +4407,8 @@ def rpa_views_agree(views: dict, hashes: list[bytes], reference: list[list[int]]
     differs = next((h for h in range(tip + 1)
                     if kth["filters"].get(hashes[h]) != bchd["filters"].get(hashes[h])), None)
     same = (differs is None and kth["filter_hashes"] == bchd["filter_hashes"]
-            and headers["kth"] == headers["bchd"] and kth["checkpoints"] == bchd["checkpoints"])
+            and headers["kth"] == headers["bchd"]
+            and (not kth["headers"] or kth["checkpoints"] == bchd["checkpoints"]))
     found["kth and bchd byte for byte"] = same
     if differs is not None:
         found["first block they differ at"] = differs
@@ -4365,9 +4480,15 @@ def rpa_kth_bchd_neutrino(s: dict) -> None:
         best = hashes[tip][::-1].hex()
         seen["bchd at the tip"] = wait_best(bchd_call, best, 900)
         seen["kth at the tip"] = wait_best(lambda m: call(KTH, m), best, 300)
-        views = {"kth": rpa_served(KTH_P2P_PORT, hashes, tip), "bchd": rpa_served(BCHD_P2P_PORT, hashes, tip)}
+        seen["kth serves type 2 filter headers"] = RPA_HEADERS
+        views = {"kth": rpa_served(KTH_P2P_PORT, hashes, tip, RPA_HEADERS),
+                 "bchd": rpa_served(BCHD_P2P_PORT, hashes, tip)}
         before_ok, seen["before"], before_headers = rpa_views_agree(views, hashes, reference, tip)
         seen["before"]["tip"] = tip
+        seen["cost"] = rpa_cost(hashes, tip)
+        seen["a peer that asks faster than it reads"] = rpa_peer_bound(hashes, tip)
+        bound = seen["a peer that asks faster than it reads"]
+        bound_ok = bound["disconnected"] and bound["another peer served after"]
 
         heights = {name: call(BCHN, "getblockheader", rpa[name], True)[0]["height"]
                    for name in ("block16", "block8", "block31")}
@@ -4407,7 +4528,8 @@ def rpa_kth_bchd_neutrino(s: dict) -> None:
         moved_next = call(BCHN, "getblock", hashes2[fork + 1][::-1].hex(), 1)[0]["tx"]
         seen["the new block at the fork holds the payment and another, then the 31 inputs"] = (
             rpa["txid8"] in moved and extra in moved and rpa["txid31"] in moved_next and funding in moved_next)
-        views = {"kth": rpa_served(KTH_P2P_PORT, hashes2, tip2), "bchd": rpa_served(BCHD_P2P_PORT, hashes2, tip2)}
+        views = {"kth": rpa_served(KTH_P2P_PORT, hashes2, tip2, RPA_HEADERS),
+                 "bchd": rpa_served(BCHD_P2P_PORT, hashes2, tip2)}
         after_ok, seen["after"], after_headers = rpa_views_agree(views, hashes2, reference2, tip2)
         seen["after"]["tip"] = tip2
         kept_below = after_headers["kth"][:fork] == before_headers["kth"][:fork]
@@ -4439,13 +4561,10 @@ def rpa_kth_bchd_neutrino(s: dict) -> None:
             seen["neutrino from kth and bchd, both agreeing"]["runs agreed by"] = sorted(
                 {m.get("peers") for search in result.get("searches") or [] for m in search.get("matches") or []})
 
-        stored = subprocess.run(["docker", "exec", "kth", "sh", "-c",
-                                 "wc -c < /data/e2e/input_prefix_filter_headers"],
-                                capture_output=True, text=True).stdout.strip()
-        seen["filter header file bytes"] = stored
-        file_ok = stored.isdigit() and int(stored) == 48 + 64 * (tip2 + 1)
+        file_ok, seen["type 2 data kept"] = rpa_kept(tip2)
 
         ok = bool(seen["bchd at the tip"] and seen["kth at the tip"] and before_ok and neutrino_before_ok
+                  and bound_ok
                   and seen["bchd at the new tip"] and seen["kth at the new tip"]
                   and seen["the new block at the fork holds the payment and another, then the 31 inputs"]
                   and after_ok and kept_below and changed_above and silent and answers and neutrino_after_ok

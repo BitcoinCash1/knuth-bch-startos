@@ -25,17 +25,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # The input prefix filter served by the index of #1057, on the
-          # domain part of k-nuth/kth#1087: the neutrino suites, kth's node
-          # suite, the filter rows on a chain of 2,100 blocks and more (1003,
-          # 1004, 1010), and row 1016: kth against the bchd that serves type
-          # 2 (gcash/bchd#785 head) before and after a reorganization, and
-          # the Neutrino library's RPA search (gcash/neutrino#56 head).
-          # This run: k-nuth/kth master a0a5455d (#1080) merged in.
-          - name: type2-index
+          # The input prefix filter served by the index of #1057 on the
+          # domain part of k-nuth/kth#1087 (k-nuth/kth#1093), with the
+          # commits in kth-patches applied on node/input-prefix-filter-index
+          # here and the tree checked against the one to be pushed. Two jobs,
+          # one build: by default type 2 is built when asked and nothing is
+          # kept for it (no type 2 filter headers); with
+          # node.input_prefix_filter_headers its records are kept and served.
+          # Row 1016 runs in both, against the bchd of gcash/bchd#785 and the
+          # Neutrino RPA search of gcash/neutrino#56.
+          - name: type2-on-demand
             branch: node/input-prefix-filter-index
-            merge: a0a5455d72d3e7f643e50b1fba0f25976661bdcc
-            merge_tree: 995e9122cb625ef136d074e7506a9bdbb3f0f986
+            patches: kth-patches
+            patched_tree: a30341aa249cd99b7554cece40d501fd0ecee8e0
             gcc: '16'
             options: -o neutrino=True
             targets: kth_domain_neutrino_test kth_node_neutrino_test
@@ -43,6 +45,21 @@ jobs:
             e2e: true
             filters: true
             rpa_filters: true
+            neutrino: true
+            bchd: true
+            long: 2100
+          - name: type2-headers
+            branch: node/input-prefix-filter-index
+            patches: kth-patches
+            patched_tree: a30341aa249cd99b7554cece40d501fd0ecee8e0
+            gcc: '16'
+            options: -o neutrino=True
+            targets: kth_domain_neutrino_test kth_node_neutrino_test
+            suites: kth_domain_neutrino_test kth_node_neutrino_test
+            e2e: true
+            filters: true
+            rpa_filters: true
+            rpa_headers: true
             neutrino: true
             bchd: true
             long: 2100
@@ -90,7 +107,14 @@ jobs:
         shell: bash
       - name: Fetch kth ${{ matrix.branch }}
         run: |
-          if [ -n "${{ matrix.merge }}" ]; then
+          if [ -n "${{ matrix.patches }}" ]; then
+            # Commits not pushed yet, applied on the branch: the tree must be
+            # the one of the commits to be pushed.
+            git clone --quiet --depth 5 --branch "${{ matrix.branch }}" https://github.com/CyberAshven/kth.git kth-src
+            git -C kth-src -c user.name=e2e -c user.email=e2e@localhost am --quiet "$PWD/${{ matrix.patches }}"/*.patch
+            echo "patched tree $(git -C kth-src rev-parse 'HEAD^{tree}'), expected ${{ matrix.patched_tree }}"
+            test "$(git -C kth-src rev-parse 'HEAD^{tree}')" = "${{ matrix.patched_tree }}"
+          elif [ -n "${{ matrix.merge }}" ]; then
             # The branch with k-nuth/kth master merged in, before that merge is
             # pushed: the same merge here, whose tree must be the one of the
             # merge to be pushed.
@@ -461,6 +485,7 @@ jobs:
           KTH_BLOOM: ${{ matrix.bloom && '1' || '0' }}
           KTH_SCRIPT_FILTERS: ${{ matrix.script_filters && '1' || '0' }}
           KTH_RPA_FILTERS: ${{ matrix.rpa_filters && '1' || '0' }}
+          KTH_RPA_HEADERS: ${{ matrix.rpa_headers && '1' || '0' }}
           KTH_NEUTRINO_BIN: ${{ matrix.neutrino && format('{0}/neutrino-client', github.workspace) || '' }}
           KTH_BCHD_BIN: ${{ matrix.bchd && format('{0}/bchd', github.workspace) || '' }}
           KTH_RPA_NEUTRINO_BIN: ${{ matrix.bchd && format('{0}/rpa-neutrino-client', github.workspace) || '' }}

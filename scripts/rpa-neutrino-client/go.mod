@@ -29,9 +29,9 @@ require (
 	lukechampine.com/uint128 v1.3.0 // indirect
 )
 
-// gcash/neutrino#56 at its head, and the gcash/bchd and gcash/bchutil
+// gcash/neutrino#56 at its head (c50ff0a), and the gcash/bchd and gcash/bchutil
 // commits it names in its own go.mod, whose replacements do not reach here.
-replace github.com/gcash/neutrino => github.com/CyberAshven/neutrino v0.0.0-20261126072534-9dcb407fc97c
+replace github.com/gcash/neutrino => github.com/CyberAshven/neutrino v0.0.0-20261127085455-c50ff0a65147
 
 replace github.com/gcash/bchd => github.com/CyberAshven/bchd v0.22.1-0.20261116202941-60816369d828
 

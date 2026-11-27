@@ -2,8 +2,8 @@ github.com/CyberAshven/bchd v0.22.1-0.20261116202941-60816369d828 h1:f13N5NS950D
 github.com/CyberAshven/bchd v0.22.1-0.20261116202941-60816369d828/go.mod h1:IPcaQcXMDBhvxTjXSqgaa8v8g/7lC7gax7rEujtbuH0=
 github.com/CyberAshven/bchutil v0.0.0-20261126051837-bcad7d10b2c3 h1:ZTc1vmIpEpfEOPRHcQ4xlYGK1oyAkMf7eSFXaC+X6eM=
 github.com/CyberAshven/bchutil v0.0.0-20261126051837-bcad7d10b2c3/go.mod h1:PUl4oVSi94FsHVSOFdAaYG0iFOEG2xrXjet1EEqOSss=
-github.com/CyberAshven/neutrino v0.0.0-20261126072534-9dcb407fc97c h1:1byHZ6QuFtnj+ONuxIAWXb8BiwguGzsUl+XAV2WedN4=
-github.com/CyberAshven/neutrino v0.0.0-20261126072534-9dcb407fc97c/go.mod h1:fF1XSwENlM6a1x45mKVjwQ0fOBTTctzdcp47AJ8kYhk=
+github.com/CyberAshven/neutrino v0.0.0-20261127085455-c50ff0a65147 h1:6SeVgg+pje9iRoA6dKW0ZQccXHIwwae5Tu53DqTESjU=
+github.com/CyberAshven/neutrino v0.0.0-20261127085455-c50ff0a65147/go.mod h1:fF1XSwENlM6a1x45mKVjwQ0fOBTTctzdcp47AJ8kYhk=
 github.com/aead/siphash v1.0.1 h1:FwHfE/T45KPKYuuSAKyyvE+oPWcaQ+CUmFW0bPlM+kg=
 github.com/aead/siphash v1.0.1/go.mod h1:Nywa3cDsYNNK3gaciGTWPwHt0wlpNV15vwmswBAUSII=
 github.com/bluele/gcache v0.0.2 h1:WcbfdXICg7G/DGBh1PFfcirkWOQV+v077yF1pSy3DGw=

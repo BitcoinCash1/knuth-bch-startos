@@ -1,0 +1,392 @@
+From 57ba6af8826601da9f61b7c86f18ec829b9f2b5b Mon Sep 17 00:00:00 2001
+From: CyberAshven <130158492+CyberAshven@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 11:59:12 +0300
+Subject: [PATCH] feat(node): build the input prefix filter when asked and keep
+ nothing for it, its filter headers an option
+
+node.input_prefix_filters now serves getcfilters for filter type 2 alone:
+each filter is built from its block in the service of the peer that asked,
+as for the regular filter, and nothing is kept for it, in memory or on
+disk; nothing grows with the chain for it. getcfheaders and getcfcheckpt
+for type 2 then get no answer, as for a type the node does not serve, and a
+wallet takes the filter hashes from the filters.
+
+node.input_prefix_filter_headers (off by default, needs
+node.input_prefix_filters) keeps what the previous commits kept: the filter
+hash and filter header of every block in input_prefix_filter_headers, read
+and written by the compact filter index, and serves getcfheaders and
+getcfcheckpt for type 2 from them. compact_filter_index_files names what
+the index keeps in each mode, and the node runs the index with it.
+
+Turned off again, the file is neither read nor written; turned on again, it
+is taken up where it stopped.
+
+Tests: by default the index keeps the regular filter alone, no type 2 file
+is created, type 2 filters are built and its filter headers are not
+answered; on one database the headers mode, then the default with blocks
+connected meanwhile (the file untouched, no headers answered), then the
+headers mode again, which takes the file up to the tip; the parser.
+---
+ .../kth/node/detail/compact_filters.hpp       |  29 +++-
+ src/node/include/kth/node/full_node.hpp       |   6 +-
+ src/node/include/kth/node/settings.hpp        |   9 +-
+ src/node/src/detail/compact_filters.cpp       |  10 ++
+ src/node/src/full_node.cpp                    |  17 +-
+ src/node/src/parser.cpp                       |  11 +-
+ src/node/src/settings.cpp                     |   1 +
+ src/node/test/compact_filters.cpp             | 152 ++++++++++++++++++
+ 8 files changed, 210 insertions(+), 25 deletions(-)
+
+diff --git a/src/node/include/kth/node/detail/compact_filters.hpp b/src/node/include/kth/node/detail/compact_filters.hpp
+index 8b7b95be..c385621b 100644
+--- a/src/node/include/kth/node/detail/compact_filters.hpp
++++ b/src/node/include/kth/node/detail/compact_filters.hpp
+@@ -51,16 +51,19 @@ namespace detail {
+ // serve it. Both are built from the block alone.
+ //
+ // A filter is built from its block when a peer asks for it, by the peer's own
+-// service: nothing of it is shared.
++// service: nothing of it is shared or kept.
+ //
+ // A filter header chains back to the first block, so the node keeps the filter
+-// hash and the filter header of every block of the connected chain, for each
+-// filter type it serves: 64 bytes a block and a type, each type in a file of
+-// its own (compact_filter_store.hpp). One task owns those records, the index.
+-// It follows the connected chain, reading each new block once for all the
+-// types, and it answers what is asked about the records. The peers' services
+-// reach it through `compact_filter_channels` and wait for its answer; nothing
+-// else touches the records.
++// hash and the filter header of every block of the connected chain, for the
++// regular filter, and for the input prefix filter only when it is set to serve
++// its filter headers too: 64 bytes a block and a type, each type in a file of
++// its own (compact_filter_store.hpp). Otherwise nothing is kept for the input
++// prefix filter, and its getcfheaders and getcfcheckpt are not answered. One
++// task owns those records, the index. It follows the connected chain, reading
++// each new block once for all the types it keeps, and it answers what is asked
++// about the records. The peers' services reach it through
++// `compact_filter_channels` and wait for its answer; nothing else touches the
++// records.
+ 
+ template <typename Request, typename Answer>
+ struct compact_filter_query {
+@@ -161,6 +164,16 @@ struct compact_filter_index_file {
+     kth::path path;
+ };
+ 
++// What the index of a node keeps, in its database directory: the records of
++// the regular filter in `compact_filter_headers`, and, with
++// `input_prefix_headers` (node.input_prefix_filter_headers), those of the
++// input prefix filter in `input_prefix_filter_headers`. Without it the input
++// prefix filter has no records: each filter is built when asked and nothing
++// grows with the chain for it.
++[[nodiscard]] KND_API
++std::vector<compact_filter_index_file> compact_filter_index_files(kth::path const& directory,
++    bool input_prefix_headers);
++
+ // The index: until `channels` is closed. For each of `files`, it loads the
+ // file and drops the records of blocks that left the connected chain. It reads
+ // the blocks some type has no record of, each block once for every type that
+diff --git a/src/node/include/kth/node/full_node.hpp b/src/node/include/kth/node/full_node.hpp
+index 02d351e5..dae2332b 100644
+--- a/src/node/include/kth/node/full_node.hpp
++++ b/src/node/include/kth/node/full_node.hpp
+@@ -256,10 +256,8 @@ private:
+ #if defined(KTH_WITH_NEUTRINO) && ! defined(__EMSCRIPTEN__)
+     // Set when node.compact_filters is on. The peers' services and the index
+     // read it, and both end before the node does.
+-    kth::path compact_filter_file_;
+-    // Where the index keeps the records of the input prefix filter, when
+-    // node.input_prefix_filters is on too.
+-    kth::path input_prefix_filter_file_;
++    // Where the index keeps its records: the database directory.
++    kth::path compact_filter_directory_;
+     // node.compact_filters on a pruning node: start() refuses it.
+     bool compact_filters_refused_{false};
+     std::unique_ptr<detail::compact_filter_blocks> compact_filter_blocks_;
+diff --git a/src/node/include/kth/node/settings.hpp b/src/node/include/kth/node/settings.hpp
+index 9aefd7d7..fce42094 100644
+--- a/src/node/include/kth/node/settings.hpp
++++ b/src/node/include/kth/node/settings.hpp
+@@ -62,9 +62,14 @@ struct KND_API settings {
+     // only by a build with the option `neutrino`.
+     bool compact_filters;
+     // Serve the input prefix filter (filter type 2, for wallets of reusable
+-    // payment addresses) beside the regular filter. Needs compact_filters;
+-    // read only by a build with the option `neutrino`.
++    // payment addresses) beside the regular filter, each filter built from its
++    // block when asked, nothing kept. Needs compact_filters; read only by a
++    // build with the option `neutrino`.
+     bool input_prefix_filters;
++    // Also serve its filter headers (getcfheaders, getcfcheckpt), from records
++    // of every block kept in a file: 64 bytes a block. Needs
++    // input_prefix_filters.
++    bool input_prefix_filter_headers;
+     // Serve wallets that load a bloom filter (BIP37). On unless turned off in
+     // a build with the option `bloom_filters`, as on other Bitcoin Cash nodes;
+     // off, and refused, in a build without it.
+diff --git a/src/node/src/detail/compact_filters.cpp b/src/node/src/detail/compact_filters.cpp
+index e5269e1b..81f63739 100644
+--- a/src/node/src/detail/compact_filters.cpp
++++ b/src/node/src/detail/compact_filters.cpp
+@@ -453,6 +453,16 @@ std::optional<hash_list> compact_filter_range(blockchain::block_chain const& cha
+     return blocks;
+ }
+ 
++std::vector<compact_filter_index_file> compact_filter_index_files(kth::path const& directory,
++    bool input_prefix_headers) {
++    std::vector<compact_filter_index_file> files;
++    files.push_back({domain::message::regular_compact_filter, directory / "compact_filter_headers"});
++    if (input_prefix_headers) {
++        files.push_back({domain::message::input_prefix_compact_filter, directory / "input_prefix_filter_headers"});
++    }
++    return files;
++}
++
+ ::asio::awaitable<void> run_compact_filter_index(compact_filter_channels& channels,
+     compact_filter_blocks blocks, kth::path file, compact_filter_index_pace pace) {
+     std::vector<compact_filter_index_file> files;
+diff --git a/src/node/src/full_node.cpp b/src/node/src/full_node.cpp
+index 11a7452b..019b5b41 100644
+--- a/src/node/src/full_node.cpp
++++ b/src/node/src/full_node.cpp
+@@ -108,11 +108,10 @@ full_node::full_node(configuration const& configuration)
+     auto const served = configuration.node.compact_filters && ! compact_filters_refused_;
+     auto const filters = uint64_t(domain::message::version::service::node_compact_filters);
+     network_settings_.services = (network_settings_.services & ~filters) | (served ? filters : 0);
+-    compact_filter_file_ = configuration.database.directory / "compact_filter_headers";
+     // The input prefix filter has no service bit of its own: it is served
+     // beside the regular filter, by a node with the bit, and a wallet that
+     // wants it asks such a node.
+-    input_prefix_filter_file_ = configuration.database.directory / "input_prefix_filter_headers";
++    compact_filter_directory_ = configuration.database.directory;
+ #endif
+ #endif
+ }
+@@ -538,13 +537,13 @@ full_node::~full_node() {
+     }
+     // The index on a thread of its own: it owns the records, and its files are
+     // written from there, off the network pool. It ends when the network
+-    // closes its channels. One index for every filter type served, each type
+-    // in its own file: a block is read once for all of them.
+-    std::vector<detail::compact_filter_index_file> files;
+-    files.push_back({domain::message::regular_compact_filter, compact_filter_file_});
+-    if (compact_filter_blocks_->input_prefix) {
+-        files.push_back({domain::message::input_prefix_compact_filter, input_prefix_filter_file_});
+-    }
++    // closes its channels. One index for every filter type whose filter
++    // headers are served, each type in its own file: a block is read once for
++    // all of them. The input prefix filter has records only when its filter
++    // headers are asked for; otherwise its filters are built when asked and
++    // nothing is kept for them.
++    auto files = detail::compact_filter_index_files(compact_filter_directory_,
++        compact_filter_blocks_->input_prefix && node_settings_.input_prefix_filter_headers);
+     ::asio::thread_pool pool(1);
+     co_await ::asio::co_spawn(pool.get_executor(),
+         detail::run_compact_filter_index(network_.compact_filters(), *compact_filter_blocks_, std::move(files)),
+diff --git a/src/node/src/parser.cpp b/src/node/src/parser.cpp
+index 894062e3..1779643b 100644
+--- a/src/node/src/parser.cpp
++++ b/src/node/src/parser.cpp
+@@ -340,8 +340,11 @@ void add_settings(CLI::App& app, configuration& cfg) {
+         "Serve compact block filters to light wallets: getcfilters, getcfheaders and getcfcheckpt "
+         "(default false). Not on a pruning node.");
+     app.add_option("--node.input_prefix_filters",           cfg.node.input_prefix_filters,
+-        "Also serve the input prefix filter (filter type 2), for wallets of reusable payment addresses "
+-        "(default false). Needs node.compact_filters.");
++        "Also serve the input prefix filter (filter type 2), for wallets of reusable payment addresses, "
++        "each filter built when asked and nothing kept (default false). Needs node.compact_filters.");
++    app.add_option("--node.input_prefix_filter_headers",    cfg.node.input_prefix_filter_headers,
++        "Also serve the filter headers of the input prefix filter (getcfheaders, getcfcheckpt), kept for "
++        "every block in a file, 64 bytes a block (default false). Needs node.input_prefix_filters.");
+ #endif
+     add_enum_option(app, "--node.display",
+         cfg.node.display, parse_display_mode,
+@@ -425,6 +428,10 @@ bool check_compact_filters(configuration const& cfg, std::ostream& error) {
+         error << "Error: node.input_prefix_filters needs node.compact_filters." << std::endl;
+         return false;
+     }
++    if (cfg.node.input_prefix_filter_headers && ! cfg.node.input_prefix_filters) {
++        error << "Error: node.input_prefix_filter_headers needs node.input_prefix_filters." << std::endl;
++        return false;
++    }
+     return true;
+ }
+ 
+diff --git a/src/node/src/settings.cpp b/src/node/src/settings.cpp
+index 741dab59..e97f7850 100644
+--- a/src/node/src/settings.cpp
++++ b/src/node/src/settings.cpp
+@@ -19,6 +19,7 @@ settings::settings()
+     , ds_proofs_enabled(false)
+     , compact_filters(false)
+     , input_prefix_filters(false)
++    , input_prefix_filter_headers(false)
+ #if defined(KTH_WITH_BLOOM_FILTERS)
+     , bloom_filters(true)
+ #else
+diff --git a/src/node/test/compact_filters.cpp b/src/node/test/compact_filters.cpp
+index d828a08d..226c6b79 100644
+--- a/src/node/test/compact_filters.cpp
++++ b/src/node/test/compact_filters.cpp
+@@ -1195,6 +1195,158 @@ TEST_CASE("input prefix filter index computes again the records of a file it can
+     CHECK(store.at(103) == expected[103]);
+ }
+ 
++// By default (node.input_prefix_filters alone) the input prefix filter is
++// built from its block when asked and nothing is kept for it; its filter
++// headers are kept, and served, only with node.input_prefix_filter_headers.
++
++TEST_CASE("input prefix filter built when asked keeps no records and answers no filter headers by default",
++    "[compact filters][input prefix][index]") {
++    filtered_chain c("ipf_on_demand", 108, 108, 101);
++    auto const dir = std::filesystem::temp_directory_path() / ("kth_ipf_dir_on_demand_" + std::to_string(process_id()));
++    std::error_code ec;
++    std::filesystem::remove_all(dir, ec);
++    std::filesystem::create_directories(dir, ec);
++
++    // What the index of a node keeps, by mode.
++    auto const files = compact_filter_index_files(dir, false);
++    REQUIRE(files.size() == 1);
++    CHECK(files[0].filter_type == regular_type);
++    CHECK(files[0].path.string() == (dir / "compact_filter_headers").string());
++    auto const with_headers = compact_filter_index_files(dir, true);
++    REQUIRE(with_headers.size() == 2);
++    CHECK(with_headers[0].filter_type == regular_type);
++    CHECK(with_headers[1].filter_type == input_prefix_type);
++    CHECK(with_headers[1].path.string() == (dir / "input_prefix_filter_headers").string());
++
++    auto const regular = records_of(c, 108);
++    with_index_of(c, files, pace_of(256), [&](compact_filter_channels& channels) -> ::asio::awaitable<void> {
++        // The regular filter, from its records.
++        auto const answered = co_await ask_compact_filter_headers(channels, headers_request(0, c.hash(108)));
++        REQUIRE(answered);
++        CHECK(answered->filter_hashes == filter_hashes(regular, 0, 108));
++        CHECK(co_await ask_compact_filter_checkpoint(channels, checkpoint_request(c.hash(108))));
++        // No filter headers of the input prefix filter, as for a type the
++        // node does not serve.
++        CHECK( ! co_await ask_compact_filter_headers(channels, headers_request(0, c.hash(108), input_prefix_type)));
++        CHECK( ! co_await ask_compact_filter_headers(channels,
++            headers_request(108, c.hash(108), input_prefix_type)));
++        CHECK( ! co_await ask_compact_filter_checkpoint(channels, checkpoint_request(c.hash(108), input_prefix_type)));
++    });
++
++    // Its filters are built from their blocks when asked.
++    auto const blocks = c.blocks(true);
++    CHECK(blocks.serves(input_prefix_type));
++    for (size_t const height : {size_t(0), size_t(100), size_t(101), size_t(108)}) {
++        CAPTURE(height);
++        auto const filter = run_on_own_context(build_compact_filter(blocks, input_prefix_type, c.hash(height)));
++        REQUIRE(filter);
++        CHECK(*filter == filter_of(c.block(height), input_prefix_type));
++    }
++
++    // Nothing of it in the directory: the file of the regular filter alone.
++    CHECK( ! std::filesystem::exists(dir / "input_prefix_filter_headers"));
++    size_t entries = 0;
++    for (auto const& entry : std::filesystem::directory_iterator(dir)) {
++        CHECK(entry.path().filename().string() == "compact_filter_headers");
++        ++entries;
++    }
++    CHECK(entries == 1);
++    std::filesystem::remove_all(dir, ec);
++}
++
++TEST_CASE("input prefix filter headers follow the setting across runs on one database",
++    "[compact filters][input prefix][index]") {
++    filtered_chain c("ipf_modes", 110, 108, 101);
++    auto const dir = std::filesystem::temp_directory_path() / ("kth_ipf_dir_modes_" + std::to_string(process_id()));
++    std::error_code ec;
++    std::filesystem::remove_all(dir, ec);
++    std::filesystem::create_directories(dir, ec);
++    auto const file = dir / "input_prefix_filter_headers";
++    auto const expected = records_of(c, 110, input_prefix_type);
++
++    // With its filter headers: records kept and answered.
++    with_index_of(c, compact_filter_index_files(dir, true), pace_of(256),
++        [&](compact_filter_channels& channels) -> ::asio::awaitable<void> {
++        auto const whole = co_await ask_compact_filter_headers(channels,
++            headers_request(0, c.hash(108), input_prefix_type));
++        REQUIRE(whole);
++        CHECK(whole->filter_hashes == filter_hashes(expected, 0, 108));
++    });
++    REQUIRE(stored_in(file).size() == 109);
++    auto const kept = bytes_of(file);
++
++    // Then without, two blocks connected meanwhile: no filter headers of the
++    // input prefix filter, and its file neither read nor written.
++    c.connect(109, 110);
++    with_index_of(c, compact_filter_index_files(dir, false), pace_of(256),
++        [&](compact_filter_channels& channels) -> ::asio::awaitable<void> {
++        CHECK(co_await ask_compact_filter_headers(channels, headers_request(0, c.hash(110))));
++        CHECK( ! co_await ask_compact_filter_headers(channels, headers_request(0, c.hash(108), input_prefix_type)));
++        CHECK( ! co_await ask_compact_filter_headers(channels, headers_request(0, c.hash(110), input_prefix_type)));
++        CHECK( ! co_await ask_compact_filter_checkpoint(channels, checkpoint_request(c.hash(110), input_prefix_type)));
++    });
++    CHECK(bytes_of(file) == kept);
++    auto const built = run_on_own_context(build_compact_filter(c.blocks(true), input_prefix_type, c.hash(110)));
++    REQUIRE(built);
++    CHECK(*built == filter_of(c.block(110), input_prefix_type));
++
++    // With them again: the file is taken up where it stopped, to the tip.
++    with_index_of(c, compact_filter_index_files(dir, true), pace_of(256),
++        [&](compact_filter_channels& channels) -> ::asio::awaitable<void> {
++        auto const whole = co_await ask_compact_filter_headers(channels,
++            headers_request(0, c.hash(110), input_prefix_type));
++        REQUIRE(whole);
++        CHECK(whole->filter_hashes == filter_hashes(expected, 0, 110));
++    });
++    auto const store = stored_in(file);
++    REQUIRE(store.size() == 111);
++    CHECK(store.tip() == c.hash(110));
++    for (size_t height = 0; height <= 110; ++height) {
++        CAPTURE(height);
++        CHECK(store.at(height) == expected[height]);
++    }
++    std::filesystem::remove_all(dir, ec);
++}
++
++TEST_CASE("input prefix filter headers are off unless asked for, and need the input prefix filter",
++    "[compact filters][input prefix][parser]") {
++    {
++        node::parser parser(domain::config::network::regtest);
++        char const* argv[]{"kth", "--network", "regtest", "--node.compact_filters", "true",
++            "--node.input_prefix_filters", "true"};
++        std::ostringstream error;
++        REQUIRE(parser.parse(7, argv, error));
++        CHECK(parser.configured.node.input_prefix_filters);
++        CHECK( ! parser.configured.node.input_prefix_filter_headers);
++    }
++    {
++        node::parser parser(domain::config::network::regtest);
++        char const* argv[]{"kth", "--network", "regtest", "--node.compact_filters", "true",
++            "--node.input_prefix_filters", "true", "--node.input_prefix_filter_headers", "true"};
++        std::ostringstream error;
++        REQUIRE(parser.parse(9, argv, error));
++        CHECK(parser.configured.node.input_prefix_filter_headers);
++    }
++    {
++        node::parser parser(domain::config::network::regtest);
++        char const* argv[]{"kth", "--network", "regtest", "--node.compact_filters", "true",
++            "--node.input_prefix_filter_headers", "true"};
++        std::ostringstream error;
++        CHECK( ! parser.parse(7, argv, error));
++        CHECK(error.str().find("node.input_prefix_filter_headers needs node.input_prefix_filters")
++            != std::string::npos);
++    }
++    {
++        node::parser parser(domain::config::network::regtest);
++        char const* argv[]{"kth", "--network", "regtest", "--node.compact_filters", "true",
++            "--node.input_prefix_filters", "true", "--node.input_prefix_filter_headers", "true",
++            "--db.prune_keep_blocks", "288"};
++        std::ostringstream error;
++        CHECK( ! parser.parse(11, argv, error));
++        CHECK(error.str().find("not allowed on a pruning node") != std::string::npos);
++    }
++}
++
+ TEST_CASE("the input prefix filter is off unless asked for, needs compact filters, and is refused on a pruning node",
+     "[compact filters][input prefix][parser]") {
+     {
+-- 
+2.56.0.windows.4
+
