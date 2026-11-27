@@ -387,6 +387,9 @@ def start_kth(label: str, sigop_fee: str | None) -> None:
     ]
     if sigop_fee is not None:
         argv += ["--node.sigop_fee_satoshis", sigop_fee]
+    # TB_KTH_ARGS: more kth options, as a package passes them (the chipnet
+    # backend package writes node.minimum_output_satoshis = 0).
+    argv += os.environ.get("TB_KTH_ARGS", "").split()
     EVIDENCE.setdefault("kth_argv", []).append(argv)
     subprocess.run(["docker", "rm", "-f", CONTAINER], capture_output=True, timeout=30)
     result = subprocess.run(
@@ -934,7 +937,9 @@ def run() -> None:
 
     if FOLLOWER == "kth":
         progress("starting kth (node.sigop_fee_satoshis at its default)")
-        start_kth("default", None)
+        # TB_KTH_SIGOP_FEE: the sigop fee the package writes (0), named
+        # explicitly; unset leaves kth's default.
+        start_kth("default", os.environ.get("TB_KTH_SIGOP_FEE") or None)
     else:
         progress("starting BCHN B")
         start_bchn_b()

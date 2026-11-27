@@ -23,8 +23,16 @@ name: kth templates while blocks come seconds apart
 # fixed, the rows compare the template rule alone (run 45858901992). This
 # run adds a stream of 1 sat/byte payments through the bursts and counts the
 # ones A holds and the follower misses, before and after the relay change
-# (run 45870287666). This run: the retry on the next tip, and
+# (run 45870287666). Run 45901479927: the retry on the next tip, and
 # initialblockdownload as BCHN with P2Pool restarted during bursts.
+# This run: the chipnet backend package build, CyberAshven/kth
+# test/kth-chipnet-backend (the Start9 JD build with k-nuth/kth master and
+# every template, relay, initialblockdownload, proposal and block download fix
+# merged in), with node.sigop_fee_satoshis = 0 and
+# node.minimum_output_satoshis = 0 as the package writes them, against BCHN
+# B on the same rows: polling alone on loopback and at 100 ms, and with
+# P2Pool's P2P listener (a peer that serves no blocks) at 100 ms; four P2Pool
+# restarts each.
 # Runs when this file or the script changes, or by hand.
 on:
   push:
@@ -41,85 +49,42 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # (a) Before: the relay branch with the chunk fold; after: the same
-          # with the retry on the next tip (test/relay-retry-with-chunk-fold).
-          - name: kth-relay-fold-lan
+          - name: kth-backend-lan-poll
             follower: kth
             repo: CyberAshven/kth
-            ref: f1e682499461f6037e1c74f8a028cf1c7bb2b4ec
-            delay_ms: ""
-            node_p2p: "0"
-          - name: kth-relay-fold-wan
-            follower: kth
-            repo: CyberAshven/kth
-            ref: f1e682499461f6037e1c74f8a028cf1c7bb2b4ec
-            delay_ms: "100"
-            node_p2p: "0"
-          - name: kth-retry-fold-lan
-            follower: kth
-            repo: CyberAshven/kth
-            ref: 19da39c86552e3d1aaf8e0c8039aed5d3a74407e
-            delay_ms: ""
-            node_p2p: "0"
-          - name: kth-retry-fold-wan
-            follower: kth
-            repo: CyberAshven/kth
-            ref: 19da39c86552e3d1aaf8e0c8039aed5d3a74407e
-            delay_ms: "100"
-            node_p2p: "0"
-          # (b) Before: master with the chunk fold; after: the same with
-          # initialblockdownload as BCHN (test/ibd-like-bchn-with-chunk-fold).
-          # Four P2Pool restarts each, right after a five-block burst.
-          - name: kth-master-fold-lan-restarts
-            follower: kth
-            repo: CyberAshven/kth
-            ref: ebbb6ded2e815fe3d04ab8c794c581da47fe40c2
+            ref: f9f48ecf93e33b66fecfe7c89342b7db5ecdd1cb
             delay_ms: ""
             node_p2p: "0"
             restarts: "4"
-          - name: kth-master-fold-wan-restarts
+          - name: kth-backend-wan-poll
             follower: kth
             repo: CyberAshven/kth
-            ref: ebbb6ded2e815fe3d04ab8c794c581da47fe40c2
+            ref: f9f48ecf93e33b66fecfe7c89342b7db5ecdd1cb
             delay_ms: "100"
             node_p2p: "0"
             restarts: "4"
-          - name: kth-ibd-fold-lan-restarts
+          - name: kth-backend-wan-p2p
             follower: kth
             repo: CyberAshven/kth
-            ref: e57d70c169d055f612342ed93b0e966b3ec71eb9
-            delay_ms: ""
-            node_p2p: "0"
-            restarts: "4"
-          - name: kth-ibd-fold-wan-restarts
-            follower: kth
-            repo: CyberAshven/kth
-            ref: e57d70c169d055f612342ed93b0e966b3ec71eb9
+            ref: f9f48ecf93e33b66fecfe7c89342b7db5ecdd1cb
             delay_ms: "100"
-            node_p2p: "0"
+            node_p2p: "1"
             restarts: "4"
           - name: bchn-lan-poll
             follower: bchn
             delay_ms: ""
             node_p2p: "0"
-          - name: bchn-wan-restarts
+            restarts: "4"
+          - name: bchn-wan-poll
             follower: bchn
             delay_ms: "100"
             node_p2p: "0"
             restarts: "4"
-          # kth node tests alone on the PR branches as pushed (no fold).
-          - name: tests-retry-4aa55528
-            follower: kth
-            repo: CyberAshven/kth
-            ref: 4aa5552818a00dc0da733ecbb4416002ec3c1329
-            node_tests: true
-            skip_e2e: "1"
-          - name: tests-ibd-44b7444d
-            follower: kth
-            repo: CyberAshven/kth
-            ref: 44b7444d215b9225f9df2fb2f5e69289b6fabe15
-            node_tests: true
-            skip_e2e: "1"
+          - name: bchn-wan-p2p
+            follower: bchn
+            delay_ms: "100"
+            node_p2p: "1"
+            restarts: "4"
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 240
@@ -229,8 +194,15 @@ jobs:
               fi
               RPC=True
               if grep -q -F "\"rpc\": [\"jsonrpc\"" conanfile.py; then RPC=jsonrpc; fi
+              # Optional features k-nuth/kth master put behind Conan options:
+              # each one this recipe has is turned on.
+              FEATURES=""
+              for option in sv2 socks5 i2p; do
+                if grep -q -E "^ *\"$option\": \[True, False\]" conanfile.py; then FEATURES="$FEATURES -o $option=True"; fi
+              done
+              echo "optional features:${FEATURES:- none}"
               time conan install conanfile.py --version 1.5.2 -of build --build=missing \
-                -o currency=BCH -o rpc=$RPC -o tests=True \
+                -o currency=BCH -o rpc=$RPC -o tests=True $FEATURES \
                 -o "utxoz/*:with_tests=False" -o "utxoz/*:with_benchmarks=False" \
                 -o "utxoz/*:with_large_benchmarks=False" \
                 -s compiler.cppstd=23 -s build_type=Release
@@ -322,6 +294,8 @@ jobs:
           export TB_DELAY_MS="${{ matrix.delay_ms }}"
           export TB_NODE_P2P="${{ matrix.node_p2p }}"
           export TB_RESTARTS="${{ matrix.restarts || '0' }}"
+          export TB_KTH_SIGOP_FEE="0"
+          export TB_KTH_ARGS="--node.minimum_output_satoshis 0"
           export P2POOL_BIN="$PWD/p2pool/target/release/p2poolv2"
           if [ "$TB_FOLLOWER" = "kth" ]; then
             export KTH_IMAGE="$IMAGE"
