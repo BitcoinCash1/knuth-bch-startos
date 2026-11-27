@@ -1,0 +1,3286 @@
+From e1acfdfbdf226da828e86227df581c27aeb1e0cd Mon Sep 17 00:00:00 2001
+From: CyberAshven <130158492+CyberAshven@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 11:56:22 +0300
+Subject: [PATCH] rpc: add scantxoutset
+
+scantxoutset "action" ( [scanobjects,...] ) finds the unspent outputs
+whose locking bytecode or token category a caller names, with one walk
+of the UTXO set and no index. "start" takes addr(), raw() and tok()
+scan objects, as strings or {"desc", "range"} objects; "status" gives
+the progress of the running scan and "abort" stops it, one scan at a
+time. The answer has the fields BCHN 29.1.0 gives: success,
+searched_items, the unspents in outpoint order with tokenData as
+gettxout shows it, total_amount and token_total_amounts. Pickaxe finds
+a token covenant output with it on a first start (#1092).
+
+The caller names what it looks for, so it is off unless the operator
+sets rpc.scantxoutset, and off it answers -32601 naming that setting.
+On, it answers callers on loopback and the single addresses named by
+rpc.scantxoutset_caller, and refuses every other caller before its
+parameters are read; a caller entry that names more than one host is
+refused at startup, and a node with it on and bound beyond loopback
+logs one warning. Scan objects and outputs found are logged at no level
+and named in no error: an error names a scan object by its position.
+What the server read and wrote for the request is zeroed once the
+answer is written. A scan takes at most 1000 scan objects, a raw()
+script of at most 10000 bytes, and an answer of at most 32 MiB.
+
+The walk runs on a thread of its own under a read lease of the UTXO
+store, not the exclusive window, so lookups, mempool admission and
+templates go on beside it. Every 1024 entries it asks whether block
+connection waits for the window, and if so it stops, lets the block in
+and walks again: a block waits at most 1024 entries for a scan, and a
+complete scan saw the set between two blocks.
+---
+ docs/json-rpc.md                              |   92 ++
+ .../kth/blockchain/interface/block_chain.hpp  |   84 ++
+ .../kth/database/databases/utxoz_database.hpp |   34 +
+ src/node/CMakeLists.txt                       |    6 +-
+ src/node/include/kth/node/rpc/dispatch.hpp    |   25 +-
+ src/node/include/kth/node/rpc/error.hpp       |    2 +
+ src/node/include/kth/node/rpc/json.hpp        |   23 +-
+ src/node/include/kth/node/rpc/query.hpp       |    9 +
+ src/node/include/kth/node/rpc/scan.hpp        |  138 ++
+ src/node/include/kth/node/rpc/server.hpp      |    7 +
+ src/node/include/kth/node/rpc/wipe.hpp        |   73 ++
+ src/node/include/kth/node/settings.hpp        |   19 +
+ src/node/src/parser.cpp                       |   16 +
+ src/node/src/rpc/dispatch.cpp                 |   26 +-
+ src/node/src/rpc/json.cpp                     |   46 +-
+ src/node/src/rpc/methods.cpp                  |    3 +
+ src/node/src/rpc/query.cpp                    |   23 +-
+ src/node/src/rpc/scan.cpp                     | 1136 +++++++++++++++++
+ src/node/src/rpc/server.cpp                   |   80 +-
+ src/node/src/rpc/wipe.cpp                     |   30 +
+ src/node/src/settings.cpp                     |   28 +
+ src/node/test/rpc_scan.cpp                    |  820 ++++++++++++
+ 22 files changed, 2687 insertions(+), 33 deletions(-)
+ create mode 100644 src/node/include/kth/node/rpc/scan.hpp
+ create mode 100644 src/node/include/kth/node/rpc/wipe.hpp
+ create mode 100644 src/node/src/rpc/scan.cpp
+ create mode 100644 src/node/src/rpc/wipe.cpp
+ create mode 100644 src/node/test/rpc_scan.cpp
+
+diff --git a/docs/json-rpc.md b/docs/json-rpc.md
+index bb074f5c..56bd0886 100644
+--- a/docs/json-rpc.md
++++ b/docs/json-rpc.md
+@@ -105,6 +105,7 @@ counterpart.
+ | `getindexinfo` (always `{}`, with or without `index_name`) | — (there is no index to describe) | — |
+ | `decoderawtransaction` | `kth_chain_transaction_construct_from_data` | `transaction::from_data()` |
+ | `gettxout` | — (no C-API UTXO reader yet) | `get_utxo()` + `utxo_resolve()` + `mempool_ref().spender()` / `resolve()` |
++| `scantxoutset` (off unless `rpc.scantxoutset`; see [below](#scantxoutset)) | — (the C-API has no walk of the UTXO set) | `utxo_walk_entries()` + `utxo_count()` |
+ | `getrawmempool` | `kth_chain_get_mempool_txids` | `get_mempool_txids()` |
+ 
+ | `getrawmempool` (`verbose=true`: entries keyed by txid) | `kth_chain_get_mempool_txids` (+ `kth_chain_get_mempool_entry`) | `get_mempool_txids()` (+ `get_mempool_entry()`) |
+@@ -221,6 +222,97 @@ against), `confirmations`, `value` in BCH, `scriptPubKey` and `tokenData` as
+ output that a mempool transaction spends is `null`, and an output of a mempool
+ transaction is returned with `0` confirmations.
+ 
++## scantxoutset
++
++`scantxoutset "action" ( [scanobjects,...] )` finds, with one walk of the UTXO
++set and no index, the unspent outputs whose locking bytecode or token category
++a caller names. It is for clients the operator runs against their own node:
++[Pickaxe](https://github.com/CyberAshven/pickaxe-miner), for one, finds a token
++covenant output with it on a first start. The caller names what it looks for,
++so a node that answered it to anyone would learn what each caller watches.
++That is why it is **off unless the operator turns it on**, and why, on, it
++answers only the callers the operator allows. Wallets that use the nodes of
++others find their outputs with compact block filters, which name nothing
++(see [compact-filters.md](compact-filters.md)).
++
++```ini
++rpc.scantxoutset = true            # off by default
++rpc.scantxoutset_caller = 100.64.0.7   # optional; repeat for more callers
++```
++
++**Who it answers.**
++
++- JSON-RPC only, behind the RPC credentials; never a P2P message, and no
++  other method answers it.
++- Off, every call gets `-32601` (method not found) with a message that names
++  `rpc.scantxoutset`. A client that falls back to another source when a node
++  does not have the call (Pickaxe asks an Electrum server) keeps working, and
++  the operator reads which setting turns it on.
++- On, it answers callers on loopback (`127.0.0.0/8`, `::1`, and those as
++  IPv4-mapped IPv6), and each address named by `rpc.scantxoutset_caller`, such
++  as the operator's own computer calling the node over Tailscale. Every other
++  caller gets `-32601` with a message naming `rpc.scantxoutset_caller`, before
++  its parameters are read.
++- Each `rpc.scantxoutset_caller` is one IP address. A host name, a range, the
++  wildcard addresses `0.0.0.0` and `::`, a multicast or the broadcast address
++  is refused at startup.
++- With it on and `rpc.bind` beyond loopback, the node logs one warning at
++  startup that names `rpc.scantxoutset` and the allowed callers.
++
++**What it keeps.** Nothing of a request outlives its answer. The scan objects
++and the outputs found are logged at no level, appear in no error message (an
++error names a scan object by its position, `scanobjects[2]`), and are not
++kept: the request body, its parsed copies, what the walk found and the answer
++are zeroed once the answer is written, and when the scan is aborted, fails or
++its connection closes. Only counts are logged, at debug level.
++
++**Limits.** One scan at a time; a second `start` gets `-8` "Scan already in
++progress, use action "abort" or "status"". At most 1000 scan objects per scan
++(BCHN takes any number, each up to a million scripts for a ranged descriptor
++and a thousand by default). A `raw()` script of at most 10000 bytes, the
++longest locking bytecode a spendable output has. An answer of at most 32 MiB,
++counted as an upper bound while outputs are found; a scan that finds more ends
++with `-8`.
++
++**Actions and answers**, as BCHN 29.1.0 gives them:
++
++- `start` scans for the scan objects and answers `success` (false when the scan
++  was aborted, with what was found until then), `searched_items` (the outputs
++  of the set the walk visited), `unspents` in outpoint order, each with `txid`,
++  `vout`, `scriptPubKey` (hex), `amount`, `height` and, for an output with
++  tokens, `tokenData` as `gettxout` shows it; `total_amount`; and
++  `token_total_amounts`, the fungible amount of each category as a string,
++  when token amounts were found.
++- `status` answers `{"progress": n}`, in %, while a scan runs, and `null`
++  otherwise.
++- `abort` stops the running scan and answers `true`, or `false` when none runs.
++
++**Scan objects** are strings or `{"desc": "...", "range": n}` objects:
++`addr(<address>)` (a cashaddr of the node's network, with or without its
++prefix, token-aware or not, P2PKH, P2SH or P2SH32, or a legacy address),
++`raw(<hex locking bytecode>)` and `tok(<64-hex category>)`. kth takes no
++ranged descriptors and no keys: `pk()`, `pkh()`, `combo()`, `multi()` and
++`sh()` are refused with `-5`, saying that only `addr()`, `raw()` and `tok()`
++are taken. A `range`, which only ranged descriptors use, is checked as BCHN
++checks it and otherwise ignored.
++
++**How the walk shares the set.** The walk holds a read lease on the UTXO set,
++not the exclusive window, so lookups, mempool admission and templates go on
++alongside it. Every 1024 entries it asks whether block connection waits for
++the window; if so it stops there, lets the block in, and starts again from the
++beginning. A block therefore never waits more than 1024 entries for a scan,
++and a scan that answers `success: true` saw the whole set as it stood between
++two blocks. While blocks come faster than one walk takes, as in the initial
++sync, the scan keeps starting over; `status` shows the progress of the current
++walk and `abort` ends it.
++
++Differences from BCHN: the access rules and limits above; error messages that
++name a scan object by its position, not its text; and the answer has the
++fields of BCHN 29.1.0, not the `height` and `bestblock` and the per-output
++`coinbase`, `blockhash` and `confirmations` that BCHN 29.2.0 added. A build
++with the option `utxoz_reference`, whose UTXO set holds places in the block
++files and not outputs, refuses `start` with `-32601`.
++
+ ## testmempoolaccept
+ 
+ `testmempoolaccept ["<hex>"] [allowhighfees]` answers whether the mempool would
+diff --git a/src/blockchain/include/kth/blockchain/interface/block_chain.hpp b/src/blockchain/include/kth/blockchain/interface/block_chain.hpp
+index 65d22e30..1f9ae397 100644
+--- a/src/blockchain/include/kth/blockchain/interface/block_chain.hpp
++++ b/src/blockchain/include/kth/blockchain/interface/block_chain.hpp
+@@ -665,6 +665,90 @@ struct KB_API block_chain {
+             [&](auto const& db) { return db.for_each_utxo(std::forward<F>(callback)); });
+     }
+ 
++    /// Whether a writer waits for the UTXO window. Read under the gate's
++    /// mutex, so it is exact when read and may be stale at once: for a long
++    /// reader deciding to step aside, never for granting anything.
++    [[nodiscard]] bool utxo_writer_waiting() const {
++        return utxo_gate_.writers_waiting() != 0;
++    }
++
++    /// How a walk of the UTXO set under a read lease ended.
++    enum class utxo_walk_end {
++        /// Every entry was visited, and nothing changed the set meanwhile.
++        complete,
++        /// A writer asked for the window and the walk stopped to let it in.
++        yielded,
++        /// The caller's stop() said to stop.
++        stopped,
++        /// The store refused the lease, or could not be walked in full.
++        unreadable,
++    };
++
++#ifndef KTH_UTXOZ_REFERENCE_MODE
++    /// Walk every UTXO with its stored entry under a READ LEASE, stepping aside
++    /// whenever a writer waits for the window.
++    ///
++    /// For a reader that walks the whole set and must not hold up block
++    /// connection (scantxoutset). utxo_for_each() walks under the window, so a
++    /// connect batch, every lookup and every other reader wait for the whole
++    /// walk. Here the lease excludes only the window, as any lease does, and
++    /// find() and resolve() go on alongside. They share nothing the walk reads
++    /// that either of them writes: find() writes only its own probe counters;
++    /// resolve() writes its resolution counters and reads older versions
++    /// through the file cache, under a lock of its own; the walk reads the
++    /// active containers as find() does and maps every older version itself,
++    /// outside the cache, and a version file holds no lock (UTXO-Z 2.2.0).
++    ///
++    /// Every `check_every` entries the walk asks the gate whether a writer
++    /// waits, and if one does it stops there and returns `yielded`. The lease
++    /// ends with the walk and the writer is admitted; a caller that walks again
++    /// waits in the gate behind it. So a block waits at most `check_every`
++    /// entries for a walk, and a walk that returns `complete` saw the set as it
++    /// stood between two windows, all of it at one connected tip. The count of
++    /// waiting writers is read under the gate's mutex, so it is exact when read;
++    /// a writer that starts waiting just after is seen at the next check.
++    ///
++    /// stop() is asked at the same points; true ends the walk with `stopped`.
++    ///
++    /// UTXO-Z offers no way to stop a walk early. A std::exception from the
++    /// callback is reported as a failed walk, so the walk is stopped with an
++    /// exception of a type of its own, which the store lets through and which
++    /// ends here. The version files the walk had open close as it unwinds.
++    template <typename Visit, typename Stop>
++    [[nodiscard]]
++    utxo_walk_end utxo_walk_entries(Visit&& visit, Stop&& stop, size_t check_every = 1024) const {
++        struct step_aside {};
++        auto lease = utxo_gate_.read();
++        if ( ! lease) {
++            return utxo_walk_end::unreadable;
++        }
++        auto ending = utxo_walk_end::complete;
++        size_t until_check = check_every;
++        auto entry = [&](utxoz::raw_outpoint const& key, uint32_t height,
++                         std::span<uint8_t const> stored) {
++            if (--until_check == 0) {
++                until_check = check_every;
++                if (stop()) {
++                    ending = utxo_walk_end::stopped;
++                    throw step_aside{};
++                }
++                if (utxo_writer_waiting()) {
++                    ending = utxo_walk_end::yielded;
++                    throw step_aside{};
++                }
++            }
++            visit(key, height, stored);
++        };
++        try {
++            auto const walked = utxoz_db_.with_read(*lease,
++                [&](auto const& db) { return db.for_each_entry(entry); });
++            return walked ? ending : utxo_walk_end::unreadable;
++        } catch (step_aside const&) {
++            return ending;
++        }
++    }
++#endif
++
+     // UTXO-Z size (number of UTXOs in the set)
+     [[nodiscard]]
+     /// How many UTXOs the store holds.
+diff --git a/src/database/include/kth/database/databases/utxoz_database.hpp b/src/database/include/kth/database/databases/utxoz_database.hpp
+index ebf7363d..92884b8f 100644
+--- a/src/database/include/kth/database/databases/utxoz_database.hpp
++++ b/src/database/include/kth/database/databases/utxoz_database.hpp
+@@ -405,6 +405,40 @@ struct KD_API utxoz_database {
+         return true;
+     }
+ 
++#ifndef KTH_UTXOZ_REFERENCE_MODE
++    /// Iterate over every UTXO with what is stored for it: the key, the height
++    /// of the block that created it, and the stored bytes, which are those of a
++    /// utxo_entry (the wire output, then the height, the median time past and
++    /// the coinbase flag). Full mode only: a reference-mode entry is a place in
++    /// the block files, not the output.
++    ///
++    /// @param callback Callable with signature
++    ///        void(utxoz::raw_outpoint const&, uint32_t, std::span<uint8_t const>)
++    /// @return Same contract as for_each_utxo(): false if the store is closed or
++    ///         the walk could not read every version file it needed, and a
++    ///         partial walk is not reported through the callback.
++    ///
++    /// UTXO-Z reports a std::exception raised by the callback as a failed walk.
++    /// An exception of another type passes through it unchanged, and the
++    /// version files the walk had open are closed on the way out: that is how
++    /// block_chain::utxo_walk_entries() stops a walk early.
++    template <typename F>
++    [[nodiscard]]
++    bool for_each_entry(F&& callback) const {
++        if ( ! is_open()) {
++            return false;
++        }
++        auto const walked = db_->for_each_entry(std::forward<F>(callback));
++        if ( ! walked) {
++            spdlog::error("[utxoz_database] Walking the UTXO entries failed: {}; the walk stopped "
++                "where it failed and what it visited is a subset, not the set",
++                utxoz_error_name(walked.error()));
++            return false;
++        }
++        return true;
++    }
++#endif
++
+     /// Set the bloom filter for skip-insert optimization during IBD.
+     /// When set, apply_delta_raw will skip inserts/deletes for keys not in the filter.
+     void set_utxo_bloom(std::shared_ptr<utxo_bloom_filter const> bloom) {
+diff --git a/src/node/CMakeLists.txt b/src/node/CMakeLists.txt
+index 49facf37..3cdd7534 100644
+--- a/src/node/CMakeLists.txt
++++ b/src/node/CMakeLists.txt
+@@ -192,7 +192,9 @@ if(KTH_WITH_RPC AND NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+     src/rpc/mining.cpp
+     src/rpc/query.cpp
+     src/rpc/methods.cpp
++    src/rpc/scan.cpp
+     src/rpc/server.cpp
++    src/rpc/wipe.cpp
+   )
+ endif()
+ 
+@@ -313,7 +315,9 @@ set(kth_headers
+   include/kth/node/rpc/mining.hpp
+   include/kth/node/rpc/query.hpp
+   include/kth/node/rpc/chain_progress.hpp
++  include/kth/node/rpc/scan.hpp
+   include/kth/node/rpc/server.hpp
++  include/kth/node/rpc/wipe.hpp
+ 
+   # Optional gRPC server (compiled only when KTH_WITH_GRPC is set).
+   include/kth/node/grpc_rpc/transport.hpp
+@@ -535,7 +539,7 @@ if (ENABLE_TEST AND NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+   if(KTH_WITH_RPC AND NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+     target_sources(kth_node_test PRIVATE
+       test/rpc_json.cpp test/rpc_mining.cpp test/rpc_query.cpp test/rpc_dispatch.cpp
+-      test/rpc_server.cpp)
++      test/rpc_server.cpp test/rpc_scan.cpp)
+   endif()
+ 
+   # gRPC transport tests run a real generated client against the real transport.
+diff --git a/src/node/include/kth/node/rpc/dispatch.hpp b/src/node/include/kth/node/rpc/dispatch.hpp
+index 8d244b43..3fa05f98 100644
+--- a/src/node/include/kth/node/rpc/dispatch.hpp
++++ b/src/node/include/kth/node/rpc/dispatch.hpp
+@@ -10,12 +10,14 @@
+ #include <expected>
+ #include <functional>
+ #include <memory>
++#include <optional>
+ #include <string>
+ #include <string_view>
+ #include <variant>
+ #include <vector>
+ 
+ #include <asio/awaitable.hpp>
++#include <asio/ip/address.hpp>
+ #include <asio/experimental/channel_select.hpp>
+ #include <boost/unordered/unordered_flat_map.hpp>
+ 
+@@ -37,6 +39,8 @@ struct job_store;
+ 
+ namespace kth::node::rpc {
+ 
++class scan_service;
++
+ // How long a long-polled getblocktemplate is held before a mempool change
+ // alone answers it, BIP22's "after some time". Transactions arrive all the
+ // time, so a pool answered on each one would be polling again. A new tip
+@@ -72,6 +76,15 @@ struct method_context {
+     // The long-polled getblocktemplate's minimum wait for a mempool change.
+     // Tests shorten it.
+     std::chrono::steady_clock::duration longpoll_wait = longpoll_mempool_wait;
++    // The address the request came from, for methods that answer only some
++    // callers (scantxoutset). Unknown when the server could not read it, or
++    // without a server.
++    std::optional<::asio::ip::address> peer = std::nullopt;
++    // The server's scantxoutset state; without one, scantxoutset is off.
++    scan_service* scans = nullptr;
++    // Set by the dispatcher for a method registered as sensitive: the server
++    // zeroes what it read and wrote for this request once it has answered.
++    bool sensitive = false;
+ };
+ 
+ // Why a request stopped waiting. connection_closed is a connection that is
+@@ -115,7 +128,11 @@ struct dispatcher {
+ 
+     // Complete registration before concurrent handle() calls begin. Install
+     // help last: its results capture the complete method catalog.
+-    void add(std::string method, handler_fn handler);
++    //
++    // A `sensitive` method's request names what its caller looks for: its
++    // params and its answer are zeroed once the envelope is built, and the
++    // server zeroes what it read and wrote for it (scantxoutset).
++    void add(std::string method, handler_fn handler, bool sensitive = false);
+     [[nodiscard]] bool has(std::string_view method) const;
+ 
+     // The registered method names, sorted.
+@@ -132,7 +149,11 @@ private:
+             return std::hash<std::string_view>{}(value);
+         }
+     };
+-    boost::unordered_flat_map<std::string, handler_fn, method_hash, std::equal_to<>> methods_;
++    struct registered {
++        handler_fn handler;
++        bool sensitive = false;
++    };
++    boost::unordered_flat_map<std::string, registered, method_hash, std::equal_to<>> methods_;
+     std::vector<std::string> method_names_;
+ };
+ 
+diff --git a/src/node/include/kth/node/rpc/error.hpp b/src/node/include/kth/node/rpc/error.hpp
+index f3107b0a..58b54f43 100644
+--- a/src/node/include/kth/node/rpc/error.hpp
++++ b/src/node/include/kth/node/rpc/error.hpp
+@@ -25,6 +25,8 @@ enum class error_code : int {
+     parse_error      = -32700,
+     // Application-level (Bitcoin RPC_MISC_ERROR family).
+     misc_error       = -1,
++    // A parameter of the wrong JSON type (RPC_TYPE_ERROR).
++    type_error       = -3,
+     invalid_parameter = -8,
+     deserialization_error = -22,
+     verify_error = -25,
+diff --git a/src/node/include/kth/node/rpc/json.hpp b/src/node/include/kth/node/rpc/json.hpp
+index 96a6f741..5e87374a 100644
+--- a/src/node/include/kth/node/rpc/json.hpp
++++ b/src/node/include/kth/node/rpc/json.hpp
+@@ -53,8 +53,11 @@ std::optional<int64_t> params_int(std::string_view params_json, size_t index,
+ std::optional<bool> params_bool(std::string_view params_json, size_t index, bool fallback);
+ 
+ // Build the response envelopes. `result_raw` / `id_raw` are already-serialized
+-// JSON fragments and are emitted verbatim.
+-std::string build_success(std::string_view id_raw, std::string_view result_raw);
++// JSON fragments and are emitted verbatim. With `wipe_text`, what the envelope
++// was built in is zeroed before it is freed, as for an answer that must not
++// outlive its request (scantxoutset); the caller wipes the envelope itself.
++std::string build_success(std::string_view id_raw, std::string_view result_raw,
++                          bool wipe_text = false);
+ std::string build_error(std::string_view id_raw, int code, std::string_view message);
+ 
+ // Ergonomic wrapper over simdjson's low-level string_builder. It owns comma and
+@@ -63,6 +66,13 @@ std::string build_error(std::string_view id_raw, int code, std::string_view mess
+ struct writer {
+     writer();
+ 
++    // A writer whose buffer starts at `capacity` bytes. Sized for the whole
++    // document, the buffer never grows; growing frees the outgrown buffer with
++    // a copy of what was written, which wipe() cannot reach. An escaped string
++    // asks for six bytes per character before it is written, so the size is
++    // the document plus six times its longest string.
++    explicit writer(size_t capacity);
++
+     writer& begin_object();
+     writer& end_object();
+     writer& begin_array();
+@@ -97,10 +107,19 @@ struct writer {
+     // Finalize to an owned JSON string.
+     std::string str();
+ 
++    // Zero what was written so far.
++    void wipe() noexcept;
++
++    // Whether the buffer is still the one it started with, so that wipe()
++    // reaches every copy of what was written.
++    [[nodiscard]] bool grown() const noexcept;
++
+ private:
+     void pre_value();
+ 
+     simdjson::builder::string_builder b_;
++    // Where the buffer was when the writer was built, to tell whether it grew.
++    char const* initial_data_ = nullptr;
+     std::vector<bool> first_;   // per nesting level: is the next element the first?
+     bool after_key_ = false;    // a key() was just written; value follows a colon
+ };
+diff --git a/src/node/include/kth/node/rpc/query.hpp b/src/node/include/kth/node/rpc/query.hpp
+index 34c8dc3d..9e148a9a 100644
+--- a/src/node/include/kth/node/rpc/query.hpp
++++ b/src/node/include/kth/node/rpc/query.hpp
+@@ -16,6 +16,7 @@
+ #include <kth/blockchain/header_index.hpp>
+ #include <kth/domain/chain/block.hpp>
+ #include <kth/domain/chain/header.hpp>
++#include <kth/domain/chain/token_data.hpp>
+ #include <kth/domain/chain/transaction.hpp>
+ #include <kth/domain/config/network.hpp>
+ #include <kth/domain/machine/script_flags.hpp>
+@@ -32,6 +33,14 @@ struct mempool_entry_info;
+ 
+ namespace kth::node::rpc {
+ 
++struct writer;
++
++// A "tokenData" object, into an object the caller has opened: the category,
++// the fungible amount as a string and the NFT, if any, with its capability
++// and commitment. Every output with token data is shown this way
++// (decoderawtransaction, getrawtransaction, getblock, gettxout, scantxoutset).
++void write_token_data(writer& w, domain::chain::token_data_t const& token);
++
+ // Wire-serialize a transaction / block to a lowercase hex string
+ // (getrawtransaction / getblock).
+ std::string transaction_to_hex(domain::chain::transaction const& tx);
+diff --git a/src/node/include/kth/node/rpc/scan.hpp b/src/node/include/kth/node/rpc/scan.hpp
+new file mode 100644
+index 00000000..262b8d15
+--- /dev/null
++++ b/src/node/include/kth/node/rpc/scan.hpp
+@@ -0,0 +1,138 @@
++// Copyright (c) 2016-present Knuth Project developers.
++// Distributed under the MIT software license, see the accompanying
++// file COPYING or http://www.opensource.org/licenses/mit-license.php.
++
++#ifndef KTH_NODE_RPC_SCAN_HPP
++#define KTH_NODE_RPC_SCAN_HPP
++
++#include <cstddef>
++#include <cstdint>
++#include <expected>
++#include <memory>
++#include <optional>
++#include <span>
++#include <string>
++#include <string_view>
++#include <thread>
++#include <vector>
++
++#include <asio/awaitable.hpp>
++#include <asio/ip/address.hpp>
++
++#include <kth/domain/config/network.hpp>
++#include <kth/node/rpc/error.hpp>
++#include <kth/node/rpc/json.hpp>
++#include <kth/node/settings.hpp>
++
++namespace kth::blockchain {
++struct block_chain;
++} // namespace kth::blockchain
++
++namespace kth::node::rpc {
++
++struct method_context;
++
++// scantxoutset: the unspent outputs of the UTXO set whose locking bytecode, or
++// whose token category, a caller names. One walk of the set, with no index.
++//
++// The caller names what it looks for, so the call is for clients the operator
++// runs against this node, and it is built so that it cannot become a way for a
++// wallet to tell another person's node what it watches:
++//
++//   - JSON-RPC only, behind the RPC credentials. Off unless turned on with
++//     rpc.scantxoutset.
++//   - Even on, it answers callers on loopback, and each address the operator
++//     names in rpc.scantxoutset_caller; every other caller is refused before
++//     its parameters are read.
++//   - What a caller looked for and what was found for it are logged at no
++//     level and named in no error; an error says which scan object it is
++//     about by its position. They are zeroed once the answer is written, or
++//     the scan aborted or failed, wherever the server held them.
++//   - One scan at a time, of at most max_scan_objects objects, with an answer
++//     of at most max_scan_answer_size bytes.
++//
++// The walk takes a read lease and gives way to block connection: see
++// block_chain::utxo_walk_entries.
++
++// Scan objects one start takes. BCHN takes any number, each up to a
++// million scripts for a ranged descriptor and a thousand by default; kth takes
++// no ranged descriptors, and a thousand objects is that default as addr()
++// objects. Pickaxe sends one.
++inline constexpr size_t max_scan_objects = 1000;
++
++// The longest raw() script: the longest locking bytecode a spendable output
++// has (MAX_SCRIPT_SIZE). BCHN keeps no longer one in its UTXO set.
++inline constexpr size_t max_raw_script_size = 10000;
++
++// The largest answer a scan gives, counted as an upper bound of its rendered
++// size as outputs are found. A scan that finds more ends with an error, so a
++// broad scan cannot make the node hold an answer of any size.
++inline constexpr size_t max_scan_answer_size = 32u * 1024u * 1024u;
++
++// Who may call scantxoutset, as the server holds it.
++struct scan_access {
++    bool enabled = false;
++    // Besides loopback, each normalized as scantxoutset_caller_address().
++    std::vector<::asio::ip::address> callers;
++};
++
++// The access rpc_settings give. A caller entry that is not one address (one
++// the option parser would have refused) turns scantxoutset off, with an error
++// in the log that names the setting.
++[[nodiscard]]
++scan_access make_scan_access(rpc_settings const& settings);
++
++// Whether `peer` may call scantxoutset: a loopback address, or one of the
++// callers. A request whose peer is unknown is refused.
++[[nodiscard]]
++bool scan_caller_allowed(scan_access const& access, std::optional<::asio::ip::address> const& peer);
++
++// The locking bytecode an address pays to: P2PKH, P2SH or P2SH32, the same for
++// its token-aware form. A cashaddr of `net`, with or without its prefix, or a
++// legacy address of `net`. Written to `script`, of the longest such script,
++// and nothing is allocated, so a caller can wipe every copy; the bytes
++// written, or nullopt for anything that is not such an address.
++inline constexpr size_t max_address_script_size = 35;
++[[nodiscard]]
++std::optional<size_t> address_output_script(std::string_view address, domain::config::network net,
++    std::span<uint8_t, max_address_script_size> script) noexcept;
++
++struct scan_run;
++
++// The one scan the server runs at a time. Its state is used on the server's
++// strand only; the walk runs on a thread of its own, which the scan's
++// handler joins before it answers, and the destructor joins at shutdown.
++class scan_service {
++public:
++    explicit scan_service(scan_access access);
++    ~scan_service();
++
++    scan_service(scan_service const&) = delete;
++    scan_service& operator=(scan_service const&) = delete;
++
++    [[nodiscard]] scan_access const& access() const noexcept;
++
++    // The running scan, null when none runs.
++    [[nodiscard]] std::shared_ptr<scan_run> const& current() const noexcept;
++
++    // Start the walk of `run` on a thread of its own. The caller has checked
++    // that no scan runs.
++    void start(blockchain::block_chain const& chain, std::shared_ptr<scan_run> run);
++
++    // Join the walk of the running scan, which has ended or is ending, and
++    // forget it.
++    void finish() noexcept;
++
++private:
++    scan_access access_;
++    std::shared_ptr<scan_run> current_;
++    std::jthread walker_;
++};
++
++// scantxoutset "action" ( [scanobjects,...] )
++::asio::awaitable<std::expected<std::string, rpc_error>>
++scan_tx_out_set(method_context& ctx, request const& req);
++
++} // namespace kth::node::rpc
++
++#endif // KTH_NODE_RPC_SCAN_HPP
+diff --git a/src/node/include/kth/node/rpc/server.hpp b/src/node/include/kth/node/rpc/server.hpp
+index d8c5a70a..5e153825 100644
+--- a/src/node/include/kth/node/rpc/server.hpp
++++ b/src/node/include/kth/node/rpc/server.hpp
+@@ -13,11 +13,13 @@
+ 
+ #include <asio/any_io_executor.hpp>
+ #include <asio/awaitable.hpp>
++#include <asio/ip/address.hpp>
+ #include <asio/ip/tcp.hpp>
+ #include <asio/strand.hpp>
+ #include <asio/experimental/concurrent_channel.hpp>
+ 
+ #include <kth/node/rpc/dispatch.hpp>
++#include <kth/node/rpc/scan.hpp>
+ #include <kth/node/mining/job_store.hpp>
+ #include <kth/node/settings.hpp>
+ 
+@@ -68,6 +70,9 @@ private:
+     // the client is gone, and the stop closes it for every connection.
+     ::asio::awaitable<void> serve_connection(::asio::ip::tcp::socket& socket, doorbell& closed);
+     [[nodiscard]] bool authorized(std::string_view authorization_header) const;
++    // With scantxoutset on and the listener bound beyond loopback, one warning
++    // that names the setting and the callers it answers.
++    void warn_scantxoutset_reach(::asio::ip::address const& bound) const;
+ 
+     rpc_settings const& settings_;
+     blockchain::block_chain& chain_;
+@@ -75,6 +80,8 @@ private:
+     std::chrono::steady_clock::time_point const started_;
+     dispatcher dispatcher_;
+     mining::job_store jobs_;
++    // scantxoutset: who may call it, and the one scan that runs at a time.
++    scan_service scans_;
+     // Plaintext "user:password" (or "__cookie__:token") the Authorization header
+     // must decode to.
+     std::string expected_credentials_;
+diff --git a/src/node/include/kth/node/rpc/wipe.hpp b/src/node/include/kth/node/rpc/wipe.hpp
+new file mode 100644
+index 00000000..84779796
+--- /dev/null
++++ b/src/node/include/kth/node/rpc/wipe.hpp
+@@ -0,0 +1,73 @@
++// Copyright (c) 2016-present Knuth Project developers.
++// Distributed under the MIT software license, see the accompanying
++// file COPYING or http://www.opensource.org/licenses/mit-license.php.
++
++#ifndef KTH_NODE_RPC_WIPE_HPP
++#define KTH_NODE_RPC_WIPE_HPP
++
++#include <cstddef>
++#include <cstdint>
++#include <memory>
++#include <string>
++#include <type_traits>
++#include <vector>
++
++namespace kth::node::rpc {
++
++// Zero `size` bytes at `data` in a way the compiler keeps, although the memory
++// is about to be freed and nothing reads it again. scantxoutset wipes with this
++// what a caller looked for and what was found for it, once it is answered.
++void wipe(void* data, size_t size) noexcept;
++
++// Zero a string's characters, then empty it. Inline storage included: data()
++// is the characters wherever they are kept.
++template <typename Char, typename Traits, typename Allocator>
++void wipe(std::basic_string<Char, Traits, Allocator>& text) noexcept {
++    wipe(text.data(), text.size() * sizeof(Char));
++    text.clear();
++}
++
++// Zero a vector's elements, then empty it.
++template <typename T, typename Allocator>
++    requires std::is_trivially_copyable_v<T>
++void wipe(std::vector<T, Allocator>& items) noexcept {
++    wipe(items.data(), items.size() * sizeof(T));
++    items.clear();
++}
++
++// An allocator that zeroes what it gives back. A container that grows frees
++// the buffer it outgrew, with a copy of its contents; with this one that copy
++// is zeroed first. Elements are destroyed before their storage is given back,
++// so what is zeroed is storage, never a live object.
++template <typename T>
++struct wiping_allocator {
++    using value_type = T;
++
++    wiping_allocator() noexcept = default;
++
++    template <typename U>
++    wiping_allocator(wiping_allocator<U> const&) noexcept {}
++
++    [[nodiscard]] T* allocate(size_t count) {
++        return std::allocator<T>{}.allocate(count);
++    }
++
++    void deallocate(T* items, size_t count) noexcept {
++        wipe(items, count * sizeof(T));
++        std::allocator<T>{}.deallocate(items, count);
++    }
++
++    template <typename U>
++    friend bool operator==(wiping_allocator const&, wiping_allocator<U> const&) noexcept {
++        return true;
++    }
++};
++
++// Bytes and text that are zeroed when freed, including each buffer left
++// behind as they grow.
++using wiped_bytes = std::vector<uint8_t, wiping_allocator<uint8_t>>;
++using wiped_string = std::basic_string<char, std::char_traits<char>, wiping_allocator<char>>;
++
++} // namespace kth::node::rpc
++
++#endif // KTH_NODE_RPC_WIPE_HPP
+diff --git a/src/node/include/kth/node/settings.hpp b/src/node/include/kth/node/settings.hpp
+index aeea30be..761399c7 100644
+--- a/src/node/include/kth/node/settings.hpp
++++ b/src/node/include/kth/node/settings.hpp
+@@ -6,7 +6,12 @@
+ #define KTH_NODE_SETTINGS_HPP
+ 
+ #include <cstdint>
++#include <expected>
+ #include <string>
++#include <string_view>
++#include <vector>
++
++#include <asio/ip/address.hpp>
+ 
+ #include <kth/domain.hpp>
+ #include <kth/infrastructure/display_mode.hpp>
+@@ -36,8 +41,22 @@ struct KND_API rpc_settings {
+     /// -gbtstoretime.
+     uint32_t gbt_cache_size;
+     uint32_t gbt_store_time;
++    /// scantxoutset, for clients the operator runs against this node. Off
++    /// unless turned on (config: rpc.scantxoutset); off, it is refused.
++    bool scantxoutset;
++    /// The callers besides loopback that scantxoutset answers, one IP address
++    /// each (config: rpc.scantxoutset_caller, repeated). No wildcard, range or
++    /// host name: every other caller is refused.
++    std::vector<std::string> scantxoutset_callers;
+ };
+ 
++/// One rpc.scantxoutset_caller value as the address a caller is compared
++/// with: one IP address, and an IPv4-mapped IPv6 address as its IPv4 address.
++/// Otherwise why the value names no single caller: a host name, a range, the
++/// wildcard address, a multicast or the broadcast address.
++KND_API std::expected<::asio::ip::address, std::string_view>
++scantxoutset_caller_address(std::string_view text);
++
+ /// Stratum V2 Template Provider settings. The plaintext listener is disabled
+ /// by default and binds to localhost until the Noise transport is available.
+ struct KND_API sv2_settings {
+diff --git a/src/node/src/parser.cpp b/src/node/src/parser.cpp
+index 089165c2..ec24ea9e 100644
+--- a/src/node/src/parser.cpp
++++ b/src/node/src/parser.cpp
+@@ -359,6 +359,22 @@ void add_settings(CLI::App& app, configuration& cfg) {
+         "getblocktemplatelight jobs to keep cached (default 10).");
+     app.add_option("--rpc.gbt_store_time", cfg.rpc.gbt_store_time,
+         "Seconds to keep a getblocktemplatelight job (default 3600).");
++    app.add_option("--rpc.scantxoutset", cfg.rpc.scantxoutset,
++        "Answer scantxoutset, for clients the operator runs against this node (default false). "
++        "It answers callers on loopback and those named by rpc.scantxoutset_caller.");
++    // Refused at startup rather than at the first call: an entry that names
++    // more than one caller would answer callers the operator never named.
++    app.add_option_function<std::vector<std::string>>("--rpc.scantxoutset_caller",
++        [&cfg](std::vector<std::string> const& values) {
++            for (auto const& value : values) {
++                if (auto const address = scantxoutset_caller_address(value); ! address) {
++                    throw CLI::ValidationError("--rpc.scantxoutset_caller",
++                        "'" + value + "' " + std::string(address.error()));
++                }
++                cfg.rpc.scantxoutset_callers.push_back(value);
++            }
++        }, "A caller besides loopback that scantxoutset answers: one IP address "
++           "(repeat the key for more). No host name, range or wildcard.")->take_all();
+ 
+     // [sv2]
+     app.add_option("--sv2.enabled", cfg.sv2.enabled,
+diff --git a/src/node/src/rpc/dispatch.cpp b/src/node/src/rpc/dispatch.cpp
+index 5a5e8ce7..6cc5bbfe 100644
+--- a/src/node/src/rpc/dispatch.cpp
++++ b/src/node/src/rpc/dispatch.cpp
+@@ -15,7 +15,9 @@
+ #include <kth/blockchain/interface/block_chain.hpp>
+ #include <kth/blockchain/pools/mempool.hpp>
+ 
++#include <kth/node/detail/scope_action.hpp>
+ #include <kth/node/rpc/error.hpp>
++#include <kth/node/rpc/wipe.hpp>
+ 
+ namespace kth::node::rpc {
+ 
+@@ -51,9 +53,9 @@ std::shared_ptr<doorbell> watch_work(method_context const& ctx) {
+     co_return wake::connection_closed;
+ }
+ 
+-void dispatcher::add(std::string method, handler_fn handler) {
++void dispatcher::add(std::string method, handler_fn handler, bool sensitive) {
+     if (auto const found = methods_.find(method); found != methods_.end()) {
+-        found->second = std::move(handler);
++        found->second = registered{std::move(handler), sensitive};
+         return;
+     }
+ 
+@@ -61,7 +63,7 @@ void dispatcher::add(std::string method, handler_fn handler) {
+     // failure leaves the two in agreement.
+     auto names = method_names_;
+     names.insert(std::ranges::lower_bound(names, method), method);
+-    methods_.emplace(std::move(method), std::move(handler));
++    methods_.emplace(std::move(method), registered{std::move(handler), sensitive});
+     method_names_.swap(names);
+ }
+ 
+@@ -75,7 +77,7 @@ std::vector<std::string> const& dispatcher::methods() const noexcept {
+ 
+ ::asio::awaitable<std::string>
+ dispatcher::handle(method_context& ctx, std::string_view body) const {
+-    auto const req = parse_request(body);
++    auto req = parse_request(body);
+     if ( ! req) {
+         co_return build_error("null", req.error().code, req.error().message);
+     }
+@@ -86,11 +88,23 @@ dispatcher::handle(method_context& ctx, std::string_view body) const {
+             "Method not found");
+     }
+ 
+-    auto const result = co_await it->second(ctx, *req);
++    // A sensitive request's params are zeroed however the handler ends. Its
++    // errors never repeat them: they are the handler's own text.
++    auto const sensitive = it->second.sensitive;
++    ctx.sensitive = ctx.sensitive || sensitive;
++    detail::scope_action wipe_params([&req]() noexcept {
++        wipe(req->params);
++    }, sensitive);
++
++    auto result = co_await it->second.handler(ctx, *req);
+     if ( ! result) {
+         co_return build_error(req->id, result.error().code, result.error().message);
+     }
+-    co_return build_success(req->id, *result);
++    auto envelope = build_success(req->id, *result, sensitive);
++    if (sensitive) {
++        wipe(*result);
++    }
++    co_return envelope;
+ }
+ 
+ } // namespace kth::node::rpc
+diff --git a/src/node/src/rpc/json.cpp b/src/node/src/rpc/json.cpp
+index 193b189e..4f6bda55 100644
+--- a/src/node/src/rpc/json.cpp
++++ b/src/node/src/rpc/json.cpp
+@@ -9,6 +9,9 @@
+ #include <string>
+ #include <string_view>
+ 
++#include <kth/node/detail/scope_action.hpp>
++#include <kth/node/rpc/wipe.hpp>
++
+ namespace kth::node::rpc {
+ 
+ namespace {
+@@ -29,6 +32,12 @@ bool copy_raw(simdjson::ondemand::value value, std::string& out) {
+ std::expected<request, rpc_error> parse_request(std::string_view body) {
+     simdjson::ondemand::parser parser;
+     simdjson::padded_string padded(body);
++    // The copy parsed here is wiped before it is freed: a body may name what
++    // its caller looks for (scantxoutset). The parser keeps only the method
++    // name; "params" and "id" are copied out raw, without unescaping.
++    detail::scope_action wipe_copy([&padded]() noexcept {
++        wipe(padded.data(), padded.size());
++    }, true);
+ 
+     simdjson::ondemand::document doc;
+     if (parser.iterate(padded).get(doc) != simdjson::SUCCESS) {
+@@ -233,14 +242,21 @@ std::optional<bool> params_bool(std::string_view params_json, size_t index, bool
+     return fallback;
+ }
+ 
+-std::string build_success(std::string_view id_raw, std::string_view result_raw) {
+-    writer w;
++std::string build_success(std::string_view id_raw, std::string_view result_raw,
++                          bool wipe_text) {
++    // Sized for the envelope, the result and the id with room for the keys
++    // escaped at their worst, so the buffer is never grown.
++    writer w(result_raw.size() + id_raw.size() + 64);
+     w.begin_object();
+     w.field_raw("result", result_raw.empty() ? "null" : result_raw);
+     w.key("error").value_null();
+     w.field_raw("id", id_raw.empty() ? "null" : id_raw);
+     w.end_object();
+-    return w.str();
++    auto envelope = w.str();
++    if (wipe_text) {
++        w.wipe();
++    }
++    return envelope;
+ }
+ 
+ std::string build_error(std::string_view id_raw, int code, std::string_view message) {
+@@ -260,6 +276,14 @@ std::string build_error(std::string_view id_raw, int code, std::string_view mess
+ 
+ writer::writer() = default;
+ 
++writer::writer(size_t capacity)
++    : b_(capacity) {
++    std::string_view written;
++    if (b_.view().get(written) == simdjson::SUCCESS) {
++        initial_data_ = written.data();
++    }
++}
++
+ void writer::pre_value() {
+     if (after_key_) {
+         after_key_ = false;
+@@ -370,4 +394,20 @@ std::string writer::str() {
+     return std::string(sv);
+ }
+ 
++void writer::wipe() noexcept {
++    std::string_view written;
++    if (b_.view().get(written) == simdjson::SUCCESS) {
++        // The builder's own buffer: the view is const, the bytes are not.
++        rpc::wipe(const_cast<char*>(written.data()), written.size());
++    }
++}
++
++bool writer::grown() const noexcept {
++    std::string_view written;
++    if (b_.view().get(written) != simdjson::SUCCESS) {
++        return true;
++    }
++    return written.data() != initial_data_;
++}
++
+ } // namespace kth::node::rpc
+diff --git a/src/node/src/rpc/methods.cpp b/src/node/src/rpc/methods.cpp
+index 2da82ace..adecc8df 100644
+--- a/src/node/src/rpc/methods.cpp
++++ b/src/node/src/rpc/methods.cpp
+@@ -50,6 +50,7 @@
+ #include <kth/infrastructure/path.hpp>
+ #include <kth/node/rpc/mining.hpp>
+ #include <kth/node/rpc/query.hpp>
++#include <kth/node/rpc/scan.hpp>
+ #include <kth/node/p2p_node.hpp>
+ 
+ namespace kth::node::rpc {
+@@ -1616,6 +1617,8 @@ void register_builtin_methods(dispatcher& d) {
+     d.add("submitblock", submit_block);
+     d.add("submitblocklight", submit_block_light);
+     d.add("uptime", uptime);
++    // Sensitive: its request names what the caller looks for.
++    d.add("scantxoutset", scan_tx_out_set, /*sensitive*/ true);
+ 
+     // Help MUST be the last method registered: capture the completed catalog,
+     // including its own name, before any request can be served.
+diff --git a/src/node/src/rpc/query.cpp b/src/node/src/rpc/query.cpp
+index 61ef1faa..9213e762 100644
+--- a/src/node/src/rpc/query.cpp
++++ b/src/node/src/rpc/query.cpp
+@@ -32,6 +32,7 @@
+ #include <kth/infrastructure/utility/units.hpp>
+ 
+ #include <kth/node/rpc/json.hpp>
++#include <kth/node/rpc/wipe.hpp>
+ 
+ namespace kth::node::rpc {
+ 
+@@ -282,22 +283,30 @@ void write_script_pubkey(writer& w, domain::chain::script const& script,
+     w.end_object();
+ }
+ 
+-// A "tokenData" object: category, fungible amount and the NFT, if any.
++} // namespace
++
+ void write_token_data(writer& w, domain::chain::token_data_t const& token) {
++    // The text is formatted into strings that are wiped before they are
++    // freed: scantxoutset writes with this the outputs a caller looked for.
+     w.key("tokenData").begin_object();
+-    w.field("category", encode_hash(token.id));
+-    w.field("amount", std::to_string(domain::chain::get_amount(token)));
++    auto category = encode_hash(token.id);
++    w.field("category", category);
++    wipe(category);
++    auto amount = std::to_string(domain::chain::get_amount(token));
++    w.field("amount", amount);
++    wipe(amount);
+     if (domain::chain::has_nft(token)) {
++        auto const& nft = domain::chain::get_nft(token);
+         w.key("nft").begin_object();
+-        w.field("capability", capability_name(domain::chain::get_nft_capability(token)));
+-        w.field("commitment", encode_base16(domain::chain::get_nft_commitment(token)));
++        w.field("capability", capability_name(nft.capability));
++        auto commitment = encode_base16(nft.commitment);
++        w.field("commitment", commitment);
++        wipe(commitment);
+         w.end_object();
+     }
+     w.end_object();
+ }
+ 
+-} // namespace
+-
+ namespace {
+ 
+ // The decoderawtransaction fields, into an object the caller has opened.
+diff --git a/src/node/src/rpc/scan.cpp b/src/node/src/rpc/scan.cpp
+new file mode 100644
+index 00000000..e4175dec
+--- /dev/null
++++ b/src/node/src/rpc/scan.cpp
+@@ -0,0 +1,1136 @@
++// Copyright (c) 2016-present Knuth Project developers.
++// Distributed under the MIT software license, see the accompanying
++// file COPYING or http://www.opensource.org/licenses/mit-license.php.
++
++#include <kth/node/rpc/scan.hpp>
++
++#include <algorithm>
++#include <array>
++#include <atomic>
++#include <chrono>
++#include <cstring>
++#include <functional>
++#include <limits>
++#include <numeric>
++#include <stop_token>
++#include <utility>
++#include <variant>
++
++#include <asio/as_tuple.hpp>
++#include <asio/deferred.hpp>
++#include <asio/experimental/channel_select.hpp>
++#include <asio/this_coro.hpp>
++#include <boost/unordered/unordered_flat_map.hpp>
++#include <boost/unordered/unordered_flat_set.hpp>
++#include <fmt/format.h>
++#include <simdjson.h>
++#include <spdlog/spdlog.h>
++
++#include <kth/blockchain/interface/block_chain.hpp>
++#include <kth/domain/chain/token_data.hpp>
++#include <kth/domain/wallet/payment_address.hpp>
++#include <kth/infrastructure/formats/base_16.hpp>
++#include <kth/infrastructure/formats/base_58.hpp>
++#include <kth/infrastructure/expect.hpp>
++#include <kth/infrastructure/formats/bitcoin.hpp>
++#include <kth/infrastructure/utility/byte_reader.hpp>
++#include <kth/node/detail/scope_action.hpp>
++#include <kth/node/rpc/dispatch.hpp>
++#include <kth/node/rpc/query.hpp>
++#include <kth/node/rpc/wipe.hpp>
++
++namespace kth::node::rpc {
++
++// One scan: what it looks for, its progress, and what it found. The handler
++// fills what it looks for; the walker thread fills the rest and rings `done`
++// when it has ended, after which the handler reads them. Every container
++// zeroes what it frees, so nothing of the scan is left behind when the last
++// owner drops it.
++struct scan_run {
++    enum class end {
++        complete,
++        aborted,
++        too_large,
++        unreadable,
++    };
++
++    // Byte strings hashed by content, so a locking bytecode read in place from
++    // the store is looked up without copying it.
++    struct bytes_hash {
++        using is_transparent = void;
++        size_t operator()(std::span<uint8_t const> bytes) const noexcept {
++            return std::hash<std::string_view>{}(std::string_view(
++                reinterpret_cast<char const*>(bytes.data()), bytes.size()));
++        }
++    };
++
++    struct bytes_equal {
++        using is_transparent = void;
++        bool operator()(std::span<uint8_t const> a, std::span<uint8_t const> b) const noexcept {
++            return std::ranges::equal(a, b);
++        }
++    };
++
++    // A category is a hash already: its first bytes are as good as any hash.
++    struct category_hash {
++        size_t operator()(hash_digest const& category) const noexcept {
++            size_t value;
++            std::memcpy(&value, category.data(), sizeof(value));
++            return value;
++        }
++    };
++
++    struct match {
++        utxoz::raw_outpoint key;
++        uint32_t height;
++        wiped_bytes stored;
++    };
++
++    boost::unordered_flat_set<wiped_bytes, bytes_hash, bytes_equal,
++        wiping_allocator<wiped_bytes>> scripts;
++    boost::unordered_flat_set<hash_digest, category_hash, std::equal_to<>,
++        wiping_allocator<hash_digest>> categories;
++
++    std::atomic<int> progress{0};
++    std::atomic<bool> abort{false};
++    doorbell done{1};
++
++    // The walker's, until `done` rings.
++    std::vector<match, wiping_allocator<match>> matches;
++    uint64_t searched = 0;
++    size_t passes = 1;
++    size_t answer_bound = 0;
++    size_t longest_text = 64;
++    bool too_large = false;
++    end ending = end::unreadable;
++    std::string answer;
++    bool answer_grown = false;
++
++    ~scan_run() {
++        wipe(answer);
++    }
++};
++
++namespace {
++
++// ---- parameters -------------------------------------------------------------
++
++constexpr std::string_view usage = "scantxoutset \"action\" ( [scanobjects,...] )";
++
++rpc_error type_error(std::string_view expected, simdjson::ondemand::json_type got) {
++    auto const name = [got] {
++        using enum simdjson::ondemand::json_type;
++        switch (got) {
++            case array: return "array";
++            case object: return "object";
++            case number: return "number";
++            case string: return "string";
++            case boolean: return "bool";
++            case null: return "null";
++            default: return "unknown";
++        }
++    }();
++    return make_error(error_code::type_error, fmt::format("Expected type {}, got {}", expected, name));
++}
++
++// A JSON string as its raw text, quotes included and maybe whitespace after,
++// unescaped into `out`. A \u escape outside ASCII becomes a byte no scan
++// object holds, so such text is an invalid descriptor, as it would be with
++// the character itself. Unescaped here rather than by the parser, which
++// would keep a copy in a buffer of its own.
++bool unescape_json_string(std::string_view raw, wiped_string& out) {
++    while ( ! raw.empty() && (raw.back() == ' ' || raw.back() == '\t' ||
++                              raw.back() == '\n' || raw.back() == '\r')) {
++        raw.remove_suffix(1);
++    }
++    if (raw.size() < 2 || raw.front() != '"' || raw.back() != '"') {
++        return false;
++    }
++    raw = raw.substr(1, raw.size() - 2);
++    out.reserve(raw.size());
++    for (size_t i = 0; i < raw.size(); ++i) {
++        auto const c = raw[i];
++        if (c != '\\') {
++            out.push_back(c);
++            continue;
++        }
++        if (++i == raw.size()) {
++            return false;
++        }
++        switch (raw[i]) {
++            case '"': out.push_back('"'); break;
++            case '\\': out.push_back('\\'); break;
++            case '/': out.push_back('/'); break;
++            case 'b': out.push_back('\b'); break;
++            case 'f': out.push_back('\f'); break;
++            case 'n': out.push_back('\n'); break;
++            case 'r': out.push_back('\r'); break;
++            case 't': out.push_back('\t'); break;
++            case 'u': {
++                if (i + 4 >= raw.size()) {
++                    return false;
++                }
++                uint32_t code = 0;
++                for (size_t k = 1; k <= 4; ++k) {
++                    auto const h = raw[i + k];
++                    uint32_t digit = 0;
++                    if (h >= '0' && h <= '9') digit = uint32_t(h - '0');
++                    else if (h >= 'a' && h <= 'f') digit = uint32_t(h - 'a' + 10);
++                    else if (h >= 'A' && h <= 'F') digit = uint32_t(h - 'A' + 10);
++                    else return false;
++                    code = code * 16 + digit;
++                }
++                i += 4;
++                out.push_back(code < 0x80 ? char(code) : char(0xff));
++                break;
++            }
++            default:
++                return false;
++        }
++    }
++    return true;
++}
++
++// One scan object as given: its descriptor, or the error BCHN gives for an
++// object of that shape.
++struct scan_object {
++    wiped_string text;
++    std::optional<rpc_error> error;
++};
++
++using scan_objects = std::vector<scan_object, wiping_allocator<scan_object>>;
++
++struct scan_params {
++    // An error in the parameters themselves, found before anything else.
++    std::optional<rpc_error> error;
++    std::string action;
++    bool has_objects = false;
++    bool too_many = false;
++    scan_objects objects;
++};
++
++// A {"desc": ..., "range": n} object, as BCHN reads it: the descriptor must be
++// a string, and a range, which only a ranged descriptor uses, an integer in
++// [0, 1000000].
++scan_object read_object(simdjson::ondemand::object object) {
++    scan_object out;
++    simdjson::ondemand::value desc;
++    simdjson::ondemand::json_type type{};
++    if (object.find_field_unordered("desc").get(desc) != simdjson::SUCCESS ||
++        desc.type().get(type) != simdjson::SUCCESS ||
++        type == simdjson::ondemand::json_type::null) {
++        out.error = make_error(error_code::invalid_parameter,
++            "Descriptor needs to be provided in scan object");
++        return out;
++    }
++    std::string_view raw;
++    if (type != simdjson::ondemand::json_type::string ||
++        desc.raw_json().get(raw) != simdjson::SUCCESS) {
++        out.error = make_error(error_code::misc_error, "JSON value is not a string as expected");
++        return out;
++    }
++    if ( ! unescape_json_string(raw, out.text)) {
++        // Read as an invalid descriptor; the text is wiped with the object.
++        wipe(out.text);
++        out.text.push_back('\xff');
++    }
++
++    simdjson::ondemand::value range;
++    if (object.find_field_unordered("range").get(range) == simdjson::SUCCESS &&
++        range.type().get(type) == simdjson::SUCCESS &&
++        type != simdjson::ondemand::json_type::null) {
++        int64_t value = 0;
++        if (type != simdjson::ondemand::json_type::number) {
++            out.error = make_error(error_code::misc_error, "JSON value is not an integer as expected");
++        } else if (range.get_int64().get(value) != simdjson::SUCCESS ||
++                   value < std::numeric_limits<int32_t>::min() ||
++                   value > std::numeric_limits<int32_t>::max()) {
++            out.error = make_error(error_code::misc_error, "JSON integer out of range");
++        } else if (value < 0 || value > 1000000) {
++            out.error = make_error(error_code::invalid_parameter, "range out of range");
++        }
++    }
++    return out;
++}
++
++// The parameters, read in one pass over a copy that is wiped. Every check
++// BCHN makes before it scans is answered here or by the caller, in BCHN's
++// order: the count, the types, the action, then each object in turn.
++scan_params read_params(std::string_view params_json) {
++    scan_params out;
++    auto const fail = [&out](rpc_error error) {
++        if ( ! out.error) {
++            out.error = std::move(error);
++        }
++    };
++
++    simdjson::padded_string padded(params_json.empty() ? std::string_view{"[]"} : params_json);
++    detail::scope_action wipe_copy([&padded]() noexcept {
++        wipe(padded.data(), padded.size());
++    }, true);
++    simdjson::ondemand::parser parser;
++    simdjson::ondemand::document doc;
++    simdjson::ondemand::array params;
++    if (parser.iterate(padded).get(doc) != simdjson::SUCCESS ||
++        doc.get_array().get(params) != simdjson::SUCCESS) {
++        fail(make_error(error_code::misc_error, std::string(usage)));
++        return out;
++    }
++
++    size_t count = 0;
++    for (auto element : params) {
++        simdjson::ondemand::value value;
++        simdjson::ondemand::json_type type{};
++        if (element.get(value) != simdjson::SUCCESS || value.type().get(type) != simdjson::SUCCESS) {
++            fail(make_error(error_code::misc_error, std::string(usage)));
++            return out;
++        }
++        ++count;
++        if (count == 1) {
++            std::string_view action;
++            if (type != simdjson::ondemand::json_type::string) {
++                fail(type_error("string", type));
++                continue;
++            }
++            if (value.get_string().get(action) != simdjson::SUCCESS) {
++                fail(make_error(error_code::misc_error, std::string(usage)));
++                return out;
++            }
++            out.action.assign(action);
++            continue;
++        }
++        if (count > 2) {
++            break;
++        }
++        out.has_objects = true;
++        simdjson::ondemand::array objects;
++        if (type != simdjson::ondemand::json_type::array ||
++            value.get_array().get(objects) != simdjson::SUCCESS) {
++            fail(type_error("array", type));
++            continue;
++        }
++        out.objects.reserve(std::min<size_t>(max_scan_objects, 64));
++        for (auto entry : objects) {
++            if (out.objects.size() == max_scan_objects) {
++                out.too_many = true;
++                break;
++            }
++            simdjson::ondemand::value object;
++            simdjson::ondemand::json_type kind{};
++            scan_object read;
++            if (entry.get(object) != simdjson::SUCCESS || object.type().get(kind) != simdjson::SUCCESS) {
++                read.error = make_error(error_code::misc_error, std::string(usage));
++            } else if (kind == simdjson::ondemand::json_type::string) {
++                std::string_view raw;
++                if (object.raw_json().get(raw) != simdjson::SUCCESS ||
++                    ! unescape_json_string(raw, read.text)) {
++                    wipe(read.text);
++                    read.text.push_back('\xff');
++                }
++            } else if (kind == simdjson::ondemand::json_type::object) {
++                simdjson::ondemand::object fields;
++                if (object.get_object().get(fields) != simdjson::SUCCESS) {
++                    read.error = make_error(error_code::misc_error, std::string(usage));
++                } else {
++                    read = read_object(fields);
++                }
++            } else {
++                read.error = make_error(error_code::invalid_parameter,
++                    "Scan object needs to be either a string or an object");
++            }
++            out.objects.push_back(std::move(read));
++        }
++    }
++    if (count < 1 || count > 2) {
++        out.error = make_error(error_code::misc_error, std::string(usage));
++    }
++    return out;
++}
++
++// ---- scan objects -------------------------------------------------------------
++
++constexpr std::string_view unsupported_descriptors[] = {"pk", "pkh", "combo", "multi", "sh"};
++
++rpc_error invalid_descriptor(size_t position, std::string_view reason = {}) {
++    // The position, never the text: an error is read by whoever reads the
++    // client's logs, and the text is what the caller looks for.
++    return make_error(error_code::invalid_address_or_key, reason.empty()
++        ? fmt::format("Invalid descriptor in scanobjects[{}]", position)
++        : fmt::format("Invalid descriptor in scanobjects[{}]: {}", position, reason));
++}
++
++// Add what one descriptor looks for to the run, or say why it is not taken.
++std::optional<rpc_error> add_scan_object(size_t position, std::string_view text,
++                                         domain::config::network net, scan_run& run) {
++    auto const open = text.find('(');
++    if (open == std::string_view::npos || open == 0 || text.back() != ')') {
++        return invalid_descriptor(position);
++    }
++    auto const name = text.substr(0, open);
++    auto const inner = text.substr(open + 1, text.size() - open - 2);
++
++    if (std::ranges::find(unsupported_descriptors, name) != std::end(unsupported_descriptors)) {
++        return invalid_descriptor(position,
++            "kth scans for addr(), raw() and tok() objects, not pk(), pkh(), combo(), multi() or sh()");
++    }
++
++    if (name == "raw") {
++        if (inner.empty() || inner.size() % 2 != 0) {
++            return invalid_descriptor(position);
++        }
++        if (inner.size() / 2 > max_raw_script_size) {
++            return invalid_descriptor(position, fmt::format(
++                "a raw() script is at most {} bytes", max_raw_script_size));
++        }
++        wiped_bytes script(inner.size() / 2);
++        auto const decoded = decode_base16(inner, std::span<uint8_t>(script));
++        if ( ! decoded || *decoded != script.size()) {
++            return invalid_descriptor(position);
++        }
++        run.scripts.insert(std::move(script));
++        return std::nullopt;
++    }
++
++    if (name == "addr") {
++        std::array<uint8_t, max_address_script_size> script{};
++        detail::scope_action wipe_script([&script]() noexcept {
++            wipe(script.data(), script.size());
++        }, true);
++        auto const size = address_output_script(inner, net, script);
++        if ( ! size) {
++            return invalid_descriptor(position);
++        }
++        run.scripts.insert(wiped_bytes(script.begin(), script.begin() + *size));
++        return std::nullopt;
++    }
++
++    if (name == "tok") {
++        // BCHN's tok(<category>): 64 hex digits, the category in display order.
++        if (inner.size() != 64) {
++            return invalid_descriptor(position);
++        }
++        auto category = decode_hash(inner);
++        if ( ! category) {
++            return invalid_descriptor(position);
++        }
++        run.categories.insert(*category);
++        wipe(category->data(), category->size());
++        return std::nullopt;
++    }
++
++    return invalid_descriptor(position);
++}
++
++// ---- the walk -------------------------------------------------------------------
++
++// The parts of a stored output a scan reads, in place: its value, its locking
++// bytecode, and its token prefix (the 0xef byte and what follows it, up to the
++// locking bytecode) when it has token data. An output whose prefix does not
++// decode keeps it as locking bytecode, as the output's own parser does.
++struct stored_output {
++    uint64_t value;
++    std::span<uint8_t const> locking;
++    std::span<uint8_t const> token;
++    size_t wrapped_size;
++};
++
++std::optional<stored_output> read_stored_output(std::span<uint8_t const> stored,
++    std::optional<domain::chain::token_data_t>* token_out = nullptr) {
++    byte_reader reader(stored);
++    auto const value = reader.read_little_endian<uint64_t>();
++    if ( ! value) {
++        return std::nullopt;
++    }
++    auto const size = reader.read_size_little_endian();
++    if ( ! size) {
++        return std::nullopt;
++    }
++    auto const wrapped = reader.read_bytes(*size);
++    if ( ! wrapped) {
++        return std::nullopt;
++    }
++    stored_output out{*value, *wrapped, {}, wrapped->size()};
++    if ( ! wrapped->empty() && wrapped->front() == domain::chain::encoding::PREFIX_BYTE) {
++        byte_reader token_reader(wrapped->subspan(1));
++        auto token = domain::chain::token::encoding::from_data(token_reader);
++        if (token) {
++            auto const prefix = wrapped->size() - token_reader.remaining_size();
++            out.token = wrapped->first(prefix);
++            out.locking = wrapped->subspan(prefix);
++            if (token_out != nullptr) {
++                token_out->emplace(std::move(*token));
++            }
++        }
++    }
++    return out;
++}
++
++// An upper bound of what one output adds to the answer: its object in
++// "unspents" and its line in "token_total_amounts". The hex of the locking
++// bytecode and of a commitment are twice their bytes, and both are inside
++// the wrapped script; everything else is under 512 bytes.
++constexpr size_t answer_size_bound(size_t wrapped_size) noexcept {
++    return 512 + 2 * wrapped_size;
++}
++
++[[maybe_unused]]
++void consider(scan_run& run, utxoz::raw_outpoint const& key, uint32_t height,
++              std::span<uint8_t const> stored) {
++    std::optional<domain::chain::token_data_t> token;
++    auto const output = read_stored_output(stored, run.categories.empty() ? nullptr : &token);
++    if ( ! output) {
++        return;
++    }
++    auto const found = run.scripts.contains(output->locking) ||
++        (token && run.categories.contains(token->id));
++    if ( ! found) {
++        return;
++    }
++    auto const bound = answer_size_bound(output->wrapped_size);
++    if (run.answer_bound + bound > max_scan_answer_size) {
++        run.too_large = true;
++        return;
++    }
++    run.answer_bound += bound;
++    run.longest_text = std::max(run.longest_text, 2 * output->wrapped_size);
++    run.matches.push_back(scan_run::match{key, height, wiped_bytes(stored.begin(), stored.end())});
++}
++
++// Walk until a pass completes or the scan is stopped. A pass that gives way to
++// block connection is started again from the beginning: what it found is
++// dropped and the gate admits the walk again once the block is connected.
++void walk(blockchain::block_chain const& chain, scan_run& run, std::stop_token const& stop) {
++#if defined(KTH_UTXOZ_REFERENCE_MODE)
++    (void)chain;
++    (void)stop;
++    run.ending = scan_run::end::unreadable;
++#else
++    auto const stopping = [&] {
++        return stop.stop_requested() || run.abort.load(std::memory_order_relaxed) || run.too_large;
++    };
++    for (;;) {
++        // What an earlier pass found goes, zeroed by the allocator.
++        decltype(run.matches){}.swap(run.matches);
++        run.searched = 0;
++        run.answer_bound = 0;
++        run.progress.store(0, std::memory_order_relaxed);
++        if (stopping()) {
++            run.ending = run.too_large ? scan_run::end::too_large : scan_run::end::aborted;
++            return;
++        }
++        auto const counted = chain.utxo_count();
++        uint64_t const total = counted ? uint64_t(*counted) : 0;
++        // Asked again: the count waits in the gate behind a block, and the
++        // scan may have been aborted meanwhile.
++        if (stopping()) {
++            run.ending = scan_run::end::aborted;
++            return;
++        }
++        auto visit = [&](utxoz::raw_outpoint const& key, uint32_t height,
++                         std::span<uint8_t const> stored) {
++            ++run.searched;
++            if (total != 0 && (run.searched & 0xff) == 0) {
++                run.progress.store(int(std::min<uint64_t>(99, run.searched * 100 / total)),
++                    std::memory_order_relaxed);
++            }
++            consider(run, key, height, stored);
++        };
++        auto const ended = chain.utxo_walk_entries(visit, stopping);
++        using walk_end = blockchain::block_chain::utxo_walk_end;
++        switch (ended) {
++            case walk_end::complete:
++                run.progress.store(100, std::memory_order_relaxed);
++                run.ending = scan_run::end::complete;
++                return;
++            case walk_end::yielded:
++                ++run.passes;
++                continue;
++            case walk_end::stopped:
++                run.ending = run.too_large ? scan_run::end::too_large : scan_run::end::aborted;
++                return;
++            case walk_end::unreadable:
++                run.ending = scan_run::end::unreadable;
++                return;
++        }
++    }
++#endif
++}
++
++// ---- the answer -----------------------------------------------------------------
++
++void wipe_token(domain::chain::token_data_t& token) noexcept {
++    wipe(token.id.data(), token.id.size());
++    std::visit([](auto& kind) {
++        using kind_t = std::decay_t<decltype(kind)>;
++        if constexpr (std::is_same_v<kind_t, domain::chain::non_fungible>) {
++            wipe(kind.commitment);
++        } else if constexpr (std::is_same_v<kind_t, domain::chain::both_kinds>) {
++            wipe(kind.non_fungible_part.commitment);
++        }
++    }, token.data);
++}
++
++bool outpoint_less(utxoz::raw_outpoint const& a, utxoz::raw_outpoint const& b) noexcept {
++    // BCHN's order: the txid's bytes as stored, then the index as a number.
++    if (auto const order = std::memcmp(a.data(), b.data(), 32); order != 0) {
++        return order < 0;
++    }
++    uint32_t ia = 0;
++    uint32_t ib = 0;
++    for (size_t i = 0; i < 4; ++i) {
++        ia |= uint32_t(a[32 + i]) << (8 * i);
++        ib |= uint32_t(b[32 + i]) << (8 * i);
++    }
++    return ia < ib;
++}
++
++// The answer, as BCHN 29.1.0 gives it. Every string formatted on the way is
++// wiped, and the writer is sized so that it never grows.
++void render(scan_run& run) {
++    std::vector<uint32_t, wiping_allocator<uint32_t>> order(run.matches.size());
++    std::iota(order.begin(), order.end(), uint32_t{0});
++    std::ranges::sort(order, [&run](uint32_t a, uint32_t b) {
++        return outpoint_less(run.matches[a].key, run.matches[b].key);
++    });
++
++    using totals_map = boost::unordered_flat_map<hash_digest, int64_t, scan_run::category_hash,
++        std::equal_to<>, wiping_allocator<std::pair<hash_digest const, int64_t>>>;
++    totals_map totals;
++    uint64_t total = 0;
++
++    writer w(run.answer_bound + 6 * run.longest_text + 4096);
++    w.begin_object();
++    w.field("success", run.ending == scan_run::end::complete);
++    w.field("searched_items", uint64_t(run.searched));
++    w.key("unspents").begin_array();
++    for (auto const index : order) {
++        auto const& found = run.matches[index];
++        std::optional<domain::chain::token_data_t> token;
++        auto const output = read_stored_output(found.stored, &token);
++        if ( ! output) {
++            continue;
++        }
++        w.begin_object();
++        hash_digest txid;
++        std::copy_n(found.key.begin(), txid.size(), txid.begin());
++        auto txid_text = encode_hash(txid);
++        w.field("txid", txid_text);
++        wipe(txid_text);
++        wipe(txid.data(), txid.size());
++        uint32_t vout = 0;
++        for (size_t i = 0; i < 4; ++i) {
++            vout |= uint32_t(found.key[32 + i]) << (8 * i);
++        }
++        w.field("vout", uint64_t(vout));
++        auto script_text = encode_base16(output->locking);
++        w.field("scriptPubKey", script_text);
++        wipe(script_text);
++        auto amount = satoshi_to_bitcoin(output->value);
++        w.field_raw("amount", amount);
++        wipe(amount);
++        w.field("height", uint64_t(found.height));
++        if (token) {
++            write_token_data(w, *token);
++            // As BCHN: the fungible amounts by category, an addition that
++            // would pass INT64_MAX left out.
++            if (auto const fungible = domain::chain::get_amount(*token); fungible > 0) {
++                auto& sum = totals[token->id];
++                if (sum <= std::numeric_limits<int64_t>::max() - fungible) {
++                    sum += fungible;
++                }
++            }
++            wipe_token(*token);
++        }
++        w.end_object();
++        total += output->value;
++    }
++    w.end_array();
++    auto total_text = satoshi_to_bitcoin(total);
++    w.field_raw("total_amount", total_text);
++    wipe(total_text);
++    if ( ! totals.empty()) {
++        // Ordered as BCHN orders them: by the category's bytes as stored.
++        std::vector<std::pair<hash_digest, int64_t>,
++            wiping_allocator<std::pair<hash_digest, int64_t>>> sorted(totals.begin(), totals.end());
++        std::ranges::sort(sorted, [](auto const& a, auto const& b) {
++            return std::memcmp(a.first.data(), b.first.data(), a.first.size()) < 0;
++        });
++        w.key("token_total_amounts").begin_object();
++        for (auto const& [category, sum] : sorted) {
++            auto category_text = encode_hash(category);
++            auto sum_text = std::to_string(sum);
++            w.key(category_text);
++            w.value(std::string_view(sum_text));
++            wipe(category_text);
++            wipe(sum_text);
++        }
++        w.end_object();
++    }
++    w.end_object();
++    run.answer = w.str();
++    run.answer_grown = w.grown();
++    w.wipe();
++    if (run.answer_grown) {
++        // A bound that was not one; what was found is not named.
++        spdlog::warn("[rpc] scantxoutset outgrew the buffer sized for its answer");
++    }
++}
++
++void run_scan(blockchain::block_chain const& chain, scan_run& run, std::stop_token stop) noexcept {
++    try {
++        walk(chain, run, stop);
++        if (run.ending == scan_run::end::complete || run.ending == scan_run::end::aborted) {
++            render(run);
++        }
++    } catch (...) {
++        run.ending = scan_run::end::unreadable;
++        wipe(run.answer);
++    }
++    (void)run.done.try_send(std::monostate{});
++}
++
++constexpr std::string_view off_message =
++    "scantxoutset is off on this node; the node operator turns it on with rpc.scantxoutset = true";
++constexpr std::string_view caller_message =
++    "scantxoutset answers callers on loopback and those named in rpc.scantxoutset_caller, "
++    "and this caller is not one of them";
++
++} // namespace
++
++// ---- access -----------------------------------------------------------------------
++
++namespace {
++
++::asio::ip::address normalized(::asio::ip::address const& address) {
++    if (address.is_v6() && address.to_v6().is_v4_mapped()) {
++        return ::asio::ip::make_address_v4(::asio::ip::v4_mapped, address.to_v6());
++    }
++    return address;
++}
++
++} // namespace
++
++scan_access make_scan_access(rpc_settings const& settings) {
++    scan_access access;
++    access.enabled = settings.scantxoutset;
++    for (auto const& text : settings.scantxoutset_callers) {
++        auto const address = scantxoutset_caller_address(text);
++        if ( ! address) {
++            spdlog::error("[rpc] An entry of rpc.scantxoutset_caller {}; scantxoutset stays off",
++                address.error());
++            return {};
++        }
++        access.callers.push_back(*address);
++    }
++    return access;
++}
++
++bool scan_caller_allowed(scan_access const& access, std::optional<::asio::ip::address> const& peer) {
++    if ( ! peer) {
++        return false;
++    }
++    auto const address = normalized(*peer);
++    if (address.is_loopback()) {
++        return true;
++    }
++    return std::ranges::find(access.callers, address) != access.callers.end();
++}
++
++// ---- addresses --------------------------------------------------------------------
++
++namespace {
++
++#if defined(KTH_CURRENCY_BCH)
++constexpr std::string_view cashaddr_charset = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
++
++constexpr int cashaddr_value(char c) noexcept {
++    if (c >= 'A' && c <= 'Z') {
++        c = char(c - 'A' + 'a');
++    }
++    auto const at = cashaddr_charset.find(c);
++    return at == std::string_view::npos ? -1 : int(at);
++}
++
++constexpr uint64_t cashaddr_step(uint64_t chk, uint8_t value) noexcept {
++    auto const top = uint8_t(chk >> 35);
++    chk = ((chk & 0x07ffffffffULL) << 5) ^ value;
++    if (top & 0x01) chk ^= 0x98f2bc8e61ULL;
++    if (top & 0x02) chk ^= 0x79b76d99e2ULL;
++    if (top & 0x04) chk ^= 0xf33e5fb3c4ULL;
++    if (top & 0x08) chk ^= 0xae2eabe2a8ULL;
++    if (top & 0x10) chk ^= 0x1e4f43e470ULL;
++    return chk;
++}
++
++// The cashaddr longest address this decodes: a 64-byte hash, its version, and
++// the checksum, in 5-bit groups.
++constexpr size_t max_cashaddr_groups = (65 * 8 + 4) / 5 + 8;
++
++// A cashaddr of `prefix`, as BCHN's cashaddr::Decode and DecodeCashAddrContent
++// take one: one case throughout, an optional prefix of letters, the checksum,
++// zero padding, the version's reserved bit clear and the hash of the size the
++// version gives. The type and the hash, in `hash`, or nullopt. Fixed buffers
++// only, which the caller wipes.
++struct cashaddr_content {
++    uint8_t type;
++    size_t hash_size;
++};
++
++std::optional<cashaddr_content> decode_cashaddr(std::string_view text, std::string_view prefix,
++    std::span<uint8_t, 64> hash, std::span<uint8_t, max_cashaddr_groups> groups) noexcept {
++    bool lower = false;
++    bool upper = false;
++    bool number = false;
++    size_t separator = std::string_view::npos;
++    for (size_t i = 0; i < text.size(); ++i) {
++        auto const c = text[i];
++        if (c >= 'a' && c <= 'z') { lower = true; continue; }
++        if (c >= 'A' && c <= 'Z') { upper = true; continue; }
++        if (c >= '0' && c <= '9') { number = true; continue; }
++        if (c == ':' && ! number && i != 0 && separator == std::string_view::npos) {
++            separator = i;
++            continue;
++        }
++        return std::nullopt;
++    }
++    if (lower && upper) {
++        return std::nullopt;
++    }
++
++    auto payload = text;
++    if (separator != std::string_view::npos) {
++        auto const given = text.substr(0, separator);
++        if (given.size() != prefix.size()) {
++            return std::nullopt;
++        }
++        for (size_t i = 0; i < given.size(); ++i) {
++            auto c = given[i];
++            if (c >= 'A' && c <= 'Z') {
++                c = char(c - 'A' + 'a');
++            }
++            if (c != prefix[i]) {
++                return std::nullopt;
++            }
++        }
++        payload = text.substr(separator + 1);
++    }
++    if (payload.size() <= 8 || payload.size() > groups.size()) {
++        return std::nullopt;
++    }
++
++    uint64_t chk = 1;
++    for (auto const c : prefix) {
++        chk = cashaddr_step(chk, uint8_t(c) & 0x1f);
++    }
++    chk = cashaddr_step(chk, 0);
++    for (size_t i = 0; i < payload.size(); ++i) {
++        auto const value = cashaddr_value(payload[i]);
++        if (value < 0) {
++            return std::nullopt;
++        }
++        groups[i] = uint8_t(value);
++        chk = cashaddr_step(chk, groups[i]);
++    }
++    if ((chk ^ 1) != 0) {
++        return std::nullopt;
++    }
++
++    // 5-bit groups to bytes, the version first, with no more than four bits
++    // of padding and those zero.
++    auto const data_groups = payload.size() - 8;
++    std::array<uint8_t, 65> bytes{};
++    detail::scope_action wipe_bytes([&bytes]() noexcept {
++        wipe(bytes.data(), bytes.size());
++    }, true);
++    size_t produced = 0;
++    uint32_t acc = 0;
++    size_t bits = 0;
++    for (size_t i = 0; i < data_groups; ++i) {
++        acc = ((acc << 5) | groups[i]) & 0xfff;
++        bits += 5;
++        while (bits >= 8) {
++            bits -= 8;
++            if (produced == bytes.size()) {
++                return std::nullopt;
++            }
++            bytes[produced++] = uint8_t((acc >> bits) & 0xff);
++        }
++    }
++    if (bits >= 5 || ((acc << (8 - bits)) & 0xff) != 0) {
++        return std::nullopt;
++    }
++    if (produced == 0) {
++        return std::nullopt;
++    }
++    auto const version = bytes[0];
++    if ((version & 0x80) != 0) {
++        return std::nullopt;
++    }
++    size_t hash_size = 20 + 4 * (version & 0x03);
++    if ((version & 0x04) != 0) {
++        hash_size *= 2;
++    }
++    if (produced != hash_size + 1) {
++        return std::nullopt;
++    }
++    std::copy_n(bytes.begin() + 1, hash_size, hash.begin());
++    return cashaddr_content{uint8_t((version >> 3) & 0x1f), hash_size};
++}
++#endif
++
++} // namespace
++
++std::optional<size_t> address_output_script(std::string_view address, domain::config::network net,
++    std::span<uint8_t, max_address_script_size> script) noexcept {
++    using domain::wallet::payment_address;
++    auto const mainnet = net == domain::config::network::mainnet;
++    auto const p2kh = mainnet ? payment_address::mainnet_p2kh : payment_address::testnet_p2kh;
++    auto const p2sh = mainnet ? payment_address::mainnet_p2sh : payment_address::testnet_p2sh;
++
++    auto const pay_to = [&script](bool is_script, std::span<uint8_t const> hash) -> std::optional<size_t> {
++        if (hash.size() == 20 && ! is_script) {
++            // OP_DUP OP_HASH160 <20> OP_EQUALVERIFY OP_CHECKSIG
++            script[0] = 0x76;
++            script[1] = 0xa9;
++            script[2] = 0x14;
++            std::copy_n(hash.begin(), 20, script.begin() + 3);
++            script[23] = 0x88;
++            script[24] = 0xac;
++            return 25;
++        }
++        if (hash.size() == 20) {
++            // OP_HASH160 <20> OP_EQUAL
++            script[0] = 0xa9;
++            script[1] = 0x14;
++            std::copy_n(hash.begin(), 20, script.begin() + 2);
++            script[22] = 0x87;
++            return 23;
++        }
++        if (hash.size() == 32 && is_script) {
++            // OP_HASH256 <32> OP_EQUAL
++            script[0] = 0xaa;
++            script[1] = 0x20;
++            std::copy_n(hash.begin(), 32, script.begin() + 2);
++            script[34] = 0x87;
++            return 35;
++        }
++        return std::nullopt;
++    };
++
++#if defined(KTH_CURRENCY_BCH)
++    {
++        std::array<uint8_t, 64> hash{};
++        std::array<uint8_t, max_cashaddr_groups> groups{};
++        detail::scope_action wipe_buffers([&hash, &groups]() noexcept {
++            wipe(hash.data(), hash.size());
++            wipe(groups.data(), groups.size());
++        }, true);
++        auto const content = decode_cashaddr(address, payment_address::cashaddr_prefix_for(net),
++            hash, groups);
++        // Types 0 and 2 pay to a key hash, 1 and 3 to a script hash; 2 and 3
++        // are the token-aware forms of the same outputs. Any other cashaddr
++        // is no destination, and the text is tried as a legacy address, as
++        // BCHN tries it.
++        if (content && content->type <= 3) {
++            auto const is_script = (content->type & 0x01) != 0;
++            if (auto const size = pay_to(is_script,
++                    std::span<uint8_t const>(hash.data(), content->hash_size))) {
++                return size;
++            }
++        }
++    }
++#endif
++
++    // A legacy address of this network: version, 20-byte hash and checksum.
++    auto decoded = decode_base58<domain::wallet::payment_size>(address);
++    if ( ! decoded) {
++        return std::nullopt;
++    }
++    detail::scope_action wipe_decoded([&decoded]() noexcept {
++        wipe(decoded->data(), decoded->size());
++    }, true);
++    auto const parsed = payment_address::from_payment(*decoded);
++    if ( ! parsed || (parsed->version() != p2kh && parsed->version() != p2sh)) {
++        return std::nullopt;
++    }
++    std::array<uint8_t, 20> hash{};
++    detail::scope_action wipe_hash([&hash]() noexcept {
++        wipe(hash.data(), hash.size());
++    }, true);
++    std::copy_n(decoded->begin() + 1, hash.size(), hash.begin());
++    return pay_to(parsed->version() == p2sh, hash);
++}
++
++// ---- the service ------------------------------------------------------------------
++
++scan_service::scan_service(scan_access access)
++    : access_(std::move(access)) {}
++
++scan_service::~scan_service() {
++    if (current_) {
++        current_->abort.store(true, std::memory_order_relaxed);
++    }
++    if (walker_.joinable()) {
++        walker_.request_stop();
++        walker_.join();
++    }
++}
++
++scan_access const& scan_service::access() const noexcept {
++    return access_;
++}
++
++std::shared_ptr<scan_run> const& scan_service::current() const noexcept {
++    return current_;
++}
++
++void scan_service::start(blockchain::block_chain const& chain, std::shared_ptr<scan_run> run) {
++    if (walker_.joinable()) {
++        walker_.join();
++    }
++    current_ = run;
++    walker_ = std::jthread([&chain, run = std::move(run)](std::stop_token stop) {
++        run_scan(chain, *run, std::move(stop));
++    });
++}
++
++void scan_service::finish() noexcept {
++    if (walker_.joinable()) {
++        walker_.join();
++    }
++    current_.reset();
++}
++
++// ---- the method -------------------------------------------------------------------
++
++// scantxoutset "action" ( [scanobjects,...] ) -> as BCHN 29.1.0: "start" scans
++// the UTXO set for the scan objects, "status" the progress of the running
++// scan in %, "abort" stops it. One scan at a time. A scan object is
++// addr(<address>), raw(<hex script>) or tok(<category>), or {"desc": that,
++// "range": n}. The answer: success, searched_items, the unspents (txid, vout,
++// scriptPubKey, amount, height and tokenData) in outpoint order, total_amount,
++// and token_total_amounts when any token amounts were found.
++// C-API counterpart: none; the C-API has no walk of the UTXO set.
++::asio::awaitable<std::expected<std::string, rpc_error>>
++scan_tx_out_set(method_context& ctx, request const& req) {
++    // Refused before the parameters are read, on or off: a caller the node
++    // does not answer learns nothing from how its request would have been read.
++    if (ctx.scans == nullptr || ! ctx.scans->access().enabled) {
++        co_return kth::fail(make_error(error_code::method_not_found, std::string(off_message)));
++    }
++    if ( ! scan_caller_allowed(ctx.scans->access(), ctx.peer)) {
++        co_return kth::fail(make_error(error_code::method_not_found, std::string(caller_message)));
++    }
++    auto& scans = *ctx.scans;
++
++    auto params = read_params(req.params);
++    if (params.error) {
++        co_return kth::fail(std::move(*params.error));
++    }
++
++    if (params.action == "status") {
++        if ( ! scans.current()) {
++            co_return std::string("null");
++        }
++        writer w;
++        w.begin_object();
++        w.field("progress", int64_t(scans.current()->progress.load(std::memory_order_relaxed)));
++        w.end_object();
++        co_return w.str();
++    }
++
++    if (params.action == "abort") {
++        if ( ! scans.current()) {
++            co_return std::string("false");
++        }
++        scans.current()->abort.store(true, std::memory_order_relaxed);
++        co_return std::string("true");
++    }
++
++    if (params.action != "start") {
++        co_return kth::fail(make_error(error_code::invalid_parameter, "Invalid command"));
++    }
++
++    if (scans.current()) {
++        co_return kth::fail(make_error(error_code::invalid_parameter,
++            "Scan already in progress, use action \"abort\" or \"status\""));
++    }
++    if ( ! params.has_objects) {
++        co_return kth::fail(make_error(error_code::misc_error,
++            "JSON value is not an array as expected"));
++    }
++    if (params.too_many) {
++        co_return kth::fail(make_error(error_code::invalid_parameter, fmt::format(
++            "Too many scan objects: a scan takes at most {}", max_scan_objects)));
++    }
++
++#if defined(KTH_UTXOZ_REFERENCE_MODE)
++    co_return kth::fail(make_error(error_code::method_not_found,
++        "scantxoutset needs a build without the option utxoz_reference, whose UTXO set "
++        "holds no outputs to read"));
++#endif
++    auto const view = ctx.chain.chain_view();
++    if ( ! view || ! view->state) {
++        co_return kth::fail(make_error(error_code::internal_error, "chain state unavailable"));
++    }
++
++    auto run = std::make_shared<scan_run>();
++    for (size_t position = 0; position < params.objects.size(); ++position) {
++        auto& object = params.objects[position];
++        if (object.error) {
++            co_return kth::fail(std::move(*object.error));
++        }
++        if (auto error = add_scan_object(position, object.text, view->state->network(), *run)) {
++            co_return kth::fail(std::move(*error));
++        }
++        wipe(object.text);
++    }
++    auto const objects = params.objects.size();
++    auto const started = std::chrono::steady_clock::now();
++
++    scans.start(ctx.chain, run);
++
++    // Until the walk rings. A connection that goes, or can no longer be
++    // watched, aborts the scan: nobody reads its answer. The walk is still
++    // waited for, so the thread is joined when it has already finished.
++    {
++        using namespace ::asio::experimental;
++        auto const executor = co_await ::asio::this_coro::executor;
++        doorbell silent{1};
++        doorbell* watched = ctx.closed != nullptr ? ctx.closed : &silent;
++        channel_select_options options;
++        options.biased = true;
++        for (;;) {
++            auto completion = co_await make_select(receive(run->done), receive(*watched))
++                .async_wait(executor, options, std::stop_token{}, ::asio::as_tuple(::asio::deferred));
++            auto const& [ec, selected] = completion;
++            if ( ! ec && selected.index == 0) {
++                break;
++            }
++            run->abort.store(true, std::memory_order_relaxed);
++            watched = &silent;
++        }
++    }
++    scans.finish();
++
++    // Counts only: what was looked for and what was found are not logged.
++    spdlog::debug("[rpc] scantxoutset: {} scan object(s), {} entries searched in {} pass(es), "
++        "{} unspent(s), {} ms", objects, run->searched, run->passes, run->matches.size(),
++        std::chrono::duration_cast<std::chrono::milliseconds>(
++            std::chrono::steady_clock::now() - started).count());
++
++    switch (run->ending) {
++        case scan_run::end::complete:
++        case scan_run::end::aborted:
++            co_return std::move(run->answer);
++        case scan_run::end::too_large:
++            co_return kth::fail(make_error(error_code::invalid_parameter, fmt::format(
++                "Scan found more than an answer of {} MiB holds; scan for fewer outputs",
++                max_scan_answer_size / (1024 * 1024))));
++        case scan_run::end::unreadable:
++            break;
++    }
++    co_return kth::fail(make_error(error_code::internal_error, "the UTXO set could not be read"));
++}
++
++} // namespace kth::node::rpc
+diff --git a/src/node/src/rpc/server.cpp b/src/node/src/rpc/server.cpp
+index 55317a5e..8de0d7d2 100644
+--- a/src/node/src/rpc/server.cpp
++++ b/src/node/src/rpc/server.cpp
+@@ -39,6 +39,7 @@
+ #include <kth/blockchain/interface/block_chain.hpp>
+ #include <kth/blockchain/pools/mempool.hpp>
+ #include <kth/node/detail/scope_action.hpp>
++#include <kth/node/rpc/wipe.hpp>
+ #include <kth/infrastructure/formats/base_64.hpp>
+ #include <kth/infrastructure/utility/data.hpp>
+ 
+@@ -66,7 +67,9 @@ struct parse_ctx {
+     std::string value;
+     bool reading_value = false;
+     std::string authorization;
+-    std::string body;
++    // Zeroed as it grows and when it is freed: a body may name what its caller
++    // looks for (scantxoutset).
++    wiped_string body;
+     bool complete = false;
+     unsigned method = 0;
+     bool keep_alive = true;
+@@ -129,7 +132,7 @@ struct head_line_normalizer {
+     bool line_has_content = false;
+     bool saw_request_line = false;
+ 
+-    [[nodiscard]] bool append(std::string_view input, std::string& output) {
++    [[nodiscard]] bool append(std::string_view input, wiped_string& output) {
+         for (std::size_t i = 0; i < input.size(); ++i) {
+             if (complete) {
+                 output.append(input.substr(i));
+@@ -183,17 +186,21 @@ void init_parser(llhttp_t& parser, llhttp_settings_t& settings, parse_ctx& ctx)
+     // Pool software in the ckpool family reads a reply line by line: it takes
+     // the line after Content-Length as the end of the headers, and the body as
+     // one JSON line. So Content-Length comes last and the body ends in LF.
+-    auto out = fmt::format(
++    auto const head = fmt::format(
+         "HTTP/1.1 {} {}\r\n"
+         "Content-Type: application/json\r\n"
+         "Connection: {}\r\n"
+         "{}"
+-        "Content-Length: {}\r\n\r\n"
+-        "{}\n",
++        "Content-Length: {}\r\n\r\n",
+         status, reason, keep_alive ? "keep-alive" : "close",
+-        extra_headers, body.size() + 1, body);
+-
+-    co_await ::asio::async_write(socket, ::asio::buffer(out),
++        extra_headers, body.size() + 1);
++
++    // The body is written from the caller's buffer, not copied in after the
++    // head: the caller zeroes an answer that must not outlive its request
++    // (scantxoutset), and a copy made here would be freed as it was.
++    std::array<::asio::const_buffer, 3> const out{
++        ::asio::buffer(head), ::asio::buffer(body), ::asio::buffer("\n", 1)};
++    co_await ::asio::async_write(socket, out,
+         ::asio::as_tuple(::asio::use_awaitable));
+ }
+ 
+@@ -221,6 +228,7 @@ server::server(rpc_settings const& settings, blockchain::block_chain& chain,
+     , network_(network)
+     , started_(started)
+     , jobs_(settings.gbt_cache_size, settings.gbt_store_time)
++    , scans_(make_scan_access(settings))
+     , owner_(::asio::make_strand(std::move(executor)))
+     , stop_requests_(owner_, 1)
+     , listening_(owner_, 1)
+@@ -241,6 +249,21 @@ server::server(rpc_settings const& settings, blockchain::block_chain& chain,
+     }
+ }
+ 
++void server::warn_scantxoutset_reach(::asio::ip::address const& bound) const {
++    auto const& access = scans_.access();
++    if ( ! access.enabled || bound.is_loopback()) {
++        return;
++    }
++    std::string callers;
++    for (auto const& caller : access.callers) {
++        callers += (callers.empty() ? "" : ", ") + caller.to_string();
++    }
++    spdlog::warn("[rpc] rpc.scantxoutset is on and the JSON-RPC server listens on {}, beyond "
++        "loopback: scantxoutset answers callers on loopback and those in rpc.scantxoutset_caller "
++        "({}), and refuses every other caller", settings_.bind,
++        callers.empty() ? std::string("none") : callers);
++}
++
+ bool server::authorized(std::string_view authorization_header) const {
+     constexpr std::string_view prefix = "Basic ";
+     if ( ! authorization_header.starts_with(prefix)) {
+@@ -260,7 +283,21 @@ bool server::authorized(std::string_view authorization_header) const {
+     std::array<char, 8192> buffer;
+     // Bytes read past the end of the previous request: the start of the next
+     // one when a client pipelines requests on a keep-alive connection.
+-    std::string pending;
++    wiped_string pending;
++    // What the connection read is zeroed when it ends, however it ends.
++    detail::scope_action wipe_reads([&buffer, &pending]() noexcept {
++        wipe(buffer.data(), buffer.size());
++        wipe(pending);
++    }, true);
++    // The caller, for methods that answer only some callers (scantxoutset).
++    std::optional<::asio::ip::address> peer;
++    {
++        std::error_code ec;
++        auto const remote = socket.remote_endpoint(ec);
++        if ( ! ec) {
++            peer = remote.address();
++        }
++    }
+     for (;;) {
+         parse_ctx ctx;
+         llhttp_t parser;
+@@ -283,18 +320,24 @@ bool server::authorized(std::string_view authorization_header) const {
+                 }
+                 input = std::string_view(buffer.data(), n);
+             }
+-            std::string normalized;
++            wiped_string normalized;
++            detail::scope_action wipe_normalized([&normalized]() noexcept {
++                wipe(normalized);
++            }, true);
+             normalized.reserve(input.size() + 128);
+             auto const valid_head = head.append(input, normalized);
+             input = normalized;
+             auto const status = valid_head
+                 ? llhttp_execute(&parser, input.data(), input.size())
+                 : HPE_LF_EXPECTED;
++            // What `pending` held has been copied into `normalized`: zeroed
++            // before it is replaced.
+             if (status == HPE_PAUSED) {
+                 // on_message_complete paused right after this request.
+-                pending = std::string(llhttp_get_error_pos(&parser), input.data() + input.size());
++                wipe(pending);
++                pending.assign(llhttp_get_error_pos(&parser), input.data() + input.size());
+             } else if (status == HPE_OK) {
+-                pending.clear();
++                wipe(pending);
+             } else {
+                 co_await write_response(socket, 400, "Bad Request",
+                     R"({"result":null,"error":{"code":-32700,"message":"Parse error"},"id":null})",
+@@ -321,7 +364,19 @@ bool server::authorized(std::string_view authorization_header) const {
+         // watch: one that waits is woken by its deadline.
+         method_context mctx{chain_, jobs_, network_, started_,
+             work_changes_ != nullptr ? &work_ : nullptr, &closed};
++        mctx.peer = peer;
++        mctx.scans = &scans_;
+         std::string response;
++        // A sensitive request (scantxoutset) leaves nothing behind it: its
++        // body, its answer and the bytes read for it are zeroed once the answer
++        // is written, or when the connection ends before that.
++        detail::scope_action wipe_sensitive([&]() noexcept {
++            if (mctx.sensitive) {
++                wipe(ctx.body);
++                wipe(response);
++                wipe(buffer.data(), buffer.size());
++            }
++        }, true);
+         // Nothing reads the socket while a handler runs, so a client that
+         // goes away, or the server closing the socket to stop, would pass
+         // unnoticed by a handler that waits, and its connection would stay
+@@ -436,6 +491,7 @@ void server::stop() {
+     }
+     (void)listening_.try_send(std::error_code{}, bound.port());
+     spdlog::info("[rpc] JSON-RPC server listening on {}:{}", settings_.bind, bound.port());
++    warn_scantxoutset_reach(address);
+ 
+     // All mutable listener/connection state has one owner. At most 64 children
+     // are admitted, and every completion is consumed before this scope exits.
+diff --git a/src/node/src/rpc/wipe.cpp b/src/node/src/rpc/wipe.cpp
+new file mode 100644
+index 00000000..bc9ea41c
+--- /dev/null
++++ b/src/node/src/rpc/wipe.cpp
+@@ -0,0 +1,30 @@
++// Copyright (c) 2016-present Knuth Project developers.
++// Distributed under the MIT software license, see the accompanying
++// file COPYING or http://www.opensource.org/licenses/mit-license.php.
++
++#include <kth/node/rpc/wipe.hpp>
++
++#include <cstring>
++
++namespace kth::node::rpc {
++
++void wipe(void* data, size_t size) noexcept {
++    if (data == nullptr || size == 0) {
++        return;
++    }
++#if defined(__GNUC__) || defined(__clang__)
++    std::memset(data, 0, size);
++    // The stores are dead to the optimizer, which may drop a memset of memory
++    // that is freed next. An empty asm that may read all memory through `data`
++    // keeps them, with link-time optimization too.
++    __asm__ __volatile__("" : : "r"(data) : "memory");
++#else
++    // Volatile stores are never dropped.
++    auto* bytes = static_cast<unsigned char volatile*>(data);
++    while (size-- != 0) {
++        *bytes++ = 0;
++    }
++#endif
++}
++
++} // namespace kth::node::rpc
+diff --git a/src/node/src/settings.cpp b/src/node/src/settings.cpp
+index 3bccbfaf..be3a0746 100644
+--- a/src/node/src/settings.cpp
++++ b/src/node/src/settings.cpp
+@@ -4,6 +4,9 @@
+ 
+ #include <kth/node/settings.hpp>
+ 
++#include <string>
++#include <system_error>
++
+ #include <kth/domain.hpp>
+ 
+ namespace kth::node {
+@@ -42,6 +45,31 @@ rpc_settings::rpc_settings()
+     , password()
+     , gbt_cache_size(10)
+     , gbt_store_time(3600)
++    , scantxoutset(false)
++    , scantxoutset_callers()
+ {}
+ 
++std::expected<::asio::ip::address, std::string_view>
++scantxoutset_caller_address(std::string_view text) {
++    std::error_code ec;
++    auto address = ::asio::ip::make_address(std::string(text), ec);
++    if (ec) {
++        return std::unexpected("is not an IP address; a host name, a range or a wildcard "
++            "is not taken, one address per entry is");
++    }
++    if (address.is_v6() && address.to_v6().is_v4_mapped()) {
++        address = ::asio::ip::make_address_v4(::asio::ip::v4_mapped, address.to_v6());
++    }
++    if (address.is_unspecified()) {
++        return std::unexpected("is the wildcard address, which stands for every caller");
++    }
++    if (address.is_multicast()) {
++        return std::unexpected("is a multicast address, not one caller");
++    }
++    if (address.is_v4() && address.to_v4() == ::asio::ip::address_v4::broadcast()) {
++        return std::unexpected("is the broadcast address, not one caller");
++    }
++    return address;
++}
++
+ } // namespace kth::node
+diff --git a/src/node/test/rpc_scan.cpp b/src/node/test/rpc_scan.cpp
+new file mode 100644
+index 00000000..fd36909f
+--- /dev/null
++++ b/src/node/test/rpc_scan.cpp
+@@ -0,0 +1,820 @@
++// Copyright (c) 2016-present Knuth Project developers.
++// Distributed under the MIT software license, see the accompanying
++// file COPYING or http://www.opensource.org/licenses/mit-license.php.
++
++#include <test_helpers.hpp>
++
++#include <algorithm>
++#include <atomic>
++#include <cctype>
++#include <chrono>
++#include <cstdint>
++#include <future>
++#include <memory>
++#include <optional>
++#include <ranges>
++#include <sstream>
++#include <string>
++#include <string_view>
++#include <thread>
++#include <utility>
++#include <vector>
++
++#include <asio/co_spawn.hpp>
++#include <asio/executor_work_guard.hpp>
++#include <asio/io_context.hpp>
++#include <asio/ip/address.hpp>
++#include <asio/ip/tcp.hpp>
++#include <asio/read.hpp>
++#include <asio/use_future.hpp>
++#include <asio/write.hpp>
++#include <fmt/format.h>
++#include <spdlog/sinks/ringbuffer_sink.h>
++#include <spdlog/spdlog.h>
++
++#include <kth/blockchain/utxo_builder.hpp>
++#include <kth/database/databases/utxo_entry.hpp>
++#include <kth/domain/wallet/payment_address.hpp>
++#include <kth/infrastructure/formats/base_16.hpp>
++#include <kth/node/mining/job_store.hpp>
++#include <kth/node/parser.hpp>
++#include <kth/node/rpc/dispatch.hpp>
++#include <kth/node/rpc/json.hpp>
++#include <kth/node/rpc/query.hpp>
++#include <kth/node/rpc/scan.hpp>
++#include <kth/node/rpc/server.hpp>
++#include <kth/node/rpc/wipe.hpp>
++#include "../../blockchain/test/reorg_chain_fixture.hpp"
++
++using namespace kth;
++namespace rpc = kth::node::rpc;
++using domain::wallet::payment_address;
++
++namespace {
++
++// One 20-byte hash, 4423cfd2...0fc3, paid to by P2PKH and P2SH, and the
++// 32-byte hash 000102...1f by P2SH32, as in the validateaddress tests.
++constexpr std::string_view pkh_script = "76a9144423cfd20e8f5f10863ae31df5634620d36b0fc388ac";
++constexpr std::string_view sh_script = "a9144423cfd20e8f5f10863ae31df5634620d36b0fc387";
++constexpr std::string_view sh32_script =
++    "aa20000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f87";
++// Another P2PKH output, and one anyone can spend.
++constexpr std::string_view other_script = "76a914000000000000000000000000000000000000000188ac";
++constexpr std::string_view true_script = "51";
++
++hash_digest filled(uint8_t byte) {
++    hash_digest hash{};
++    hash.fill(byte);
++    return hash;
++}
++
++// Two token categories. Display order is reversed byte order, so a category
++// whose bytes are all the same reads the same both ways.
++hash_digest const category_a = filled(0xa1);
++hash_digest const category_b = filled(0xb2);
++
++data_chunk bytes_of(std::string_view hex) {
++    auto bytes = decode_base16(hex);
++    REQUIRE(bytes);
++    return *bytes;
++}
++
++domain::chain::output output_of(uint64_t value, std::string_view script_hex,
++                                domain::chain::token_data_opt token = std::nullopt) {
++    return domain::chain::output{value, domain::chain::script{bytes_of(script_hex), false}, std::move(token)};
++}
++
++struct unspent {
++    hash_digest txid;
++    uint32_t index;
++    domain::chain::output output;
++    uint32_t height;
++};
++
++utxoz::raw_outpoint key_of(hash_digest const& txid, uint32_t index) {
++    return utxoz::make_outpoint(std::span<uint8_t const, 32>{txid.data(), 32}, index);
++}
++
++// Put the outputs into the UTXO set through the helper a connect batch uses,
++// in one window, as the node stores them.
++void store(blockchain::block_chain& chain, std::vector<unspent> const& unspents) {
++    blockchain::utxo_raw_delta delta;
++    uint32_t top = 1;
++    for (auto const& u : unspents) {
++        database::utxo_entry const entry{u.output, u.height, u.height, false};
++        auto const bytes = entry.to_data();
++        delta.inserts.emplace(key_of(u.txid, u.index),
++            blockchain::utxo_raw_value{std::span<uint8_t const>(bytes), u.height});
++        top = std::max(top, u.height);
++    }
++    auto window = chain.begin_utxo_write();
++    REQUIRE(window);
++    window->mark_mutating();
++    REQUIRE(blockchain::apply_utxo_delta(chain, *window, delta, top).ok());
++    window->complete();
++}
++
++// The set the scans below look through: plain outputs, a covenant holding a
++// mutable NFT (how PHOTON keeps its mining state), and each kind of token.
++std::vector<unspent> sample_set() {
++    using namespace domain::chain;
++    return {
++        {filled(0x11), 0, output_of(10000, pkh_script), 3},
++        {filled(0x22), 1, output_of(20000, sh_script), 4},
++        {filled(0x33), 0, output_of(1000, sh32_script,
++            make_non_fungible(category_a, capability_t::mut, bytes_of("beef"))), 5},
++        {filled(0x44), 2, output_of(800, pkh_script, make_fungible(category_a, 1000)), 6},
++        {filled(0x55), 0, output_of(800, other_script,
++            make_non_fungible(category_b, capability_t::minting, {})), 7},
++        {filled(0x66), 3, output_of(800, other_script,
++            make_both(category_b, 5, capability_t::none, bytes_of("00"))), 8},
++        {filled(0x77), 0, output_of(5000, true_script), 9},
++    };
++}
++
++std::string const display_a = encode_hash(category_a);
++std::string const display_b = encode_hash(category_b);
++
++// The unspents of the sample set as the answer shows them.
++std::string const unspent_11 = fmt::format(
++    R"({{"txid":"{}","vout":0,"scriptPubKey":"{}","amount":0.0001,"height":3}})",
++    encode_hash(filled(0x11)), pkh_script);
++std::string const unspent_22 = fmt::format(
++    R"({{"txid":"{}","vout":1,"scriptPubKey":"{}","amount":0.0002,"height":4}})",
++    encode_hash(filled(0x22)), sh_script);
++std::string const unspent_33 = fmt::format(
++    R"({{"txid":"{}","vout":0,"scriptPubKey":"{}","amount":0.00001,"height":5,)"
++    R"("tokenData":{{"category":"{}","amount":"0","nft":{{"capability":"mutable","commitment":"beef"}}}}}})",
++    encode_hash(filled(0x33)), sh32_script, display_a);
++std::string const unspent_44 = fmt::format(
++    R"({{"txid":"{}","vout":2,"scriptPubKey":"{}","amount":0.000008,"height":6,)"
++    R"("tokenData":{{"category":"{}","amount":"1000"}}}})",
++    encode_hash(filled(0x44)), pkh_script, display_a);
++std::string const unspent_55 = fmt::format(
++    R"({{"txid":"{}","vout":0,"scriptPubKey":"{}","amount":0.000008,"height":7,)"
++    R"("tokenData":{{"category":"{}","amount":"0","nft":{{"capability":"minting","commitment":""}}}}}})",
++    encode_hash(filled(0x55)), other_script, display_b);
++std::string const unspent_66 = fmt::format(
++    R"({{"txid":"{}","vout":3,"scriptPubKey":"{}","amount":0.000008,"height":8,)"
++    R"("tokenData":{{"category":"{}","amount":"5","nft":{{"capability":"none","commitment":"00"}}}}}})",
++    encode_hash(filled(0x66)), other_script, display_b);
++
++// The chain, the server's scan state and a dispatcher with the built-ins.
++struct scan_fixture {
++    explicit scan_fixture(char const* tag)
++        : chain(tag) {}
++
++    [[nodiscard]] bool start(rpc::scan_access access = {true, {}}) {
++        if ( ! chain.created() || ! chain.start()) {
++            return false;
++        }
++        scans = std::make_unique<rpc::scan_service>(std::move(access));
++        rpc::register_builtin_methods(dispatcher);
++        return true;
++    }
++
++    [[nodiscard]] rpc::method_context context() {
++        rpc::method_context ctx{chain.chain(), jobs};
++        ctx.peer = peer;
++        ctx.scans = scans.get();
++        return ctx;
++    }
++
++    std::string call(std::string const& params, rpc::method_context* ctx = nullptr) {
++        auto own = context();
++        auto& used = ctx != nullptr ? *ctx : own;
++        auto const body = R"({"method":"scantxoutset","params":)" + params + R"(,"id":1})";
++        ::asio::io_context io;
++        auto result = ::asio::co_spawn(io, dispatcher.handle(used, body), ::asio::use_future);
++        io.run();
++        return result.get();
++    }
++
++    // The answer of a scan that succeeds, for these objects.
++    std::string scan(std::string const& objects) {
++        return call(R"(["start",)" + objects + "]");
++    }
++
++    [[nodiscard]] uint64_t set_size() {
++        auto const counted = chain.chain().utxo_count();
++        REQUIRE(counted);
++        return uint64_t(*counted);
++    }
++
++    test::chain_fixture chain;
++    node::mining::job_store jobs{1, 60};
++    rpc::dispatcher dispatcher;
++    std::unique_ptr<rpc::scan_service> scans;
++    std::optional<::asio::ip::address> peer = ::asio::ip::make_address("127.0.0.1");
++};
++
++std::string answer(uint64_t searched, std::vector<std::string> const& unspents, std::string_view total,
++                   std::string_view token_totals = {}, bool success = true) {
++    std::string listed;
++    for (auto const& item : unspents) {
++        listed += (listed.empty() ? "" : ",") + item;
++    }
++    auto result = fmt::format(R"({{"success":{},"searched_items":{},"unspents":[{}],"total_amount":{})",
++        success ? "true" : "false", searched, listed, total);
++    if ( ! token_totals.empty()) {
++        result += fmt::format(R"(,"token_total_amounts":{{{}}})", token_totals);
++    }
++    return rpc::build_success("1", result + "}");
++}
++
++std::string refusal(int code, std::string_view message) {
++    return rpc::build_error("1", code, message);
++}
++
++// What a captured log holds, at every level.
++struct captured_log {
++    captured_log()
++        : sink(std::make_shared<spdlog::sinks::ringbuffer_sink_mt>(4096))
++        , previous(spdlog::default_logger()) {
++        auto logger = std::make_shared<spdlog::logger>("captured", sink);
++        logger->set_level(spdlog::level::trace);
++        spdlog::set_default_logger(logger);
++    }
++
++    ~captured_log() {
++        spdlog::set_default_logger(previous);
++    }
++
++    [[nodiscard]] bool holds(std::string_view text) const {
++        auto const lines = sink->last_formatted();
++        return std::ranges::any_of(lines, [text](std::string const& line) {
++            return line.find(text) != std::string::npos;
++        });
++    }
++
++    std::shared_ptr<spdlog::sinks::ringbuffer_sink_mt> sink;
++    std::shared_ptr<spdlog::logger> previous;
++};
++
++} // namespace
++
++// Start Test Suite: rpc scan tests
++
++#if ! defined(KTH_UTXOZ_REFERENCE_MODE)
++
++TEST_CASE("scantxoutset finds outputs by raw script, address and token category", "[rpc scan]") {
++    scan_fixture f("rpc_scan_find");
++    REQUIRE(f.start());
++    store(f.chain.chain(), sample_set());
++    auto const searched = f.set_size();
++
++    // The locking bytecode, with or without tokens in front of it.
++    CHECK(f.scan(fmt::format(R"(["raw({})"])", pkh_script)) ==
++        answer(searched, {unspent_11, unspent_44}, "0.000108", fmt::format(R"("{}":"1000")", display_a)));
++
++    // The covenant holding the mutable NFT, found by its bytecode alone.
++    CHECK(f.scan(fmt::format(R"(["raw({})"])", sh32_script)) ==
++        answer(searched, {unspent_33}, "0.00001"));
++
++    // Upper case hex, and the object form with a range BCHN checks and ignores.
++    std::string upper(sh_script);
++    std::ranges::transform(upper, upper.begin(), [](char c) { return char(std::toupper(c)); });
++    CHECK(f.scan(fmt::format(R"([{{"desc":"raw({})","range":5}}])", upper)) ==
++        answer(searched, {unspent_22}, "0.0002"));
++
++    // Each token category, NFTs included; a fungible total only where there
++    // are fungible amounts.
++    CHECK(f.scan(fmt::format(R"(["tok({})"])", display_a)) ==
++        answer(searched, {unspent_33, unspent_44}, "0.000018", fmt::format(R"("{}":"1000")", display_a)));
++    CHECK(f.scan(fmt::format(R"(["tok({})"])", display_b)) ==
++        answer(searched, {unspent_55, unspent_66}, "0.000016", fmt::format(R"("{}":"5")", display_b)));
++
++    // Several objects in one scan, in outpoint order, each output once.
++    CHECK(f.scan(fmt::format(R"(["raw({})","tok({})","raw({})"])", sh_script, display_b, sh_script)) ==
++        answer(searched, {unspent_22, unspent_55, unspent_66}, "0.000216", fmt::format(R"("{}":"5")", display_b)));
++
++    // Nothing found.
++    CHECK(f.scan(R"(["raw(6a)"])") == answer(searched, {}, "0"));
++    CHECK(f.scan(R"([])") == answer(searched, {}, "0"));
++}
++
++TEST_CASE("scantxoutset takes addresses of each kind for the node's network", "[rpc scan]") {
++    scan_fixture f("rpc_scan_addresses");
++    REQUIRE(f.start());
++    store(f.chain.chain(), sample_set());
++    auto const searched = f.set_size();
++    using domain::config::network;
++
++    auto const hash20 = decode_base16<20>("4423cfd20e8f5f10863ae31df5634620d36b0fc3");
++    auto const hash32 = decode_base16<32>("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
++    REQUIRE(hash20);
++    REQUIRE(hash32);
++    auto const pkh = payment_address::from_shorthash(*hash20, payment_address::testnet_p2kh);
++    auto const sh = payment_address::from_shorthash(*hash20, payment_address::testnet_p2sh);
++    auto const sh32 = payment_address::from_hash(*hash32, payment_address::testnet_p2sh);
++    REQUIRE(pkh);
++    REQUIRE(sh);
++    REQUIRE(sh32);
++
++    auto const by_key = answer(searched, {unspent_11, unspent_44}, "0.000108",
++        fmt::format(R"("{}":"1000")", display_a));
++    auto const by_script = answer(searched, {unspent_22}, "0.0002");
++    auto const by_script32 = answer(searched, {unspent_33}, "0.00001");
++    auto const addr = [&f](std::string_view address) {
++        return f.scan(fmt::format(R"(["addr({})"])", address));
++    };
++
++    auto const plain = pkh->encoded_cashaddr(network::regtest, false);
++    CHECK(plain == "bchreg:qpzz8n7jp6847yyx8t33matrgcsdx6c0cv99t2zdvc");
++    CHECK(addr(plain) == by_key);
++    // Token-aware, without its prefix, in upper case, and legacy.
++    CHECK(addr(pkh->encoded_cashaddr(network::regtest, true)) == by_key);
++    CHECK(addr(plain.substr(plain.find(':') + 1)) == by_key);
++    std::string upper(plain);
++    std::ranges::transform(upper, upper.begin(), [](char c) { return char(std::toupper(c)); });
++    CHECK(addr(upper) == by_key);
++    CHECK(addr("mmjF9M1saNs7vjCGaSDaDHvFAtTgUNtfrJ") == by_key);
++    CHECK(addr(sh->encoded_cashaddr(network::regtest, false)) == by_script);
++    CHECK(addr(sh->encoded_cashaddr(network::regtest, true)) == by_script);
++    CHECK(addr(sh32->encoded_cashaddr(network::regtest, false)) == by_script32);
++}
++
++TEST_CASE("scantxoutset reads addresses as validateaddress does", "[rpc scan]") {
++    using domain::config::network;
++    // Each address decoded into fixed buffers gives the script validateaddress
++    // names, and what validateaddress refuses is refused.
++    struct sample {
++        std::string_view address;
++        network net;
++    };
++    std::vector<sample> const samples{
++        {"bitcoincash:qpzz8n7jp6847yyx8t33matrgcsdx6c0cvmtevrfgz", network::mainnet},
++        {"bitcoincash:ppzz8n7jp6847yyx8t33matrgcsdx6c0cvvwyry2nl", network::mainnet},
++        {"bchreg:qpzz8n7jp6847yyx8t33matrgcsdx6c0cv99t2zdvc", network::regtest},
++        {"bchtest:ppzz8n7jp6847yyx8t33matrgcsdx6c0cvguqyxa5r", network::chipnet},
++        {"bitcoincash:zpzz8n7jp6847yyx8t33matrgcsdx6c0cvup2jd0h3", network::mainnet},
++        {"bchtest:rpzz8n7jp6847yyx8t33matrgcsdx6c0cv0kn6gmts", network::testnet4},
++        {"17DHrHvtmMRs9ciersFCPNhvJtryd5NWbT", network::mainnet},
++        {"mmjF9M1saNs7vjCGaSDaDHvFAtTgUNtfrJ", network::regtest},
++        {"qpzz8n7jp6847yyx8t33matrgcsdx6c0cvmtevrfgz", network::mainnet},
++        {"BITCOINCASH:QPZZ8N7JP6847YYX8T33MATRGCSDX6C0CVMTEVRFGZ", network::mainnet},
++        {"bitcoincash:pvqqzqsrqszsvpcgpy9qkrqdpc83qygjzv2p29shrqv35xcur50p7h2c7ctj5", network::mainnet},
++        // Refused: another network, a 32-byte key hash, a broken checksum,
++        // mixed case, no address.
++        {"bitcoincash:qpzz8n7jp6847yyx8t33matrgcsdx6c0cvmtevrfgz", network::regtest},
++        {"bchtest:qpzz8n7jp6847yyx8t33matrgcsdx6c0cvleatp707", network::regtest},
++        {"17DHrHvtmMRs9ciersFCPNhvJtryd5NWbT", network::chipnet},
++        {"mmjF9M1saNs7vjCGaSDaDHvFAtTgUNtfrJ", network::mainnet},
++        {"bitcoincash:qvqqzqsrqszsvpcgpy9qkrqdpc83qygjzv2p29shrqv35xcur50p77hk2ql29", network::mainnet},
++        {"bitcoincash:qpzz8n7jp6847yyx8t33matrgcsdx6c0cvmtevrfga", network::mainnet},
++        {"bitcoincash:Qpzz8n7jp6847yyx8t33matrgcsdx6c0cvmtevrfgz", network::mainnet},
++        {"not an address", network::mainnet},
++        {"", network::mainnet},
++    };
++    for (auto const& [address, net] : samples) {
++        CAPTURE(address);
++        std::array<uint8_t, rpc::max_address_script_size> script{};
++        auto const size = rpc::address_output_script(address, net, script);
++        auto const described = rpc::render_validate_address(address, net);
++        auto const field = described.find(R"("scriptPubKey":")");
++        if (field == std::string::npos) {
++            CHECK_FALSE(size);
++            continue;
++        }
++        REQUIRE(size);
++        auto const start = field + 16;
++        auto const expected = described.substr(start, described.find('"', start) - start);
++        CHECK(encode_base16(byte_span(script.data(), *size)) == expected);
++    }
++}
++
++TEST_CASE("scantxoutset shows token data as gettxout does", "[rpc scan]") {
++    scan_fixture f("rpc_scan_token_shape");
++    REQUIRE(f.start());
++    auto const set = sample_set();
++    store(f.chain.chain(), set);
++    auto const view = f.chain.chain().chain_view();
++    REQUIRE(view);
++    auto const reply = f.scan(fmt::format(R"(["tok({})","tok({})"])", display_a, display_b));
++    for (auto const& item : set) {
++        if ( ! item.output.token_data()) {
++            continue;
++        }
++        auto const tx_out = rpc::render_tx_out(null_hash, 1, item.output, false,
++            view->state->network(), view->state->enabled_flags());
++        auto const start = tx_out.find(R"("tokenData":)");
++        REQUIRE(start != std::string::npos);
++        auto const end = tx_out.find(R"(,"coinbase":)");
++        REQUIRE(end != std::string::npos);
++        CHECK(reply.find(tx_out.substr(start, end - start)) != std::string::npos);
++    }
++}
++
++TEST_CASE("scantxoutset refuses as BCHN does, naming a scan object by its position", "[rpc scan]") {
++    scan_fixture f("rpc_scan_errors");
++    REQUIRE(f.start());
++    store(f.chain.chain(), sample_set());
++
++    auto const usage = std::string("scantxoutset \"action\" ( [scanobjects,...] )");
++    CHECK(f.call("[]") == refusal(-1, usage));
++    CHECK(f.call(R"(["start",[],1])") == refusal(-1, usage));
++    CHECK(f.call("{}") == refusal(-1, usage));
++    CHECK(f.call("[1]") == refusal(-3, "Expected type string, got number"));
++    CHECK(f.call(R"(["start","raw(51)"])") == refusal(-3, "Expected type array, got string"));
++    CHECK(f.call(R"(["status",null])") == refusal(-3, "Expected type array, got null"));
++    CHECK(f.call(R"(["bogus"])") == refusal(-8, "Invalid command"));
++    CHECK(f.call(R"(["start"])") == refusal(-1, "JSON value is not an array as expected"));
++    CHECK(f.call(R"(["start",[1]])") == refusal(-8, "Scan object needs to be either a string or an object"));
++    CHECK(f.call(R"(["start",[{"range":1}]])") == refusal(-8, "Descriptor needs to be provided in scan object"));
++    CHECK(f.call(R"(["start",[{"desc":null}]])") == refusal(-8, "Descriptor needs to be provided in scan object"));
++    CHECK(f.call(R"(["start",[{"desc":5}]])") == refusal(-1, "JSON value is not a string as expected"));
++    CHECK(f.call(R"(["start",[{"desc":"raw(51)","range":-1}]])") == refusal(-8, "range out of range"));
++    CHECK(f.call(R"(["start",[{"desc":"raw(51)","range":1000001}]])") == refusal(-8, "range out of range"));
++    CHECK(f.call(R"(["start",[{"desc":"raw(51)","range":"x"}]])") ==
++        refusal(-1, "JSON value is not an integer as expected"));
++
++    // The first bad object, by its position.
++    auto const invalid = [](size_t position) {
++        return refusal(-5, fmt::format("Invalid descriptor in scanobjects[{}]", position));
++    };
++    CHECK(f.call(R"(["start",["raw(51)","raw(zz)"]])") == invalid(1));
++    CHECK(f.call(R"(["start",["raw(5)"]])") == invalid(0));
++    CHECK(f.call(R"(["start",["raw()"]])") == invalid(0));
++    CHECK(f.call(R"(["start",["raw(51)x"]])") == invalid(0));
++    CHECK(f.call(R"(["start",["raw(51))"]])") == invalid(0));
++    CHECK(f.call(R"(["start",["tok(a1a1)"]])") == invalid(0));
++    CHECK(f.call(R"(["start",["nonsense"]])") == invalid(0));
++    CHECK(f.call(R"(["start",["addr(bitcoincash:qpzz8n7jp6847yyx8t33matrgcsdx6c0cvmtevrfgz)"]])") == invalid(0));
++    CHECK(f.call(R"(["start",["raw(51)",{"desc":"raw(51)"},{"desc":"tok(00)"}]])") == invalid(2));
++    for (auto const* kind : {"pk", "pkh", "combo", "multi", "sh"}) {
++        CAPTURE(kind);
++        CHECK(f.call(fmt::format(R"(["start",["{}(02a1a1)"]])", kind)) == refusal(-5,
++            "Invalid descriptor in scanobjects[0]: kth scans for addr(), raw() and tok() objects, "
++            "not pk(), pkh(), combo(), multi() or sh()"));
++    }
++
++    // Nothing runs: status answers null and abort false.
++    CHECK(f.call(R"(["status"])") == rpc::build_success("1", "null"));
++    CHECK(f.call(R"(["abort"])") == rpc::build_success("1", "false"));
++}
++
++TEST_CASE("scantxoutset caps the scan objects and the script of raw()", "[rpc scan]") {
++    scan_fixture f("rpc_scan_caps");
++    REQUIRE(f.start());
++
++    std::string objects = "[";
++    for (size_t i = 0; i <= rpc::max_scan_objects; ++i) {
++        objects += (i == 0 ? "" : ",") + std::string(R"("raw(51)")");
++    }
++    objects += "]";
++    CHECK(f.scan(objects) == refusal(-8, "Too many scan objects: a scan takes at most 1000"));
++
++    // As many as it takes is fine.
++    objects = "[";
++    for (size_t i = 0; i < rpc::max_scan_objects; ++i) {
++        objects += (i == 0 ? "" : ",") + std::string(R"("raw(51)")");
++    }
++    objects += "]";
++    CHECK(f.scan(objects).find(R"("success":true)") != std::string::npos);
++
++    auto const longest = std::string(2 * rpc::max_raw_script_size, 'a');
++    CHECK(f.scan(R"(["raw()" + longest + R"()"])").find(R"("success":true)") != std::string::npos);
++    CHECK(f.scan(R"(["raw()" + longest + R"(aa)"])") == refusal(-5,
++        "Invalid descriptor in scanobjects[0]: a raw() script is at most 10000 bytes"));
++}
++
++TEST_CASE("scantxoutset ends a scan whose answer would pass its cap", "[rpc scan]") {
++    scan_fixture f("rpc_scan_answer_cap");
++    REQUIRE(f.start());
++    // Each output counts 514 bytes against the 32 MiB cap: 66000 pass it.
++    std::vector<unspent> many;
++    many.reserve(66000);
++    for (uint32_t i = 0; i < 66000; ++i) {
++        hash_digest txid{};
++        txid[0] = uint8_t(i);
++        txid[1] = uint8_t(i >> 8);
++        txid[2] = uint8_t(i >> 16);
++        many.push_back({txid, 0, output_of(1000, true_script), 2});
++    }
++    store(f.chain.chain(), many);
++    CHECK(f.scan(R"(["raw(51)"])") == refusal(-8,
++        "Scan found more than an answer of 32 MiB holds; scan for fewer outputs"));
++    // Narrower, it answers.
++    CHECK(f.scan(R"(["raw(6a)"])").find(R"("success":true)") != std::string::npos);
++}
++
++TEST_CASE("scantxoutset is off unless turned on, and answers only the callers allowed", "[rpc scan]") {
++    scan_fixture f("rpc_scan_access");
++    REQUIRE(f.start(rpc::scan_access{true, {::asio::ip::make_address("192.0.2.7")}}));
++    auto const off = refusal(-32601,
++        "scantxoutset is off on this node; the node operator turns it on with rpc.scantxoutset = true");
++    auto const refused = refusal(-32601,
++        "scantxoutset answers callers on loopback and those named in rpc.scantxoutset_caller, "
++        "and this caller is not one of them");
++    // Malformed: a caller that is answered gets -8, one that is not gets the
++    // refusal, because its parameters are never read.
++    auto const malformed = std::string(R"(["start",[1]])");
++    auto const read = refusal(-8, "Scan object needs to be either a string or an object");
++
++    auto ctx = f.context();
++    auto const as = [&](char const* address) {
++        ctx.peer = ::asio::ip::make_address(address);
++        return f.call(malformed, &ctx);
++    };
++    CHECK(as("127.0.0.1") == read);
++    CHECK(as("127.8.9.10") == read);
++    CHECK(as("::1") == read);
++    CHECK(as("::ffff:127.0.0.1") == read);
++    CHECK(as("192.0.2.7") == read);
++    CHECK(as("::ffff:192.0.2.7") == read);
++    CHECK(as("192.0.2.8") == refused);
++    CHECK(as("10.0.0.1") == refused);
++    CHECK(as("2001:db8::7") == refused);
++    ctx.peer.reset();
++    CHECK(f.call(malformed, &ctx) == refused);
++
++    // Off, and without the server's scan state: refused for every caller.
++    ctx.peer = ::asio::ip::make_address("127.0.0.1");
++    rpc::scan_service off_service(rpc::scan_access{false, {}});
++    ctx.scans = &off_service;
++    CHECK(f.call(malformed, &ctx) == off);
++    CHECK(f.call(R"(["status"])", &ctx) == off);
++    ctx.scans = nullptr;
++    CHECK(f.call(malformed, &ctx) == off);
++}
++
++TEST_CASE("scantxoutset answers status and abort while its walk waits for a block", "[rpc scan]") {
++    scan_fixture f("rpc_scan_status");
++    REQUIRE(f.start());
++    store(f.chain.chain(), sample_set());
++
++    ::asio::io_context io;
++    auto work = ::asio::make_work_guard(io);
++    std::thread runner([&io] { io.run(); });
++    auto ctx = f.context();
++    auto other = f.context();
++    auto const start = std::string(R"({"method":"scantxoutset","params":["start",["raw(51)"]],"id":1})");
++    auto const status = std::string(R"({"method":"scantxoutset","params":["status"],"id":1})");
++    auto const abort = std::string(R"({"method":"scantxoutset","params":["abort"],"id":1})");
++    auto const handle = [&](rpc::method_context& context, std::string const& body) {
++        return ::asio::co_spawn(io, f.dispatcher.handle(context, body), ::asio::use_future);
++    };
++
++    std::future<std::string> started;
++    {
++        // The window a connect batch holds: the walk waits in the gate for it.
++        auto window = f.chain.chain().begin_utxo_write();
++        REQUIRE(window);
++        started = handle(ctx, start);
++        CHECK(handle(other, status).get() == rpc::build_success("1", R"({"progress":0})"));
++        CHECK(handle(other, start).get() ==
++            refusal(-8, "Scan already in progress, use action \"abort\" or \"status\""));
++        CHECK(started.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout);
++        CHECK(handle(other, abort).get() == rpc::build_success("1", "true"));
++    }
++    REQUIRE(started.wait_for(std::chrono::seconds(30)) == std::future_status::ready);
++    CHECK(started.get() == answer(0, {}, "0", {}, /*success*/ false));
++    // The scan is over.
++    CHECK(handle(other, status).get() == rpc::build_success("1", "null"));
++    CHECK(handle(other, abort).get() == rpc::build_success("1", "false"));
++    work.reset();
++    runner.join();
++}
++
++TEST_CASE("a walk of the UTXO set gives way to a writer and leaves it the window", "[rpc scan]") {
++    scan_fixture f("rpc_scan_walk_yields");
++    REQUIRE(f.start());
++    std::vector<unspent> set;
++    for (uint32_t i = 0; i < 3000; ++i) {
++        hash_digest txid{};
++        txid[0] = uint8_t(i);
++        txid[1] = uint8_t(i >> 8);
++        set.push_back({txid, 0, output_of(1000, true_script), 2});
++    }
++    store(f.chain.chain(), set);
++    auto& chain = f.chain.chain();
++    using walk_end = blockchain::block_chain::utxo_walk_end;
++
++    // A writer asks for the window ten entries in. The walk sees it at its
++    // next check, after 1024 entries, and stops there.
++    std::thread writer;
++    std::atomic<bool> admitted{false};
++    size_t visited = 0;
++    auto const ended = chain.utxo_walk_entries([&](utxoz::raw_outpoint const&, uint32_t,
++                                                   std::span<uint8_t const>) {
++        if (++visited == 10) {
++            writer = std::thread([&chain, &admitted] {
++                auto window = chain.begin_utxo_write();
++                admitted = window.has_value();
++            });
++            auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
++            while ( ! chain.utxo_writer_waiting() && std::chrono::steady_clock::now() < deadline) {
++                std::this_thread::sleep_for(std::chrono::milliseconds(1));
++            }
++        }
++    }, [] { return false; });
++    writer.join();
++    CHECK(ended == walk_end::yielded);
++    CHECK(visited == 1023);
++    CHECK(admitted);
++
++    // With no writer, the whole set; stopped when asked.
++    size_t again = 0;
++    CHECK(chain.utxo_walk_entries([&again](utxoz::raw_outpoint const&, uint32_t, std::span<uint8_t const>) {
++        ++again;
++    }, [] { return false; }) == walk_end::complete);
++    CHECK(again == f.set_size());
++    CHECK(chain.utxo_walk_entries([](utxoz::raw_outpoint const&, uint32_t, std::span<uint8_t const>) {},
++        [] { return true; }) == walk_end::stopped);
++}
++
++TEST_CASE("scantxoutset leaves nothing of a request in the log or in its errors", "[rpc scan]") {
++    scan_fixture f("rpc_scan_quiet");
++    REQUIRE(f.start());
++    // Outputs with the longest script raw() takes and NFT commitments, so the
++    // answer is as large per output as answers get.
++    auto const long_script = std::string(2 * rpc::max_raw_script_size, 'c');
++    auto set = sample_set();
++    for (uint8_t i = 0; i < 3; ++i) {
++        set.push_back({filled(uint8_t(0xc0 + i)), i, output_of(700, long_script,
++            domain::chain::make_both(category_a, 7, domain::chain::capability_t::mut,
++                data_chunk(40, 0xcd))), 10});
++    }
++    store(f.chain.chain(), set);
++
++    captured_log log;
++    auto const address = std::string("bchreg:qpzz8n7jp6847yyx8t33matrgcsdx6c0cv99t2zdvc");
++    std::vector<std::string> const replies{
++        f.scan(fmt::format(R"(["raw({})","addr({})","tok({})","raw({})"])",
++            sh32_script, address, display_b, long_script)),
++        f.call(fmt::format(R"(["start",["raw({})","raw({}zz)"]])", sh32_script, sh_script)),
++        f.call(fmt::format(R"(["start",["addr({}x)"]])", address)),
++        f.call(fmt::format(R"(["start",["pkh({})"]])", sh_script)),
++        f.call(fmt::format(R"(["start",[{{"desc":"tok({})","range":-5}}]])", display_a)),
++    };
++    // The found outputs are in the answer and nowhere else.
++    CHECK(replies[0].find(encode_hash(filled(0xc2))) != std::string::npos);
++    CHECK_FALSE(log.holds("outgrew"));
++    for (auto const& secret : {std::string(sh32_script), std::string(sh_script), address,
++                               address.substr(7), display_a, display_b, long_script.substr(0, 64),
++                               encode_hash(filled(0x33)), encode_hash(filled(0xc2)),
++                               std::string("beef"), std::string("cdcdcdcd")}) {
++        CAPTURE(secret);
++        CHECK_FALSE(log.holds(secret));
++        for (size_t i = 1; i < replies.size(); ++i) {
++            CHECK(replies[i].find(secret) == std::string::npos);
++        }
++    }
++    // Counts are logged.
++    CHECK(log.holds("[rpc] scantxoutset: 4 scan object(s)"));
++}
++
++#endif // ! defined(KTH_UTXOZ_REFERENCE_MODE)
++
++TEST_CASE("scantxoutset callers are single addresses, refused at startup otherwise", "[rpc scan]") {
++    auto const parse = [](std::vector<char const*> args) {
++        node::parser parser(domain::config::network::regtest);
++        args.insert(args.begin(), "kth");
++        std::ostringstream error;
++        auto const ok = parser.parse(int(args.size()), args.data(), error);
++        return std::make_pair(ok, parser.configured.rpc);
++    };
++
++    auto const defaults = parse({});
++    REQUIRE(defaults.first);
++    CHECK_FALSE(defaults.second.scantxoutset);
++    CHECK(defaults.second.scantxoutset_callers.empty());
++
++    auto const set = parse({"--rpc.scantxoutset", "true", "--rpc.scantxoutset_caller", "100.64.0.7",
++        "--rpc.scantxoutset_caller", "fd7a:115c:a1e0::7"});
++    REQUIRE(set.first);
++    CHECK(set.second.scantxoutset);
++    CHECK(set.second.scantxoutset_callers == std::vector<std::string>{"100.64.0.7", "fd7a:115c:a1e0::7"});
++    auto const access = rpc::make_scan_access(set.second);
++    CHECK(access.enabled);
++    CHECK(access.callers == std::vector<::asio::ip::address>{
++        ::asio::ip::make_address("100.64.0.7"), ::asio::ip::make_address("fd7a:115c:a1e0::7")});
++
++    for (auto const* wide : {"0.0.0.0", "::", "*", "10.0.0.0/8", "100.64.0.7/32", "localhost",
++                             "224.0.0.1", "ff02::1", "255.255.255.255", "::ffff:0.0.0.0"}) {
++        CAPTURE(wide);
++        CHECK_FALSE(parse({"--rpc.scantxoutset_caller", wide}).first);
++        CHECK_FALSE(node::scantxoutset_caller_address(wide));
++    }
++    CHECK_FALSE(node::scantxoutset_caller_address(""));
++    auto const mapped = node::scantxoutset_caller_address("::ffff:100.64.0.7");
++    REQUIRE(mapped);
++    CHECK(*mapped == ::asio::ip::make_address("100.64.0.7"));
++
++    // Settings built by hand, which no parser checked: the scan stays off.
++    node::rpc_settings by_hand;
++    by_hand.scantxoutset = true;
++    by_hand.scantxoutset_callers = {"0.0.0.0"};
++    captured_log log;
++    CHECK_FALSE(rpc::make_scan_access(by_hand).enabled);
++    CHECK(log.holds("rpc.scantxoutset_caller"));
++}
++
++namespace {
++
++// Start the server on `bind` with a port the system assigns, ask it one
++// scantxoutset status over loopback, and stop it. What it logged, and the
++// answer.
++std::pair<std::vector<std::string>, std::string> serve_once(char const* tag, std::string bind,
++                                                             bool on, std::vector<std::string> callers) {
++    test::chain_fixture chain(tag);
++    REQUIRE(chain.created());
++    REQUIRE(chain.start());
++    node::rpc_settings settings;
++    settings.bind = std::move(bind);
++    settings.port = 0;
++    settings.user = "test";
++    settings.password = "test";
++    settings.scantxoutset = on;
++    settings.scantxoutset_callers = std::move(callers);
++
++    captured_log log;
++    std::string reply;
++    {
++        ::asio::io_context io;
++        rpc::server server(settings, chain.chain(), io.get_executor());
++        auto ran = ::asio::co_spawn(io, server.run(), ::asio::use_future);
++        auto listening = ::asio::co_spawn(io, server.wait_until_listening(), ::asio::use_future);
++        std::thread runner([&io] { io.run(); });
++        REQUIRE(listening.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
++        auto const port = listening.get();
++
++        auto const body = std::string(R"({"method":"scantxoutset","params":["status"],"id":1})");
++        auto const request = "POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Basic dGVzdDp0ZXN0\r\n"
++            "Connection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
++        ::asio::io_context client;
++        ::asio::ip::tcp::socket socket(client);
++        socket.connect({::asio::ip::make_address("127.0.0.1"), port});
++        ::asio::write(socket, ::asio::buffer(request));
++        socket.shutdown(::asio::ip::tcp::socket::shutdown_send);
++        std::error_code ec;
++        ::asio::read(socket, ::asio::dynamic_buffer(reply), ec);
++
++        server.stop();
++        runner.join();
++        ran.get();
++    }
++    return {log.sink->last_formatted(), reply.substr(reply.find("\r\n\r\n") + 4)};
++}
++
++bool holds(std::vector<std::string> const& lines, std::string_view text) {
++    return std::ranges::any_of(lines, [text](std::string const& line) {
++        return line.find(text) != std::string::npos;
++    });
++}
++
++} // namespace
++
++TEST_CASE("rpc server warns at startup when scantxoutset is on beyond loopback", "[rpc scan]") {
++    constexpr auto warning = "rpc.scantxoutset is on and the JSON-RPC server listens on";
++
++    auto const wide = serve_once("rpc_scan_warn_wide", "0.0.0.0", true, {"100.64.0.7"});
++    CHECK(std::ranges::count_if(wide.first, [warning](std::string const& line) {
++        return line.find(warning) != std::string::npos;
++    }) == 1);
++    CHECK(holds(wide.first, "rpc.scantxoutset_caller (100.64.0.7)"));
++    // Loopback is answered.
++    CHECK(wide.second == rpc::build_success("1", "null") + "\n");
++
++    auto const local = serve_once("rpc_scan_warn_local", "127.0.0.1", true, {});
++    CHECK_FALSE(holds(local.first, warning));
++    CHECK(local.second == rpc::build_success("1", "null") + "\n");
++
++    auto const off = serve_once("rpc_scan_warn_off", "0.0.0.0", false, {});
++    CHECK_FALSE(holds(off.first, warning));
++    CHECK(off.second == rpc::build_error("1", -32601,
++        "scantxoutset is off on this node; the node operator turns it on with rpc.scantxoutset = true") + "\n");
++}
++
++TEST_CASE("wipe zeroes, and a writer sized for its document does not grow", "[rpc scan]") {
++    std::string text = "what a caller looks for";
++    auto* const data = text.data();
++    auto const size = text.size();
++    rpc::wipe(text);
++    CHECK(text.empty());
++    CHECK(std::all_of(data, data + size, [](char c) { return c == '\0'; }));
++
++    rpc::wiped_bytes bytes{1, 2, 3};
++    rpc::wipe(bytes);
++    CHECK(bytes.empty());
++
++    // An escaped string asks for six bytes a character before it is written.
++    rpc::writer sized(512);
++    sized.begin_object();
++    sized.field("txid", std::string(64, 'a'));
++    sized.end_object();
++    CHECK_FALSE(sized.grown());
++    auto const document = sized.str();
++    sized.wipe();
++    CHECK(document.size() == 75);
++
++    rpc::writer small(8);
++    small.begin_object();
++    small.field("txid", std::string(64, 'a'));
++    small.end_object();
++    CHECK(small.grown());
++
++    // The envelope of a sensitive answer is built without growing its buffer.
++    auto const result = std::string(R"({"a":")") + std::string(5000, 'b') + R"("})";
++    CHECK(rpc::build_success("7", result, true) == rpc::build_success("7", result));
++}
+-- 
+2.56.0.windows.4
+
